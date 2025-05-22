@@ -122,16 +122,31 @@ class MainWindow(QMainWindow):
         self._set_mode(edit=False)
 
     # --- CanvasItem レジストリ経由でアイテム生成 ----------
-    def _create_item_from_path(self, path: str, sp):
-        from DPyL_classes import CanvasItem
-        for i in range(len(CanvasItem.ITEM_CLASSES)):
-            cls = CanvasItem.ITEM_CLASSES[i]
+    def _create_item_from_path(self, path, sp):
+        """
+        ドロップされたファイルから対応するアイテムを生成する。
+        VideoItem は CanvasItem に含まれないので、特別扱いする。
+        """
+        from DPyL_video import VideoItem
+        from pathlib import Path
+        ext = Path(path).suffix.lower()
+
+        # --- VideoItem 特別対応 ---
+        if VideoItem.supports_path(path):
+            try:
+                return VideoItem.create_from_path(path, sp, self)
+            except Exception as e:
+                warn(f"[drop] VideoItem creation failed: {e}")
+
+        # --- 通常の CanvasItem 方式 ---
+        for cls in CanvasItem.ITEM_CLASSES:
             try:
                 if cls.supports_path(path):
                     return cls.create_from_path(path, sp, self)
             except Exception as e:
                 warn(f"[factory] {cls.__name__}: {e}")
         return None, None
+
 
     def _get_item_class_by_type(self, t: str):
         from DPyL_classes import CanvasItem
