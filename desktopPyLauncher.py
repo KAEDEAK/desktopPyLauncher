@@ -34,7 +34,7 @@ from PyQt6.QtCore import (
 
 # --- プロジェクト内モジュール ---
 from DPyL_utils   import (
-    warn, IMAGE_EXTS, VIDEO_EXTS, b64e, fetch_favicon_base64,
+    warn, b64e, fetch_favicon_base64,
     compose_url_icon, b64encode_pixmap, normalize_unc_path, is_network_drive
 )
 from DPyL_classes import (
@@ -120,6 +120,26 @@ class MainWindow(QMainWindow):
         # --- データ読み込み＆編集モード初期化 ---
         self._load()
         self._set_mode(edit=False)
+
+    # --- CanvasItem レジストリ経由でアイテム生成 ----------
+    def _create_item_from_path(self, path: str, sp):
+        from DPyL_classes import CanvasItem
+        for i in range(len(CanvasItem.ITEM_CLASSES)):
+            cls = CanvasItem.ITEM_CLASSES[i]
+            try:
+                if cls.supports_path(path):
+                    return cls.create_from_path(path, sp, self)
+            except Exception as e:
+                warn(f"[factory] {cls.__name__}: {e}")
+        return None, None
+
+    def _get_item_class_by_type(self, t: str):
+        from DPyL_classes import CanvasItem
+        for i in range(len(CanvasItem.ITEM_CLASSES)):
+            c = CanvasItem.ITEM_CLASSES[i]
+            if getattr(c, "TYPE_NAME", None) == t:
+                return c
+        return None
 
     def _new_project(self):
         # 新規プロジェクト作成
@@ -329,30 +349,58 @@ class MainWindow(QMainWindow):
         elif sel == act_back:
             item.setZValue(min((i.zValue() for i in self.scene.items()), default=0) - 1)
 
-        # --- 元のサイズに合わせる ---
+        # --- 元のサイズに合わせる 
         elif sel == act_fit_orig:
             if is_pix:
-                w, h = item._src_pixmap.width(), item._src_pixmap.height()
+                from DPyL_utils import ICON_SIZE, _icon_pixmap
+                from base64 import b64decode
+                from PyQt6.QtGui import QPixmap
+
+                embed_data = item.d.get("icon_embed")
+                if embed_data:
+                    # ⭐ Embed から復元
+                    pix = QPixmap()
+                    pix.loadFromData(b64decode(embed_data))
+                else:
+                    # 通常の icon パスから取得
+                    src = item.d.get("icon") or item.d.get("path")
+                    idx = item.d.get("icon_index", 0)
+                    pix = _icon_pixmap(src, idx, ICON_SIZE)
+
+                if pix.isNull():
+                    warn("アイコン取得失敗")
+                    return
+
+                # 最小サイズ制限
+                w = max(pix.width(),  ICON_SIZE)
+                h = max(pix.height(), ICON_SIZE)
+
+                item._src_pixmap = pix.copy()
+                item.prepareGeometryChange()
+                item._rect_item.setRect(0, 0, w, h)
+                item.d["width"], item.d["height"] = w, h
+                if hasattr(item, "resize_content"):
+                    item.resize_content(w, h)
+                if hasattr(item, "_update_grip_pos"):
+                    item._update_grip_pos()
+                if hasattr(item, "init_caption"):
+                    item.init_caption()
+
             elif is_vid:
                 ns = item.nativeSize()
                 if not ns.isValid():
                     return
                 w, h = int(ns.width()), int(ns.height())
-            else:
-                return
-
-            item.prepareGeometryChange()
-            if is_pix:
-                item._rect_item.setRect(0, 0, w, h)
-            else:
+                item.prepareGeometryChange()
                 item.setSize(QSizeF(w, h))
-            item.d["width"], item.d["height"] = w, h
-            if hasattr(item, "resize_content"):
-                item.resize_content(w, h)
-            if hasattr(item, "_update_grip_pos"):
-                item._update_grip_pos()
-            if hasattr(item, "init_caption"):
-                item.init_caption()
+                item.d["width"], item.d["height"] = w, h
+                if hasattr(item, "resize_content"):
+                    item.resize_content(w, h)
+                if hasattr(item, "_update_grip_pos"):
+                    item._update_grip_pos()
+                if hasattr(item, "init_caption"):
+                    item.init_caption()
+
 
         # --- 内側にフィット ---
         elif sel == act_fit_inside:
@@ -412,45 +460,42 @@ class MainWindow(QMainWindow):
 
     # --- 指定座標へペースト ---
     def _paste_items_at(self, scene_pos):
+        """
+        クリップボードデータを現在座標へ貼り付け
+        * 新形式 (base/items) → 相対配置
+        * 旧形式 (単一/複数)  → そのまま配置
+        """
         txt = QApplication.clipboard().text()
         try:
             js = json.loads(txt)
-            # 新形式（複数・相対座標付き）
+            items = []
+
+            # --- 新形式 ---
             if isinstance(js, dict) and "items" in js and "base" in js:
                 base_x, base_y = js["base"]
                 for d in js["items"]:
-                    t = d.get("type")
-                    dx = d.get("x", 0) - base_x
-                    dy = d.get("y", 0) - base_y
-                    d_new = d.copy()
-                    d_new["x"] = scene_pos.x() + dx
-                    d_new["y"] = scene_pos.y() + dy
-                    item_new = None
-                    if t == "json":
-                        item_new = JSONItem(d_new, self.text_color)
-                    elif t == "image":
-                        item_new = ImageItem(d_new, self.text_color)
-                    elif t == "note":
-                        item_new = NoteItem(d_new)
-                    elif t == "video":
-                        item_new = VideoItem(d_new, win=self)
-                    elif t == "launcher":
-                        item_new = LauncherItem(d_new, self.text_color)
-                    if item_new:
-                        self.scene.addItem(item_new)
-                        self.data["items"].append(d_new)
-            # 旧形式（単品貼り付け）
-            else:
-                items = js if isinstance(js, list) else [js]
-                for d in items:
-                    t = d.get("type")
-                    d_new = d.copy()
-                    d_new["x"] = scene_pos.x()
-                    d_new["y"] = scene_pos.y()
-                    item_new = None
-                    # ...同様に分岐
+                    items.append((d, d.get("x", 0) - base_x, d.get("y", 0) - base_y))
+            else:  # --- 旧形式 ---
+                js_list = js if isinstance(js, list) else [js]
+                items = [(d, 0, 0) for d in js_list]
+
+            for d, dx, dy in items:
+                cls = self._get_item_class_by_type(d.get("type"))
+                if cls is None:
+                    warn(f"[paste] unknown type: {d.get('type')}")
+                    continue
+                d_new         = d.copy()
+                d_new["x"]    = int(scene_pos.x()) + dx
+                d_new["y"]    = int(scene_pos.y()) + dy
+                item_instance = cls(d_new, self.text_color) \
+                                if cls.TYPE_NAME != "video" else cls(d_new, win=self)
+
+                self.scene.addItem(item_instance)
+                self.data["items"].append(d_new)
+
         except Exception as e:
             warn(f"ペースト失敗: {e}")
+
     # --- 画像ペースト処理 ---
     def _paste_image_if_available(self, scene_pos):
         clipboard = QApplication.clipboard()
@@ -564,13 +609,14 @@ class MainWindow(QMainWindow):
         else:                                  # クリア
             def_mode, def_val = "clear", ""
 
-        ok, mode, value = BackgroundDialog.get(def_mode, def_val)
+        def_bri = cur.get("brightness", 50)  # 既存の明るさ or デフォルト50
+
+        # 明るさ付きで取得
+        ok, mode, value, bri = BackgroundDialog.get(def_mode, def_val, def_bri)
         if not ok:
             return
 
         if mode == "image":
-            # 明度は既存値（無ければ50）で保持
-            bri = cur.get("brightness", 50)
             self.data["background"] = {"path": value, "brightness": bri}
         elif mode == "color":
             self.data["background"] = {"mode": "color", "color": value}
@@ -666,106 +712,64 @@ class MainWindow(QMainWindow):
 
     # --- ドラッグ＆ドロップ対応 ---
     def handle_drop(self, e):
+        """
+        URL / ファイルドロップ共通ハンドラ
+        * ネットワークドライブ   → 専用 LauncherItem
+        * CanvasItem レジストリ → 自動判定で生成
+        * http(s) URL           → favicon 付き LauncherItem
+        ドロップ後は全体を編集モードへ強制切替！
+        """
+        added_any = False  # ← 何か追加したかのフラグ
+
         for url in e.mimeData().urls():
             sp = self.view.mapToScene(e.position().toPoint())
             raw_path = url.toLocalFile()
             path = normalize_unc_path(raw_path)
 
-            # ネットワークドライブ判定
+            # ---------- ① ネットワークドライブ ----------
             if is_network_drive(path):
-                dll = os.path.join(os.environ.get("SystemRoot", r"C:\Windows"), "System32", "imageres.dll")
+                dll = os.path.join(os.environ.get("SystemRoot", r"C:\Windows"),
+                                   "System32", "imageres.dll")
                 d = {
                     "type": "launcher",
-                    "caption": os.path.basename(path.rstrip("\\/")),
+                    "caption": os.path.basename(path.rstrip('\\/')),
                     "path": path,
                     "workdir": path,
                     "icon": dll,
                     "icon_index": 28,
-                    "x": sp.x(),
-                    "y": sp.y()
+                    "x": sp.x(), "y": sp.y()
                 }
                 it = LauncherItem(d, self.text_color)
-            elif os.path.exists(path):
-                ext = Path(path).suffix.lower()
-                if ext == ".json":
-                    d = {"type": "json", "path": path, "caption": Path(path).stem, "x": sp.x(), "y": sp.y()}
-                    it = JSONItem(d, self.text_color)
-                elif ext in IMAGE_EXTS:
-                    d = {"type": "image", "path": path, "store": "reference",
-                         "x": sp.x(), "y": sp.y(), "width": 200, "height": 200, "brightness": 50}
-                    it = ImageItem(d, self.text_color)
-                elif ext in VIDEO_EXTS:
-                    d = {"type": "video", "path": path,
-                         "x": sp.x(), "y": sp.y(), "width": 320, "height": 180, "autoplay": False}
-                    it = VideoItem(d, win=self)
-                elif ext == ".lnk":
-                    try:
-                        from win32com.client import Dispatch
-                        shell = Dispatch("WScript.Shell")
-                        link = shell.CreateShortcut(path)
-                        target = link.TargetPath or ""
-                        workdir = link.WorkingDirectory or ""
-                        iconloc = link.IconLocation or ""
-                        if not target:
-                            continue
-                        if "," in iconloc:
-                            icon_path, icon_index = iconloc.split(",", 1)
-                            icon_index = int(icon_index.strip())
-                        else:
-                            icon_path = iconloc
-                            icon_index = 0
-                        d = {"type": "launcher", "caption": Path(path).stem, "path": target,
-                             "icon": icon_path if icon_path else target, "icon_index": icon_index,
-                             "workdir": workdir, "x": sp.x(), "y": sp.y()}
-                        it = LauncherItem(d, self.text_color)
-                    except Exception as e:
-                        warn(f"[.lnk parse failed] {e}")
-                        continue
-                elif ext == ".url":
-                    parser = ConfigParser()
-                    try:
-                        parser.read(path, encoding="utf-8")
-                        weburl = parser.get("InternetShortcut", "URL", fallback="")
-                        icon_file = parser.get("InternetShortcut", "IconFile", fallback="")
-                        icon_index = parser.getint("InternetShortcut", "IconIndex", fallback=0)
-                    except Exception as e:
-                        warn(f"[.url parse failed] {e}")
-                        weburl, icon_file, icon_index = "", "", 0
-                    if not weburl:
-                        continue
-                    icon_path = icon_file if icon_file and os.path.exists(icon_file) else path
-                    d = {"type": "launcher", "caption": Path(path).stem, "path": weburl,
-                         "icon": icon_path, "icon_index": icon_index, "x": sp.x(), "y": sp.y()}
-                    it = LauncherItem(d, self.text_color)
-                else:
-                    d = {"type": "launcher", "caption": Path(path).stem, "path": path,
-                         "icon": path, "icon_index": 0, "x": sp.x(), "y": sp.y()}
-                    it = LauncherItem(d, self.text_color)
-            else:
-                weburl = url.toString()
-                if weburl.startswith(("http://", "https://")):
-                    domain = urlparse(weburl).netloc
-                    d = {"type": "launcher", "caption": domain, "path": weburl,
-                         "icon": "", "icon_index": 0, "x": sp.x(), "y": sp.y()}
-                    icon_b64 = fetch_favicon_base64(domain)
-                    if icon_b64:
-                        d["icon_embed"] = icon_b64
-                    it = LauncherItem(d, self.text_color)
-                else:
-                    continue  # 未対応スキームはスキップ
+                self.scene.addItem(it)
+                self.data["items"].append(d)
+                added_any = True
+                continue
 
-            self.scene.addItem(it)
-            self.data.setdefault("items", []).append(d)
-            
-            # ドロップした直後は編集モードON
-            if hasattr(it, "set_run_mode"):
-                it.set_run_mode(False)
-            if hasattr(it, "grip"):
-                it.grip.setVisible(True)
-            elif hasattr(it, "_grip"):
-                it._grip.setVisible(True)            
+            # ---------- ② レジストリ判定 ----------
+            item, d = self._create_item_from_path(path, sp)
+            if item:
+                self.scene.addItem(item)
+                self.data["items"].append(d)
+                added_any = True
+                continue
 
-        e.acceptProposedAction()
+            # ---------- ③ Web URL (.url も統合) ----------
+            weburl = url.toString() or path
+            if weburl.startswith(("http://", "https://")):
+                it, d = self._make_web_launcher(weburl, sp,
+                                                icon_path=path if path.endswith(".url") else "",
+                                                is_url_file=path.endswith(".url"))
+                if it:
+                    self.scene.addItem(it)
+                    self.data["items"].append(d)
+                    added_any = True
+                continue
+
+            warn(f"[drop] unsupported or missing: {url}")
+
+        # ---------- ドロップ完了後に全体を編集モードへ ----------
+        if added_any:
+            self._set_mode(edit=True)
 
     def resizeEvent(self, event):
         """
@@ -805,6 +809,33 @@ class MainWindow(QMainWindow):
                     best_y = new_pos.y() + (oy - ty)
 
         return QPointF(best_x, best_y)
+        
+    def snap_size(self, target_item, new_w, new_h):
+        SNAP_THRESHOLD = 10
+        best_dw, best_dh = None, None
+        best_w, best_h = new_w, new_h
+        # 現在の位置
+        r1 = target_item.mapToScene(target_item.boundingRect()).boundingRect()
+        x0, y0 = r1.left(), r1.top()
+
+        for other in self.scene.items():
+            if other is target_item or not hasattr(other, "boundingRect"):
+                continue
+            r2 = other.mapToScene(other.boundingRect()).boundingRect()
+            # 横（幅）端スナップ
+            for ox in [r2.left(), r2.right()]:
+                dw = abs(x0 + new_w - ox)
+                if dw < SNAP_THRESHOLD and (best_dw is None or dw < best_dw):
+                    best_dw = dw
+                    best_w = ox - x0
+            # 縦（高さ）端スナップ
+            for oy in [r2.top(), r2.bottom()]:
+                dh = abs(y0 + new_h - oy)
+                if dh < SNAP_THRESHOLD and (best_dh is None or dh < best_dh):
+                    best_dh = dh
+                    best_h = oy - y0
+
+        return best_w, best_h
 
     # --- ノート追加 ---
     def _add_note(self):
@@ -922,6 +953,7 @@ class MainWindow(QMainWindow):
             it = cls(d, win=self) if cls is VideoItem else cls(d, self.text_color)
             it.setZValue(d.get("z", 0)); self.scene.addItem(it)
             it.setPos(d.get("x", 0), d.get("y", 0))
+            
             # VideoItemはリサイズグリップを追加
             if isinstance(it, VideoItem) and it.resize_grip.scene() is None:
                 self.scene.addItem(it.resize_grip)

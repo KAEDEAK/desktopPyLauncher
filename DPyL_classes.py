@@ -5,11 +5,10 @@ DPyL_classes.py  ―  desktopPyLauncher GUIアイテム/共通ダイアログ
 """
 
 from __future__ import annotations
-# 省略: import部
 import os,json,base64
 from pathlib import Path
 from typing import Callable, Any
-
+from base64 import b64decode            
 from PyQt6.QtCore import (
     Qt, QPointF, QRectF, QSizeF, QTimer, QSize, QFileInfo, QBuffer, QIODevice
 )
@@ -43,7 +42,31 @@ class CanvasItem(QGraphicsItemGroup):
       - リサイズコールバック＆on_resizedフック
     """
     TYPE_NAME = "base"
+    # --- 自動登録レジストリ -------------------------------
+    ITEM_CLASSES: list["CanvasItem"] = []
 
+    def __init_subclass__(cls, **kwargs):
+        super().__init_subclass__(**kwargs)
+        # 派生クラスを自動登録（TYPE_NAME が base 以外）
+        if getattr(cls, "TYPE_NAME", None) not in (None, "", "base"):
+            CanvasItem.ITEM_CLASSES.append(cls)
+
+    # --- ドロップ対応ファクトリ API ------------------------
+    @classmethod
+    def supports_path(cls, path: str) -> bool:
+        """このクラスが `path` を扱えるなら True"""
+        return False  # 派生で override する
+
+    @classmethod
+    def create_from_path(cls, path: str, sp, win):
+        """
+        supports_path が True の時に呼び出されるコンストラクタラッパ
+        * sp  : QPointF  (ドロップ座標)
+        * win : MainWindow インスタンス
+        戻り値: (item_instance, json_dict)
+        """
+        raise NotImplementedError
+        
     def __init__(
         self,
         d: dict[str, Any] | None = None,
@@ -92,9 +115,13 @@ class CanvasItem(QGraphicsItemGroup):
         # 編集モード切り替え（選択/移動/枠/グリップ表示）
         self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsSelectable, editable)
         self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsMovable, editable)
+        # 背景は常時表示（ラベル ON/OFF は NoteEditDialog 側で制御）
         self._rect_item.setVisible(editable)
-        if hasattr(self, "_grip"):
-            self._grip.setVisible(editable)
+        # resize grip
+        if hasattr(self, "grip"):
+            self.grip.setVisible(editable)
+        if hasattr(self, "_update_grip_pos"):
+            self._update_grip_pos()
             
     def init_caption(self):
         """キャプションがあればQGraphicsTextItem生成/再配置"""
@@ -263,6 +290,13 @@ class CanvasItem(QGraphicsItemGroup):
         self.prepareGeometryChange()
         self.update()
 
+    def on_edit(self):
+        #raise NotImplementedError("You must override on_edit in subclass")
+        pass
+    def on_activate(self):
+        #raise NotImplementedError("You must override on_activate in subclass")
+        pass
+
     def mouseDoubleClickEvent(self, ev: QGraphicsSceneMouseEvent):
         """
         ダブルクリック時の共通動作:
@@ -288,11 +322,185 @@ class CanvasItem(QGraphicsItemGroup):
         """右クリック: MainWindowの共通メニューを表示"""
         win = self.scene().views()[0].window()
         win.show_context_menu(self, ev)
+        
+    def snap_resize_size(self, w, h, threshold=10):
+        """
+        他のオブジェクトの端にサイズを吸着する（デフォルト実装）
+        - threshold: 吸着判定のピクセル数
+        """
+        #print(f"[snap_resize_size] called: w={w} h={h}")
+        scene = self.scene()
+        if not scene:
+            return w, h
+        my_rect = self.get_resize_target_rect()  # 現在リサイズターゲットの矩形
+        x0, y0 = self.pos().x(), self.pos().y()
+        best_w, best_h = w, h
+        best_dw, best_dh = threshold, threshold
+        for item in scene.items():
+            if item is self or not hasattr(item, "boundingRect"):
+                continue
+            r2 = item.mapToScene(item.boundingRect()).boundingRect()
+            # 横端吸着
+            for ox in [r2.left(), r2.right()]:
+                dw = abs((x0 + w) - ox)
+                if dw < best_dw:
+                    best_dw = dw
+                    best_w = ox - x0
+            # 縦端吸着
+            for oy in [r2.top(), r2.bottom()]:
+                dh = abs((y0 + h) - oy)
+                if dh < best_dh:
+                    best_dh = dh
+                    best_h = oy - y0
+        return best_w, best_h        
+
 # ==================================================================
 #  LauncherItem ― exe / url
 # ==================================================================
 class LauncherItem(CanvasItem):
     TYPE_NAME = "launcher"
+    @classmethod
+    def supports_path(cls, path: str) -> bool:
+        ext = Path(path).suffix.lower()
+        return ext in (".lnk", ".url", ".exe", ".bat")
+
+    @classmethod
+    def _create_item_from_path(self, path: str, sp):
+        ext = Path(path).suffix.lower()
+
+        # .url (Internet Shortcut)
+        if ext == ".url":
+            url, icon_file, icon_index = parse_url_shortcut(path)
+            if url:
+                d = {
+                    "type": "launcher",
+                    "caption": Path(path).stem,
+                    "path": url,                # ←ここにURL
+                    "shortcut": path,           # 元の.urlファイル
+                }
+                if icon_file:
+                    d["icon"] = icon_file       # アイコンファイルパス
+                if icon_index is not None:
+                    d["icon_index"] = icon_index
+                d["x"] = sp.x()
+                d["y"] = sp.y()
+                from DPyL_classes import LauncherItem
+                return LauncherItem(d, self.text_color), d
+            else:
+                warn(f".url parse failed: {path}")
+
+        # それ以外（既存処理）
+        for i in range(len(CanvasItem.ITEM_CLASSES)):
+            cls = CanvasItem.ITEM_CLASSES[i]
+            try:
+                if cls.supports_path(path):
+                    return cls.create_from_path(path, sp, self)
+            except Exception as e:
+                warn(f"[factory] {cls.__name__}: {e}")
+        return None, None
+
+    @classmethod
+    def create_from_path(cls, path: str, sp, win):
+        ext = Path(path).suffix.lower()
+        d = {
+            "type": "launcher",
+            "caption": Path(path).stem,
+            "x": sp.x(), "y": sp.y()
+        }
+
+        if ext == ".url":
+            url, icon_file, icon_index = cls.parse_url_shortcut(path)
+            if url:
+                d["path"] = url
+                d["shortcut"] = path
+                if icon_file:
+                    d["icon"] = icon_file
+                if icon_index is not None:
+                    d["icon_index"] = icon_index
+            else:
+                d["path"] = path
+
+
+        elif ext == ".lnk":
+            target, workdir, iconloc = cls.parse_lnk_shortcut(path)
+            print(f"[DEBUG] .lnk parse: target={target}, iconloc={iconloc}")
+            if target:
+                d["path"] = target
+                d["shortcut"] = path
+                if workdir:
+                    d["workdir"] = workdir
+                if iconloc:
+                    parts = iconloc.split(",", 1)
+                    icon_path = parts[0].strip()
+                    if icon_path:
+                        d["icon"] = icon_path
+                    else:
+                        d["icon"] = target
+                    if len(parts) > 1:
+                        try:
+                            d["icon_index"] = int(parts[1])
+                        except Exception:
+                            d["icon_index"] = 0
+                    print(f"[DEBUG] set icon: {d['icon']}")
+                else:
+                    d["icon"] = target
+                    d["icon_index"] = 0
+                    print(f"[DEBUG] set icon from target: {d['icon']}")
+            else:
+                d["path"] = path
+
+
+
+        else:
+            d["path"] = path
+
+        return cls(d, win.text_color), d
+
+    @staticmethod
+    def parse_lnk_shortcut(path: str) -> tuple[str|None, str|None, str|None]:
+        """
+        .lnk（Windowsショートカット）から (TargetPath, WorkDir, IconLocation) を抽出
+        """
+        try:
+            from win32com.client import Dispatch
+            shell = Dispatch("WScript.Shell")
+            link  = shell.CreateShortcut(path)
+            target = link.TargetPath or None
+            workdir = link.WorkingDirectory or None
+            iconloc = link.IconLocation or None
+            return target, workdir, iconloc
+        except Exception as e:
+            warn(f"[parse_lnk_shortcut] {e}")
+            return None, None, None
+
+
+    def parse_url_shortcut(path: str) -> tuple[str|None, str|None, int|None]:
+        url = None
+        icon_file = None
+        icon_index = None
+        # エンコ自動判定でテキストパース
+        for enc in ("utf-8", "shift_jis", "cp932"):
+            try:
+                with open(path, encoding=enc) as f:
+                    for line in f:
+                        line = line.strip()
+                        if line.lower().startswith("url="):
+                            url = line[4:]
+                        elif line.lower().startswith("iconfile="):
+                            icon_file = line[9:]
+                        elif line.lower().startswith("iconindex="):
+                            try:
+                                icon_index = int(line[10:])
+                            except Exception:
+                                pass
+                if url:
+                    break
+            except Exception as e:
+                continue
+        return url, icon_file, icon_index
+
+
+
 
     def __init__(self, d: dict[str, Any] | None = None,
                  cb_resize=None, text_color=None):
@@ -307,21 +515,57 @@ class LauncherItem(CanvasItem):
         self._refresh_icon()
 
     def _refresh_icon(self):
-        # アイコン画像生成・反映
+        """
+        アイコン画像を d['width']/d['height'] に合わせて再生成する。
+        ・Embed > IconFile > パス先アイコン の優先順で取得
+        ・指定サイズに cover スケール + 中央Crop
+        """
+        # 1) オリジナルピクスマップを取得
         if self.embed:
             from base64 import b64decode
-            pix = QPixmap(); pix.loadFromData(b64decode(self.embed))
+            pix = QPixmap()
+            pix.loadFromData(b64decode(self.embed))
         else:
             src = self.d.get("icon") or self.path
             idx = self.d.get("icon_index", 0)
-            pix = _icon_pixmap(src, idx, ICON_SIZE)
+            # 十分高解像度で拾うため max(w,h, ICON_SIZE) を渡す
+            base_size = max(
+                int(self.d.get("width",  ICON_SIZE)),
+                int(self.d.get("height", ICON_SIZE)),
+                ICON_SIZE,
+            )
+            pix = _icon_pixmap(src, idx, base_size)
 
-        self._src_pixmap  = pix.copy()
-        self._orig_pixmap = self._src_pixmap
-        self._pix_item.setPixmap(pix)
-        self._rect_item.setRect(0, 0, pix.width(), pix.height())
+        # 2) fallback
+        if pix.isNull():
+            pix = _icon_pixmap("", 0, ICON_SIZE)
+
+        self._src_pixmap = pix.copy()      # 原寸保持
+
+        # 3) ターゲットサイズ決定
+        tgt_w = int(self.d.get("width",  pix.width()))
+        tgt_h = int(self.d.get("height", pix.height()))
+
+        # 4) cover スケール → 中央トリミング
+        scaled = self._src_pixmap.scaled(
+            tgt_w, tgt_h,
+            Qt.AspectRatioMode.KeepAspectRatioByExpanding,
+            Qt.TransformationMode.SmoothTransformation,
+        )
+        cx = max(0, (scaled.width()  - tgt_w) // 2)
+        cy = max(0, (scaled.height() - tgt_h) // 2)
+        pix_final = scaled.copy(cx, cy, tgt_w, tgt_h)
+
+        # 5) 反映＋メタ更新
+        self._pix_item.setPixmap(pix_final)
+        self._rect_item.setRect(0, 0, tgt_w, tgt_h)
+
+        # 新規作成時に幅高さが無ければここで保存しておくと後工程が楽
+        self.d["width"], self.d["height"] = tgt_w, tgt_h
+
         self.init_caption()
         self._update_grip_pos()
+
 
     def resize_content(self, w: int, h: int):
         # リサイズ時のアイコン画像再生成
@@ -340,15 +584,21 @@ class LauncherItem(CanvasItem):
 
     def on_edit(self):
         # 編集ダイアログ起動・編集結果反映
-        #from DPyL_classes import LauncherEditDialog
         win = self.scene().views()[0].window()
         dlg = LauncherEditDialog(self.d, win)
         if dlg.exec() == QDialog.DialogCode.Accepted:
             self.embed   = self.d.get("icon_embed")   # 更新された可能性
             self.workdir = self.d.get("workdir", "")
+            # 一時プレビューのサイズで width/height を保存
+            if hasattr(dlg, "preview") and isinstance(dlg.preview, QGraphicsPixmapItem):
+                pix = dlg.preview.pixmap()
+                if not pix.isNull():
+                    self.d["width"], self.d["height"] = pix.width(), pix.height()
+
             self._refresh_icon()
             if hasattr(self, "cap_item"):
                 self.cap_item.setPlainText(self.d.get("caption", ""))
+
 
     def on_activate(self):
         # 実行モード：URL/ファイル起動
@@ -370,6 +620,23 @@ class LauncherItem(CanvasItem):
 
 class ImageItem(CanvasItem):
     TYPE_NAME = "image"
+    @classmethod
+    def supports_path(cls, path: str) -> bool:
+        from pathlib import Path as _P
+        from DPyL_utils import IMAGE_EXTS
+        return _P(path).suffix.lower() in IMAGE_EXTS
+
+    @classmethod
+    def create_from_path(cls, path: str, sp, win):
+        d = {
+            "type": "image",
+            "path": path,
+            "store": "reference",
+            "brightness": 50,
+            "x": sp.x(), "y": sp.y(),
+            "width": 200, "height": 200
+        }
+        return cls(d, win.text_color), d
 
     def __init__(
         self,
@@ -482,27 +749,89 @@ class ImageItem(CanvasItem):
 # ==================================================================
 class JSONItem(CanvasItem):
     TYPE_NAME = "json"
+    # --- ファクトリ実装 ----------------------------------
+    @classmethod
+    def supports_path(cls, path: str) -> bool:
+        from pathlib import Path as _P
+        return _P(path).suffix.lower() == ".json"
 
-    def __init__(self, d: dict[str, Any] | None = None,
-                 cb_resize=None, text_color=None):
+    @classmethod
+    def create_from_path(cls, path: str, sp, win):
+        from pathlib import Path as _P
+        d = {
+            "type": "json",
+            "caption": _P(path).stem,
+            "path": path,
+            "x": sp.x(), "y": sp.y()
+        }
+        return cls(d, win.text_color), d
+
+    def __init__(self, d: dict[str, Any] | None = None, cb_resize=None, text_color=None):
         super().__init__(d, cb_resize, text_color)
-        # パス/アイコン埋め込み
         self.path  = self.d.get("path", "")
         self.embed = self.d.get("icon_embed")
-        # ピクスマップ反映
         self._pix_item = QGraphicsPixmapItem(parent=self)
-        self._apply_pixmap()
-        # 枠色を半透明で暗く
-        self._rect_item.setBrush(QColor(32, 32, 32, 96))
+        self._refresh_icon()
+        
+    def _refresh_icon(self):
+        """
+        アイコン画像を d['width']/d['height'] に合わせて再生成する。
+        ・Embed > IconFile > パス先アイコン の優先順で取得
+        """
+        from DPyL_utils import ICON_SIZE, _icon_pixmap
+        # 1) オリジナルピクスマップを取得
+        if self.embed:
+            from base64 import b64decode
+            pix = QPixmap()
+            pix.loadFromData(b64decode(self.embed))
+        else:
+            src = self.d.get("icon") or self.path
+            idx = self.d.get("icon_index", 0)
+            base_size = max(
+                int(self.d.get("width",  ICON_SIZE)),
+                int(self.d.get("height", ICON_SIZE)),
+                ICON_SIZE,
+            )
+            pix = _icon_pixmap(src, idx, base_size)
+
+        if pix.isNull():
+            pix = _icon_pixmap("", 0, ICON_SIZE)
+
+        self._src_pixmap = pix.copy()
+
+        tgt_w = int(self.d.get("width",  pix.width()))
+        tgt_h = int(self.d.get("height", pix.height()))
+
+        scaled = self._src_pixmap.scaled(
+            tgt_w, tgt_h,
+            Qt.AspectRatioMode.KeepAspectRatioByExpanding,
+            Qt.TransformationMode.SmoothTransformation,
+        )
+        cx = max(0, (scaled.width()  - tgt_w) // 2)
+        cy = max(0, (scaled.height() - tgt_h) // 2)
+        pix_final = scaled.copy(cx, cy, tgt_w, tgt_h)
+
+        self._pix_item.setPixmap(pix_final)
+        self._rect_item.setRect(0, 0, tgt_w, tgt_h)
+        self.d["width"], self.d["height"] = tgt_w, tgt_h
+
         self.init_caption()
+        self._update_grip_pos()
 
     def resize_content(self, w: int, h: int):
-        # リサイズ時の画像再生成
-        if hasattr(self, "_orig_pixmap") and self._orig_pixmap:
-            pm = self._orig_pixmap.scaled(w, h,
-                  Qt.AspectRatioMode.KeepAspectRatio,
-                  Qt.TransformationMode.SmoothTransformation)
-            self._pix_item.setPixmap(pm)
+        src = getattr(self, "_src_pixmap", None)
+        if src is None or src.isNull():
+            return
+        scaled = src.scaled(
+            w, h,
+            Qt.AspectRatioMode.KeepAspectRatioByExpanding,
+            Qt.TransformationMode.SmoothTransformation
+        )
+        cx = max(0, (scaled.width()  - w) // 2)
+        cy = max(0, (scaled.height() - h) // 2)
+        pm = scaled.copy(cx, cy, w, h)
+        self._pix_item.setPixmap(pm)
+
 
     # --------------------------------------------------------------
     # ダブルクリック時動作
@@ -527,14 +856,50 @@ class JSONItem(CanvasItem):
         except Exception:
             pass
 
+
     def on_edit(self):
-        # 編集ダイアログ起動・キャプション更新
-        from DPyL_classes import LauncherEditDialog
+        # 編集ダイアログ起動・編集結果反映
         win = self.scene().views()[0].window()
         dlg = LauncherEditDialog(self.d, win)
-        if dlg.exec() == QDialog.DialogCode.Accepted and hasattr(self, "cap_item"):
-            self.cap_item.setPlainText(self.d.get("caption", ""))
+        if dlg.exec() == QDialog.DialogCode.Accepted:
+            self.embed = self.d.get("icon_embed")
+            self._refresh_icon()
+            if hasattr(self, "cap_item"):
+                self.cap_item.setPlainText(self.d.get("caption", ""))
 
+
+# ==================================================================        
+#  GenericFileItem
+# ==================================================================
+class GenericFileItem(LauncherItem):
+    """
+    既存クラスが supports_path() で蹴った “その他ファイル” 用。
+    * .txt .vbs .csv .md … 何でもドロップ可能
+    * LauncherItem の機能（ダブルクリックで関連付けアプリ起動など）そのまま利用
+    """
+    TYPE_NAME = "file"
+
+    # ① 常に True だが “最後に登録” されるので優先度は最下位！
+    @classmethod
+    def supports_path(cls, path: str) -> bool:
+        from pathlib import Path
+        p = Path(path)
+        return p.exists() and p.is_file()
+
+    # ② ファクトリ
+    @classmethod
+    def create_from_path(cls, path: str, sp, win):
+        from pathlib import Path as _P
+        d = {
+            "type": "file",                    # 新タイプ
+            "caption": _P(path).name,
+            "path": path,
+            "icon": path,                      # QFileIconProvider が拾ってくれる
+            "icon_index": 0,
+            "x": sp.x(), "y": sp.y()
+        }
+        return cls(d, win.text_color), d        
+        
 # ==================================================================
 #  CanvasResizeGrip（リサイズグリップ）
 # ==================================================================
@@ -564,7 +929,7 @@ class CanvasResizeGrip(QGraphicsRectItem):
         if self._was_movable:
             self._parent.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsMovable, False)
         ev.accept()
-
+    r"""
     def mouseMoveEvent(self, ev):
         # ドラッグ中はリサイズ
         if not self._drag:
@@ -584,6 +949,33 @@ class CanvasResizeGrip(QGraphicsRectItem):
 
         self._parent.init_caption()
         ev.accept()
+    """  
+    def mouseMoveEvent(self, ev):
+        if not self._drag:
+            return
+        delta = ev.scenePos() - self._start
+        w = max(32, self._orig.width()  + delta.x())
+        h = max(24, self._orig.height() + delta.y())
+        # ==========================
+        # ★スナップ呼び出し追加
+        # ==========================
+        parent = getattr(self, "_parent", None) or getattr(self, "target", None)
+        if parent and hasattr(parent, "snap_resize_size"):
+            w, h = parent.snap_resize_size(w, h)
+
+        parent.prepareGeometryChange()
+        parent._rect_item.setRect(0, 0, w, h)
+        parent.d["width"], parent.d["height"] = int(w), int(h)
+        if hasattr(parent, "resize_content"):
+            parent.resize_content(int(w), int(h))
+        if hasattr(parent, "_update_grip_pos"):
+            parent._update_grip_pos()
+        parent.init_caption()
+        ev.accept()
+
+
+
+
 
     def mouseReleaseEvent(self, ev):
         # リサイズ終了
@@ -699,11 +1091,17 @@ class BackgroundDialog(QDialog):
 
     def _build_ui(self):
         v = QVBoxLayout(self)
-        # 色・画像・クリア
+        # 色/画像/クリア
         btn_c = QPushButton("Color…");  btn_c.clicked.connect(self._pick_color)
         btn_i = QPushButton("Image…");  btn_i.clicked.connect(self._pick_image)
         btn_n = QPushButton("Clear");   btn_n.clicked.connect(self._pick_clear)
         v.addWidget(btn_c); v.addWidget(btn_i); v.addWidget(btn_n)
+        # 背景ダイアログUI構築部
+        self.spin_bri = QSpinBox()
+        self.spin_bri.setRange(0, 100)
+        self.spin_bri.setValue(50)  # 初期値（あとでsetで更新）
+        v.addWidget(QLabel("Brightness"))
+        v.addWidget(self.spin_bri)
         # OK/Cancel
         h = QHBoxLayout(); h.addStretch(1)
         ok = QPushButton("OK"); ok.clicked.connect(self.accept)
@@ -725,11 +1123,11 @@ class BackgroundDialog(QDialog):
     def _pick_clear(self): self.mode, self.value = "clear", ""
 
     @staticmethod
-    def get(mode="clear", value=""):
-        # 呼び出し用の静的メソッド
+    def get(mode="clear", value="", brightness=50):
         dlg = BackgroundDialog(mode, value)
+        dlg.spin_bri.setValue(brightness)
         ok = dlg.exec() == QDialog.DialogCode.Accepted
-        return ok, dlg.mode, dlg.value
+        return ok, dlg.mode, dlg.value, dlg.spin_bri.value()
 
 # ==================================================================
 #  LauncherEditDialog
@@ -966,7 +1364,7 @@ class LauncherEditDialog(QDialog):
 
 # ───────────────────────── __all__ export ─────────────────────────
 __all__ = [
-    "CanvasItem", "LauncherItem", "ImageItem", "JSONItem",
+    "CanvasItem", "LauncherItem", "ImageItem", "JSONItem", 
     "CanvasResizeGrip",
     "ImageEditDialog", "BackgroundDialog","LauncherEditDialog"
 ]

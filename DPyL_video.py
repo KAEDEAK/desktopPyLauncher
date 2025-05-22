@@ -85,6 +85,10 @@ class ResizeGripItem(QGraphicsRectItem):
             delta = ev.scenePos() - self._start
             w = max(160, self._orig.width()  + delta.x())
             h = max(120, self._orig.height() + delta.y())
+            # --- スナップ適用 ---
+            win = self.target.win if hasattr(self.target, "win") else None
+            if win and hasattr(win, "snap_size"):
+                w, h = win.snap_size(self.target, w, h)
             self.target.setSize(QSizeF(w, h))
             self.target.d["width"], self.target.d["height"] = w, h
             self.target.update_layout()
@@ -122,6 +126,23 @@ class VideoItem(QGraphicsVideoItem):
     """
 
     TYPE_NAME = "video"
+    @classmethod
+    def supports_path(cls, path: str) -> bool:
+        from pathlib import Path as _P
+        from DPyL_utils import VIDEO_EXTS
+        return _P(path).suffix.lower() in VIDEO_EXTS
+
+    @classmethod
+    def create_from_path(cls, path: str, sp, win):
+        d = {
+            "type": "video",
+            "path": path,
+            "autoplay": False,
+            "x": sp.x(), "y": sp.y(),
+            "width": 320, "height": 180
+        }
+        from DPyL_video import VideoItem  # 遅延 import
+        return VideoItem(d, win=win), d
 
     # --------------------------------------------------------------
     def __init__(self, d: dict[str, Any], *, win=None):

@@ -15,8 +15,11 @@ from ctypes import wintypes
 from urllib.parse import urlparse
 from urllib.request import Request,urlopen
 from pathlib import Path
-from PyQt6.QtGui import QImageReader
-from PyQt6.QtCore import QSize
+from PyQt6.QtGui     import QPixmap, QPainter, QImage, QImageReader, QIcon, QPalette, QColor
+from PyQt6.QtGui     import QBrush, QPen
+from PyQt6.QtCore    import Qt, QSize, QFileInfo, QIODevice, QBuffer
+from PyQt6.QtWidgets import QApplication, QFileIconProvider
+    
 # ────────────────────────────── 定数 ──────────────────────────────
 DEBUG_MODE = any(arg == "-debug" for arg in sys.argv)
 
@@ -27,10 +30,7 @@ EXECUTE_EXTS       = (".lnk", ".bat", ".txt", ".html", ".htm", ".url")
 PYTHON_SCRIPT_EXT  = ".py"
 
 # ────────────────────────────── PyQt (遅延import) ──────────────────────────────
-from PyQt6.QtGui     import QPixmap, QPainter, QImage, QIcon, QPalette, QColor
-from PyQt6.QtGui     import QBrush, QPen
-from PyQt6.QtCore    import Qt, QFileInfo, QIODevice, QBuffer
-from PyQt6.QtWidgets import QApplication, QFileIconProvider
+
 
 ICON_PROVIDER = QFileIconProvider()
 
@@ -250,52 +250,73 @@ def _default_icon(size: int = ICON_SIZE) -> QPixmap:
     painter.end()
     return pm
 
-def _icon_pixmap(path: str, idx: int = 0, size: int = ICON_SIZE) -> QPixmap:
+def _icon_pixmap(path: str, index: int = 0, size: int = ICON_SIZE) -> QPixmap:
+
+
+    return _icon_pixmap_basic(path, index, size);
+def _icon_pixmap_basic(path: str, index: int = 0, size: int = ICON_SIZE) -> QPixmap:
     """
-    ファイルパスから適切なアイコンQPixmapを返す  
-    * 画像系: そのまま読み込み  
-    * DLL/EXE/ICO: WindowsAPIで抽出  
-    * .url他: QFileIconProvider
+    DLL/EXE/ICOファイルから、指定サイズに最も近いアイコンを抽出する
     """
-    if not path:
-        return _default_icon(size)
+    from PyQt6.QtGui import QPixmap, QImageReader
+    from PyQt6.QtCore import QFileInfo, QSize
+    from PyQt6.QtWidgets import QFileIconProvider
 
-    ext = Path(path).suffix.lower()
-
-    # 画像ファイル系
-    if ext in (".png", ".jpg", ".jpeg", ".bmp", ".gif"):
-        real = os.path.abspath(os.path.expandvars(path))
-        if os.path.exists(real):
-            pix = QPixmap(real)
-            if not pix.isNull():
-                return pix.scaled(size, size,
-                                  Qt.AspectRatioMode.KeepAspectRatio,
-                                  Qt.TransformationMode.SmoothTransformation)
-
-    # DLL/EXE/ICOリソース抽出
-    if ext in (".dll", ".exe", ".ico"):
+    # 1. ICOファイル
+    if path.lower().endswith(".ico"):
         try:
-            real = os.path.normpath(os.path.expandvars(path))
-            pix  = _extract_hicon(real, idx)
-            if pix and not pix.isNull():
-                return pix.scaled(size, size,
-                                  Qt.AspectRatioMode.KeepAspectRatio,
-                                  Qt.TransformationMode.SmoothTransformation)
+            # PILで全サイズ調査
+            from PIL import Image
+            import io
+            with open(path, "rb") as f:
+                img = Image.open(f)
+                if hasattr(img, "ico"):
+                    sizes = img.ico.sizes()
+                    # 一番近いサイズ
+                    nearest = min(sizes, key=lambda sz: abs(sz[0] - size))
+                    img2 = img.ico.getimage(nearest)
+                    buffer = io.BytesIO()
+                    img2.save(buffer, format="PNG")
+                    qimg = QImageReader().readFromData(buffer.getvalue())
+                    pm = QPixmap()
+                    pm.loadFromData(buffer.getvalue())
+                    return pm
         except Exception as e:
-            warn(f"_icon_pixmap ExtractIconExW failed: {e}")
-
-    # .url・その他はQFileIconProviderに委任
+            warn(f"_icon_pixmap ICO failed: {e}")
+    # 2. DLL/EXE/その他（Windowsアイコン）
     try:
-        fi = QFileInfo(path)
-        icon = ICON_PROVIDER.icon(fi)
-        pix = icon.pixmap(size, size)
-        if not pix.isNull():
-            return pix
+        # ctypesでHICON抽出（拡張可）
+        import ctypes
+        from ctypes import wintypes
+        arr = (wintypes.HICON * 1)()
+        # ExtractIconExW: size引数は無いので、まず全部のアイコンを取得
+        num_icons = ctypes.windll.shell32.ExtractIconExW(path, index, arr, None, 1)
+        if num_icons > 0 and arr[0]:
+            hicon = arr[0]
+            # QImage.fromHICONで読み込めるすべてのサイズを取得して最大サイズまたは最も近いサイズを選ぶ
+            qimg = QImage.fromHICON(hicon)
+            # ↓ここで強制的にresize
+            pm = QPixmap.fromImage(qimg)
+            pm = pm.scaled(size, size, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
+            ctypes.windll.user32.DestroyIcon(hicon)
+            return pm
     except Exception as e:
-        warn(f"QFileIconProvider failed for {path}: {e}")
+        warn(f"_icon_pixmap ctypes ExtractIconExW failed: {e}")
 
-    return _default_icon(size)
-    
+    # 3. QFileIconProviderで取得（ファイルタイプごとの既定アイコン）
+    try:
+        provider = QFileIconProvider()
+        icon = provider.icon(QFileInfo(path))
+        pm = icon.pixmap(QSize(size, size))
+        return pm
+    except Exception as e:
+        warn(f"_icon_pixmap QFileIconProvider failed: {e}")
+
+    # 4. フォールバック：空アイコン
+    pm = QPixmap(size, size)
+    pm.fill(Qt.GlobalColor.transparent)
+    return pm
+
 def _icon_pixmap_full(path: str, idx: int = 0, size: int = ICON_SIZE) -> QPixmap:
     """
     ファイルパスから適切なアイコン QPixmap を返す  
