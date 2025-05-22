@@ -116,7 +116,11 @@ class CanvasItem(QGraphicsItemGroup):
         self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsSelectable, editable)
         self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsMovable, editable)
         # 背景は常時表示（ラベル ON/OFF は NoteEditDialog 側で制御）
-        self._rect_item.setVisible(editable)
+        if hasattr(self, "fill_bg"):
+            self._rect_item.setVisible(self.fill_bg or editable)
+        else:
+            self._rect_item.setVisible(editable)
+        
         # resize grip
         if hasattr(self, "grip"):
             self.grip.setVisible(editable)
