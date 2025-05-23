@@ -883,26 +883,29 @@ class GenericFileItem(LauncherItem):
     """
     TYPE_NAME = "file"
 
-    # ① 常に True だが “最後に登録” されるので優先度は最下位！
+    # ① 常に True だが “最後に登録” されるので優先度は最下位
     @classmethod
     def supports_path(cls, path: str) -> bool:
         from pathlib import Path
         p = Path(path)
-        return p.exists() and p.is_file()
+        return p.exists()
 
     # ② ファクトリ
     @classmethod
     def create_from_path(cls, path: str, sp, win):
         from pathlib import Path as _P
+        p = _P(path)
         d = {
-            "type": "file",                    # 新タイプ
-            "caption": _P(path).name,
+            "type": "launcher",
+            "caption": p.name,
             "path": path,
-            "icon": path,                      # QFileIconProvider が拾ってくれる
+            "workdir": path if p.is_dir() else "",
+            "icon": path,
             "icon_index": 0,
             "x": sp.x(), "y": sp.y()
         }
-        return cls(d, win.text_color), d        
+        return cls(d, win.text_color), d
+
         
 # ==================================================================
 #  CanvasResizeGrip（リサイズグリップ）
