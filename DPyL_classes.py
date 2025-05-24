@@ -4,7 +4,7 @@ DPyL_classes.py  ―  desktopPyLauncher GUIアイテム/共通ダイアログ
 ◎ Qt6 / PyQt6 専用
 """
 from __future__ import annotations
-import os,json,base64
+import os,sys,json,base64
 from pathlib import Path
 from typing import Callable, Any
 from base64 import b64decode            
@@ -584,62 +584,6 @@ class LauncherItem(CanvasItem):
         except Exception as e:
             print(f"_refresh_icon failed: {e}")            
         
-    def REPLACED_OLD_VER_refresh_icon(self):
-        """
-        アイコン画像を d['width']/d['height'] に合わせて再生成する。
-        ・Embed > IconFile > パス先アイコン の優先順で取得
-        ・指定サイズに cover スケール + 中央Crop
-        """
-        # 1) オリジナルピクスマップを取得
-        if self.embed:
-            print("STEP-1")
-            pix = QPixmap()
-            pix.loadFromData(b64decode(self.embed))
-        else:
-            print("STEP-2")
-            src = self.d.get("icon") or self.path
-            idx = self.d.get("icon_index", 0)
-            # 十分高解像度で拾うため max(w,h, ICON_SIZE) を渡す
-            base_size = max(
-                int(self.d.get("width",  ICON_SIZE)),
-                int(self.d.get("height", ICON_SIZE)),
-                ICON_SIZE,
-            )
-            pix = _icon_pixmap(src, idx, base_size)
-
-        # ------------------------------------------------------------- 
-        # 2) fallback
-        if pix.isNull():
-            print("STEP-3")
-            pix = _icon_pixmap("", 0, ICON_SIZE)
-
-        self._src_pixmap = pix.copy()      # 原寸保持
-
-        # 3) ターゲットサイズ決定
-        tgt_w = int(self.d.get("width",  pix.width()))
-        tgt_h = int(self.d.get("height", pix.height()))
-
-        # 4) cover スケール → 中央トリミング
-        scaled = self._src_pixmap.scaled(
-            tgt_w, tgt_h,
-            Qt.AspectRatioMode.KeepAspectRatioByExpanding,
-            Qt.TransformationMode.SmoothTransformation,
-        )
-        cx = max(0, (scaled.width()  - tgt_w) // 2)
-        cy = max(0, (scaled.height() - tgt_h) // 2)
-        pix_final = scaled.copy(cx, cy, tgt_w, tgt_h)
-
-        # 5) 反映＋メタ更新
-        self._pix_item.setPixmap(pix_final)
-        self._rect_item.setRect(0, 0, tgt_w, tgt_h)
-
-        # 新規作成時に幅高さが無ければここで保存しておくと後工程が楽
-        self.d["width"], self.d["height"] = tgt_w, tgt_h
-
-        self.init_caption()
-        self._update_grip_pos()
-
-
     def resize_content(self, w: int, h: int):
         # リサイズ時のアイコン画像再生成
         src = getattr(self, "_src_pixmap", None)
@@ -710,7 +654,23 @@ class LauncherItem(CanvasItem):
                 workdir = str(Path(path).parent)
             except Exception:
                 workdir = ""
+                
+        # --- Pythonスクリプト対応 ---
+        if ext == ".py":
+            try:
+                
+                py_exec = sys.executable
+                args = [py_exec, path]
 
+                #print(f"[PYTHON] exec={py_exec}, args={[path]}")
+                ok = QProcess.startDetached(py_exec, [path], workdir)
+                if not ok:
+                    warn(f"QProcess 起動失敗: {py_exec} {path}")
+                return
+            except Exception as e:
+                warn(f"[LauncherItem.on_activate] .py 起動エラー: {e}")
+                return
+                
         # --- シェルスクリプト系: runas対応 or QProcess/subprocess ---
         if exe_like:
             try:
