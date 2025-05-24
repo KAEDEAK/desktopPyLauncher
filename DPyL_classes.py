@@ -3,29 +3,30 @@
 DPyL_classes.py  ―  desktopPyLauncher GUIアイテム/共通ダイアログ
 ◎ Qt6 / PyQt6 専用
 """
-
 from __future__ import annotations
 import os,json,base64
 from pathlib import Path
 from typing import Callable, Any
 from base64 import b64decode            
+from shlex import split as shlex_split
+import subprocess
 from PyQt6.QtCore import (
-    Qt, QPointF, QRectF, QSizeF, QTimer, QSize, QFileInfo, QBuffer, QIODevice
+    Qt, QPointF, QRectF, QSizeF, QTimer, QSize, QFileInfo, QBuffer, QIODevice, QProcess
 )
 from PyQt6.QtGui import (
-    QPixmap, QPainter, QColor, QBrush, QPen, QIcon
+    QPixmap, QPainter, QPalette, QColor, QBrush, QPen, QIcon
 )
 from PyQt6.QtWidgets import (
     QApplication, QGraphicsItemGroup, QGraphicsPixmapItem, QGraphicsRectItem,
     QGraphicsSceneMouseEvent, QGraphicsItem,QGraphicsTextItem,
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
-    QFileDialog, QSpinBox, QLineEdit, QColorDialog, QComboBox
+    QFileDialog, QSpinBox, QLineEdit, QColorDialog, QComboBox, QCheckBox
 )
 
 # ───────────────────────── internal util ──────────────────────────
 from DPyL_utils import (
-    warn, b64e, ICON_SIZE,
-    _icon_pixmap,
+    warn, b64e, ICON_SIZE,IMAGE_EXTS,
+    _icon_pixmap,compose_url_icon,
     normalize_unc_path,
     fetch_favicon_base64
 )
@@ -133,8 +134,6 @@ class CanvasItem(QGraphicsItemGroup):
             return
 
         # テーマに合わせたテキスト色
-        from PyQt6.QtWidgets import QApplication
-        from PyQt6.QtGui import QPalette
         app = QApplication.instance()
         text_color = app.palette().color(QPalette.ColorRole.WindowText)
 
@@ -232,7 +231,6 @@ class CanvasItem(QGraphicsItemGroup):
         # 1) ピクスマップ取得
         pix = QPixmap()
         if hasattr(self, "embed") and self.embed:
-            from base64 import b64decode
             pix.loadFromData(b64decode(self.embed))
         elif hasattr(self, "path") and self.path:
             pix = QPixmap(self.path)
@@ -361,6 +359,11 @@ class CanvasItem(QGraphicsItemGroup):
 # ==================================================================
 #  LauncherItem ― exe / url
 # ==================================================================
+
+def quote_if_needed(path: str) -> str:
+    path = path.strip()
+    return f'"{path}"' if " " in path and not (path.startswith('"') and path.endswith('"')) else path
+
 class LauncherItem(CanvasItem):
     TYPE_NAME = "launcher"
     @classmethod
@@ -370,6 +373,7 @@ class LauncherItem(CanvasItem):
 
     @classmethod
     def _create_item_from_path(self, path: str, sp):
+       
         ext = Path(path).suffix.lower()
 
         # .url (Internet Shortcut)
@@ -388,7 +392,6 @@ class LauncherItem(CanvasItem):
                     d["icon_index"] = icon_index
                 d["x"] = sp.x()
                 d["y"] = sp.y()
-                from DPyL_classes import LauncherItem
                 return LauncherItem(d, self.text_color), d
             else:
                 warn(f".url parse failed: {path}")
@@ -405,6 +408,7 @@ class LauncherItem(CanvasItem):
 
     @classmethod
     def create_from_path(cls, path: str, sp, win):
+        #print("launcherItem.create_from_path")
         ext = Path(path).suffix.lower()
         d = {
             "type": "launcher",
@@ -414,6 +418,7 @@ class LauncherItem(CanvasItem):
 
         if ext == ".url":
             url, icon_file, icon_index = cls.parse_url_shortcut(path)
+            #print(url, icon_file, icon_index)
             if url:
                 d["path"] = url
                 d["shortcut"] = path
@@ -424,10 +429,9 @@ class LauncherItem(CanvasItem):
             else:
                 d["path"] = path
 
-
         elif ext == ".lnk":
             target, workdir, iconloc = cls.parse_lnk_shortcut(path)
-            print(f"[DEBUG] .lnk parse: target={target}, iconloc={iconloc}")
+            #print(f"[DEBUG] .lnk parse: target={target}, iconloc={iconloc}")
             if target:
                 d["path"] = target
                 d["shortcut"] = path
@@ -436,47 +440,48 @@ class LauncherItem(CanvasItem):
                 if iconloc:
                     parts = iconloc.split(",", 1)
                     icon_path = parts[0].strip()
-                    if icon_path:
-                        d["icon"] = icon_path
-                    else:
-                        d["icon"] = target
+                    d["icon"] = icon_path or target
                     if len(parts) > 1:
                         try:
                             d["icon_index"] = int(parts[1])
                         except Exception:
                             d["icon_index"] = 0
-                    print(f"[DEBUG] set icon: {d['icon']}")
                 else:
                     d["icon"] = target
                     d["icon_index"] = 0
-                    print(f"[DEBUG] set icon from target: {d['icon']}")
             else:
                 d["path"] = path
 
-
-
         else:
             d["path"] = path
+            d["workdir"] = str(Path(path).parent)
 
         return cls(d, win.text_color), d
 
+
     @staticmethod
-    def parse_lnk_shortcut(path: str) -> tuple[str|None, str|None, str|None]:
+    def parse_lnk_shortcut(path: str) -> tuple[str | None, str | None, str | None]:
         """
-        .lnk（Windowsショートカット）から (TargetPath, WorkDir, IconLocation) を抽出
+        .lnk（Windowsショートカット）から
+        (TargetPath + Arguments, WorkDir, IconLocation) を抽出
         """
         try:
             from win32com.client import Dispatch
             shell = Dispatch("WScript.Shell")
             link  = shell.CreateShortcut(path)
-            target = link.TargetPath or None
-            workdir = link.WorkingDirectory or None
-            iconloc = link.IconLocation or None
-            return target, workdir, iconloc
+
+            target   = link.TargetPath or ""
+            args     = link.Arguments or ""
+            workdir  = link.WorkingDirectory or None
+            iconloc  = link.IconLocation or None
+
+            # 🔧 引数がある場合は結合（※空白区切り）
+            full_target = f"{target} {args}".strip() if args else target
+
+            return full_target, workdir, iconloc
         except Exception as e:
             warn(f"[parse_lnk_shortcut] {e}")
             return None, None, None
-
 
     def parse_url_shortcut(path: str) -> tuple[str|None, str|None, int|None]:
         url = None
@@ -503,20 +508,22 @@ class LauncherItem(CanvasItem):
                 continue
         return url, icon_file, icon_index
 
-
-
-
     def __init__(self, d: dict[str, Any] | None = None,
                  cb_resize=None, text_color=None):
         super().__init__(d, cb_resize, text_color)
-        # アイコン/パス/作業ディレクトリ
-        self.path    = self.d.get("path", "")
+        # 属性代入をプロパティに変更（これが解決策）
         self.workdir = self.d.get("workdir", "")
-        self.embed   = self.d.get("icon_embed")
-        self.brightness = None  # ImageItem互換
+        self.embed = self.d.get("icon_embed")
+        self.runas = self.d.get("runas", False)
+        self.brightness = None
 
         self._pix_item = QGraphicsPixmapItem(parent=self)
         self._refresh_icon()
+
+    # 常に最新のself.d["path"]を返すプロパティに変更
+    @property
+    def path(self):
+        return self.d.get("path", "")
 
     def _refresh_icon(self):
         """
@@ -524,12 +531,72 @@ class LauncherItem(CanvasItem):
         ・Embed > IconFile > パス先アイコン の優先順で取得
         ・指定サイズに cover スケール + 中央Crop
         """
+        try:
+            # 1) オリジナルピクスマップを取得
+            if self.embed:
+                pix = QPixmap()
+                pix.loadFromData(b64decode(self.embed))
+            else:
+                src = self.d.get("icon") or self.path
+                idx = self.d.get("icon_index", 0)
+                base_size = max(
+                    int(self.d.get("width",  ICON_SIZE)),
+                    int(self.d.get("height", ICON_SIZE)),
+                    ICON_SIZE,
+                )
+                pix = _icon_pixmap(src, idx, base_size)
+                # 2.5) favicon fallback for URL
+                if pix.isNull():
+                    if src.lower().startswith("http"):
+                        b64 = fetch_favicon_base64(src)
+                        if b64:
+                            pix = compose_url_icon(b64)
+            # ------------------------------------------------------------- 
+            # 3) fallback
+            if pix.isNull():
+                pix = _icon_pixmap("", 0, ICON_SIZE)
+
+            self._src_pixmap = pix.copy()      # 原寸保持
+
+            # 3) ターゲットサイズ決定
+            tgt_w = int(self.d.get("width",  pix.width()))
+            tgt_h = int(self.d.get("height", pix.height()))
+
+            # 4) cover スケール → 中央トリミング
+            scaled = self._src_pixmap.scaled(
+                tgt_w, tgt_h,
+                Qt.AspectRatioMode.KeepAspectRatioByExpanding,
+                Qt.TransformationMode.SmoothTransformation,
+            )
+            cx = max(0, (scaled.width()  - tgt_w) // 2)
+            cy = max(0, (scaled.height() - tgt_h) // 2)
+            pix_final = scaled.copy(cx, cy, tgt_w, tgt_h)
+
+            # 5) 反映＋メタ更新
+            self._pix_item.setPixmap(pix_final)
+            self._rect_item.setRect(0, 0, tgt_w, tgt_h)
+
+            # 新規作成時に幅高さが無ければここで保存しておくと後工程が楽
+            self.d["width"], self.d["height"] = tgt_w, tgt_h
+
+            self.init_caption()
+            self._update_grip_pos()
+        except Exception as e:
+            print(f"_refresh_icon failed: {e}")            
+        
+    def REPLACED_OLD_VER_refresh_icon(self):
+        """
+        アイコン画像を d['width']/d['height'] に合わせて再生成する。
+        ・Embed > IconFile > パス先アイコン の優先順で取得
+        ・指定サイズに cover スケール + 中央Crop
+        """
         # 1) オリジナルピクスマップを取得
         if self.embed:
-            from base64 import b64decode
+            print("STEP-1")
             pix = QPixmap()
             pix.loadFromData(b64decode(self.embed))
         else:
+            print("STEP-2")
             src = self.d.get("icon") or self.path
             idx = self.d.get("icon_index", 0)
             # 十分高解像度で拾うため max(w,h, ICON_SIZE) を渡す
@@ -540,8 +607,10 @@ class LauncherItem(CanvasItem):
             )
             pix = _icon_pixmap(src, idx, base_size)
 
+        # ------------------------------------------------------------- 
         # 2) fallback
         if pix.isNull():
+            print("STEP-3")
             pix = _icon_pixmap("", 0, ICON_SIZE)
 
         self._src_pixmap = pix.copy()      # 原寸保持
@@ -603,7 +672,7 @@ class LauncherItem(CanvasItem):
             if hasattr(self, "cap_item"):
                 self.cap_item.setPlainText(self.d.get("caption", ""))
 
-
+    r"""
     def on_activate(self):
         # 実行モード：URL/ファイル起動
         path = self.d.get("path", "")
@@ -618,6 +687,75 @@ class LauncherItem(CanvasItem):
         except Exception as e:
             warn(f"Launcher run failed: {e}")
 
+    """
+
+          
+    def on_activate(self):
+        """
+        実行モード時のダブルクリック起動処理  
+        拡張子に応じて subprocess / QProcess / os.startfile を使い分ける
+        """
+        path = self.d.get("path", "")
+        if not path:
+            warn("path が設定されていません")
+            return
+
+        ext = Path(path).suffix.lower()
+        exe_like = ext in (".exe", ".bat", ".cmd", ".ps1")
+
+        # workdirが未設定なら exe のある場所を代入
+        workdir = self.d.get("workdir", "").strip()
+        if not workdir:
+            try:
+                workdir = str(Path(path).parent)
+            except Exception:
+                workdir = ""
+
+        # --- シェルスクリプト系: runas対応 or QProcess/subprocess ---
+        if exe_like:
+            try:
+                args = shlex_split(quote_if_needed(path), posix=False)
+                print("args",args)
+                if not args:
+                    warn(f"引数分解に失敗: {path}")
+                    return
+
+                exe = args[0]
+                raw_args = args[1:]
+                exe_args = [
+                    a[1:-1] if a.startswith('"') and a.endswith('"') else a
+                    for a in raw_args
+                ]
+
+                # runas 指定あり → PowerShell 経由で cmd 実行
+                if self.d.get("runas", False):
+                    exe = os.path.abspath(exe)
+                    quoted_args = " ".join(f'"{a}"' for a in exe_args)
+                    full_cmd = f'cd /d "{workdir}" && "{exe}" {quoted_args}'
+                    ps_script = f'Start-Process cmd.exe -ArgumentList \'/c {full_cmd}\' -Verb RunAs'
+                    ps_cmd = ["powershell", "-NoProfile", "-Command", ps_script]
+
+                    print("★ runas cmd:", ps_cmd)
+                    subprocess.run(ps_cmd, shell=False)
+                else:
+                    # 通常の QProcess 起動
+                    print(f"[QProcess] exe={exe}, args={exe_args}, cwd={workdir}")
+                    ok = QProcess.startDetached(exe, exe_args, workdir)
+                    if not ok:
+                        warn(f"QProcess 起動失敗: {exe} {exe_args}")
+                return
+            except Exception as e:
+                warn(f"[LauncherItem.on_activate] shell型 起動エラー: {e}")
+                return
+
+        # --- その他: os.startfile（runas 不要） ---
+        try:
+            print(f"[startfile] path={path}")
+            os.startfile(path)
+        except Exception as e:
+            warn(f"[LauncherItem.on_activate] startfile 起動エラー: {e}")
+
+
 # ==================================================================
 #  ImageItem
 # ==================================================================
@@ -626,9 +764,7 @@ class ImageItem(CanvasItem):
     TYPE_NAME = "image"
     @classmethod
     def supports_path(cls, path: str) -> bool:
-        from pathlib import Path as _P
-        from DPyL_utils import IMAGE_EXTS
-        return _P(path).suffix.lower() in IMAGE_EXTS
+        return Path(path).suffix.lower() in IMAGE_EXTS
 
     @classmethod
     def create_from_path(cls, path: str, sp, win):
@@ -689,7 +825,6 @@ class ImageItem(CanvasItem):
     def _apply_pixmap(self):
         pix = QPixmap()
         if self.embed:
-            from base64 import b64decode
             pix.loadFromData(b64decode(self.embed))
         elif self.path:
             pix = QPixmap(self.path)
@@ -756,15 +891,13 @@ class JSONItem(CanvasItem):
     # --- ファクトリ実装 ----------------------------------
     @classmethod
     def supports_path(cls, path: str) -> bool:
-        from pathlib import Path as _P
-        return _P(path).suffix.lower() == ".json"
+        return Path(path).suffix.lower() == ".json"
 
     @classmethod
     def create_from_path(cls, path: str, sp, win):
-        from pathlib import Path as _P
         d = {
             "type": "json",
-            "caption": _P(path).stem,
+            "caption": Path(path).stem,
             "path": path,
             "x": sp.x(), "y": sp.y()
         }
@@ -772,20 +905,43 @@ class JSONItem(CanvasItem):
 
     def __init__(self, d: dict[str, Any] | None = None, cb_resize=None, text_color=None):
         super().__init__(d, cb_resize, text_color)
-        self.path  = self.d.get("path", "")
-        self.embed = self.d.get("icon_embed")
+
+        self.path = self.d.get("path", "")
+        self.embed = self.d.get("icon_embed", None)
+
+        # fileinfo 判定でアイコン指定（ただし既に設定済みなら上書きしない）
+        if self._is_launcher_project():
+            if not self.d.get("icon") and not self.d.get("icon_embed"):
+                self.d["icon"] = r"C:\WINDOWS\System32\imageres.dll"
+                self.d["icon_index"] = 174
+
         self._pix_item = QGraphicsPixmapItem(parent=self)
         self._refresh_icon()
         
+    def _is_launcher_project(self) -> bool:
+        """
+        JSONファイルが desktopPyLauncher のプロジェクトファイルかを判定する
+        """
+        try:
+            if not self.path or not os.path.exists(self.path):
+                return False
+            with open(self.path, encoding="utf-8") as f:
+                j = json.load(f)
+            fi = j.get("fileinfo", {})
+            return (
+                fi.get("name") == "desktopPyLauncher.py" and
+                fi.get("version", "0") >= "1.0"
+            )
+        except Exception as e:
+            warn(f"[JSONItem] _is_launcher_project failed: {e}")
+            return False
     def _refresh_icon(self):
         """
         アイコン画像を d['width']/d['height'] に合わせて再生成する。
         ・Embed > IconFile > パス先アイコン の優先順で取得
         """
-        from DPyL_utils import ICON_SIZE, _icon_pixmap
         # 1) オリジナルピクスマップを取得
         if self.embed:
-            from base64 import b64decode
             pix = QPixmap()
             pix.loadFromData(b64decode(self.embed))
         else:
@@ -841,20 +997,11 @@ class JSONItem(CanvasItem):
     # ダブルクリック時動作
     # --------------------------------------------------------------
     def on_activate(self):
-        # JSON内容によってプロジェクト切替 or 既定アプリで開く
-        from pathlib import Path as _P
         win = self.scene().views()[0].window()
-        p = _P(self.path)
-        try:
-            with open(p, "r", encoding="utf-8") as f:
-                j = json.load(f)
-            fi = j.get("fileinfo", {})
-            if (fi.get("name") == "desktopPyLauncher.py"
-                    and fi.get("version", "0") >= "1.0"):
-                win._load_json(p)
-                return
-        except Exception as e:
-            warn(f"JSONItem check failed: {e}")
+        p = Path(self.path)
+        if self._is_launcher_project():
+            win._load_json(p)
+            return
         try:
             os.startfile(str(p))
         except Exception:
@@ -886,15 +1033,13 @@ class GenericFileItem(LauncherItem):
     # ① 常に True だが “最後に登録” されるので優先度は最下位
     @classmethod
     def supports_path(cls, path: str) -> bool:
-        from pathlib import Path
         p = Path(path)
         return p.exists()
 
     # ② ファクトリ
     @classmethod
     def create_from_path(cls, path: str, sp, win):
-        from pathlib import Path as _P
-        p = _P(path)
+        p = Path(path)
         d = {
             "type": "launcher",
             "caption": p.name,
@@ -1219,6 +1364,11 @@ class LauncherEditDialog(QDialog):
         h.addWidget(self.lbl_prev, 1)
         layout.addLayout(h)
 
+        # ── Run as Admin ──
+        self.chk_runas = QCheckBox("管理者として実行（runas）")
+        self.chk_runas.setChecked(data.get("runas", False))
+        layout.addWidget(self.chk_runas)
+
         # ── OK / Cancel ──
         h = QHBoxLayout(); h.addStretch(1)
         ok = QPushButton("OK"); ok.clicked.connect(self.accept)
@@ -1289,7 +1439,6 @@ class LauncherEditDialog(QDialog):
 
         # --- Embed (base64) ---
         if icon_type == "Embed" and not path_txt and self.data.get("icon_embed"):
-            from base64 import b64decode
             pm = QPixmap()
             pm.loadFromData(b64decode(self.data["icon_embed"]))
 
@@ -1324,6 +1473,7 @@ class LauncherEditDialog(QDialog):
         self.data["path"]    = self.le_path.text()
         self.data["workdir"] = self.le_workdir.text()
         self.data["icon_index"] = self.spin_index.value()
+        self.data["runas"] = self.chk_runas.isChecked()
 
         icon_type = self.combo_icon_type.currentText()
         icon_path = self.le_icon.text().strip()

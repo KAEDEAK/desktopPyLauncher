@@ -19,7 +19,6 @@ from PyQt6.QtWidgets import (
     QLabel, QLineEdit, QPushButton, QVBoxLayout, QHBoxLayout,
     QMenu, QComboBox, QSpinBox,QCheckBox,
     QWidget, QSlider, QGraphicsProxyWidget
-    
 )
 
 from PyQt6.QtMultimedia import QMediaPlayer, QAudioOutput
@@ -36,8 +35,8 @@ from PyQt6.QtCore import (
 from functools import partial
 
 # ───────── internal modules ─────────────────────────────────────
-from DPyL_utils   import warn, ms_to_hms, hms_to_ms
-from DPyL_classes import CanvasResizeGrip           # for main toggle reference
+from DPyL_utils   import warn, ms_to_hms, hms_to_ms, VIDEO_EXTS
+from DPyL_classes import CanvasResizeGrip
 
 # ======================================================================
 #   ResizeGripItem  (動画のリサイズ用グリップ)
@@ -128,9 +127,7 @@ class VideoItem(QGraphicsVideoItem):
     TYPE_NAME = "video"
     @classmethod
     def supports_path(cls, path: str) -> bool:
-        from pathlib import Path as _P
-        from DPyL_utils import VIDEO_EXTS
-        return _P(path).suffix.lower() in VIDEO_EXTS
+        return Path(path).suffix.lower() in VIDEO_EXTS
 
     @classmethod
     def create_from_path(cls, path: str, sp, win):

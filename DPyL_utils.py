@@ -115,17 +115,18 @@ def normalize_unc_path(path: str) -> str:
 
 def compose_url_icon(favicon_b64: str, size: int = ICON_SIZE) -> QPixmap:
     """
-    .urlファイル用の白紙＋favicon合成アイコンを生成
+    .urlファイル用の白紙＋favicon合成アイコンを生成（中央配置・スケーリング対応）
     """
     icon_size = size
     overlay_size = int(icon_size * 0.6)
-    # 背景: 白紙風
+
     base = QPixmap(icon_size, icon_size)
     base.fill(Qt.GlobalColor.white)
+
     painter = QPainter(base)
     painter.setPen(QColor("#888"))
     painter.drawRect(0, 0, icon_size - 1, icon_size - 1)
-    # favicon合成
+
     try:
         from base64 import b64decode
         raw = b64decode(favicon_b64)
@@ -133,9 +134,13 @@ def compose_url_icon(favicon_b64: str, size: int = ICON_SIZE) -> QPixmap:
         fav.loadFromData(raw)
         if not fav.isNull():
             fav = fav.scaled(overlay_size, overlay_size, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
-            painter.drawPixmap(icon_size - fav.width(), icon_size - fav.height(), fav)
+            # ⭐ 中央に描画
+            x = (icon_size - fav.width()) // 2
+            y = (icon_size - fav.height()) // 2
+            painter.drawPixmap(x, y, fav)
     except Exception as e:
         warn(f"compose_url_icon failed: {e}")
+
     painter.end()
     return base
 
