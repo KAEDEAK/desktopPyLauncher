@@ -154,7 +154,6 @@ class MainWindow(QMainWindow):
         VideoItem は CanvasItem に含まれないので、特別扱いする。
         """
         from DPyL_video import VideoItem
-        from pathlib import Path
         ext = Path(path).suffix.lower()
 
         # --- VideoItem 特別対応 ---
@@ -778,23 +777,37 @@ class MainWindow(QMainWindow):
         it = LauncherItem(d, self.text_color)
         return it, d
 
-    # --- ドラッグ＆ドロップ対応 ---
+    # --- MainWindowドラッグ＆ドロップ対応 ---
     def handle_drop(self, e):
         """
         URL / ファイルドロップ共通ハンドラ
+        * http(s) URL           → favicon 付き LauncherItem   ←★ NEW: 最優先
         * ネットワークドライブ   → 専用 LauncherItem
         * CanvasItem レジストリ → 自動判定で生成
-        * http(s) URL           → favicon 付き LauncherItem
         ドロップ後は全体を編集モードへ強制切替！
         """
-        added_any = False  # ← 何か追加したかのフラグ
+        added_any = False
 
         for url in e.mimeData().urls():
             sp = self.view.mapToScene(e.position().toPoint())
-            raw_path = url.toLocalFile()
+
+            # ① まずは “http/https” を最優先で処理  -----------------
+            weburl = url.toString().strip()
+            if weburl.startswith(("http://", "https://")):
+                it, d = self._make_web_launcher(weburl, sp)
+                if it:
+                    self.scene.addItem(it); self.data["items"].append(d)
+                    added_any = True
+                continue          # ★ GenericFileItem へフォールバックさせない
+
+            # ② ローカルパス判定 ------------------------------------
+            raw_path = url.toLocalFile().strip()
+            if not raw_path:
+                warn(f"[drop] パスも URL も解釈できない: {url}")
+                continue
             path = normalize_unc_path(raw_path)
 
-            # ---------- ① ネットワークドライブ ----------
+            # ③ ネットワークドライブ -------------------------------
             if is_network_drive(path):
                 dll = os.path.join(os.environ.get("SystemRoot", r"C:\Windows"),
                                    "System32", "imageres.dll")
@@ -808,36 +821,24 @@ class MainWindow(QMainWindow):
                     "x": sp.x(), "y": sp.y()
                 }
                 it = LauncherItem(d, self.text_color)
-                self.scene.addItem(it)
-                self.data["items"].append(d)
+                self.scene.addItem(it); self.data["items"].append(d)
                 added_any = True
                 continue
 
-            # ---------- ② レジストリ判定 ----------
+            # ④ レジストリ経由 (CanvasItem.ITEM_CLASSES) ------------
             item, d = self._create_item_from_path(path, sp)
             if item:
-                self.scene.addItem(item)
-                self.data["items"].append(d)
+                self.scene.addItem(item); self.data["items"].append(d)
                 added_any = True
                 continue
 
-            # ---------- ③ Web URL (.url も統合) ----------
-            weburl = url.toString() or path
-            if weburl.startswith(("http://", "https://")):
-                it, d = self._make_web_launcher(weburl, sp,
-                                                icon_path=path if path.endswith(".url") else "",
-                                                is_url_file=path.endswith(".url"))
-                if it:
-                    self.scene.addItem(it)
-                    self.data["items"].append(d)
-                    added_any = True
-                continue
-
-            warn(f"[drop] unsupported or missing: {url}")
+            # ⑤ ここまで来ても未判定なら警告 -----------------------
+            warn(f"[drop] unsupported: {url}")
 
         # ---------- ドロップ完了後に全体を編集モードへ ----------
         if added_any:
             self._set_mode(edit=True)
+
 
     def resizeEvent(self, event):
         """
