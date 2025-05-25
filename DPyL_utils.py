@@ -128,13 +128,12 @@ def compose_url_icon(favicon_b64: str, size: int = ICON_SIZE) -> QPixmap:
     painter.drawRect(0, 0, icon_size - 1, icon_size - 1)
 
     try:
-        from base64 import b64decode
-        raw = b64decode(favicon_b64)
+        raw = base64.b64decode(favicon_b64)
         fav = QPixmap()
         fav.loadFromData(raw)
         if not fav.isNull():
             fav = fav.scaled(overlay_size, overlay_size, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
-            # ⭐ 中央に描画
+            # 中央に描画
             x = (icon_size - fav.width()) // 2
             y = (icon_size - fav.height()) // 2
             painter.drawPixmap(x, y, fav)

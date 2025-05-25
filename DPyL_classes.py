@@ -366,13 +366,28 @@ def quote_if_needed(path: str) -> str:
 
 class LauncherItem(CanvasItem):
     TYPE_NAME = "launcher"
+    # 実行系拡張子
+    SCRIPT_LIKE = (".bat", ".cmd", ".ps1", ".py", ".js")
+    EXE_LIKE    = (".exe", ".com", ".jar", ".msi")
+
+    # 編集系拡張子（NOTE: EDITABLE_LIKEでもいい）
+    EDITABLE_LIKE = (".txt", ".json", ".yaml", ".yml", ".md")
+
+    # ショートカット的な扱い
+    SHORTCUT_LIKE = (".lnk", ".url")
+
     @classmethod
     def supports_path(cls, path: str) -> bool:
         ext = Path(path).suffix.lower()
-        return ext in (".lnk", ".url", ".exe", ".bat")
-
+        return ext in (
+            cls.SHORTCUT_LIKE +
+            cls.EXE_LIKE +
+            cls.SCRIPT_LIKE +
+            cls.EDITABLE_LIKE
+        )
     @classmethod
     def _create_item_from_path(self, path: str, sp):
+        # from handle_drop
        
         ext = Path(path).suffix.lower()
 
@@ -383,11 +398,11 @@ class LauncherItem(CanvasItem):
                 d = {
                     "type": "launcher",
                     "caption": Path(path).stem,
-                    "path": url,                # ←ここにURL
-                    "shortcut": path,           # 元の.urlファイル
+                    "path": url, 
+                    "shortcut": path,
                 }
                 if icon_file:
-                    d["icon"] = icon_file       # アイコンファイルパス
+                    d["icon"] = icon_file
                 if icon_index is not None:
                     d["icon_index"] = icon_index
                 d["x"] = sp.x()
@@ -395,7 +410,7 @@ class LauncherItem(CanvasItem):
                 return LauncherItem(d, self.text_color), d
             else:
                 warn(f".url parse failed: {path}")
-
+            
         # それ以外（既存処理）
         for i in range(len(CanvasItem.ITEM_CLASSES)):
             cls = CanvasItem.ITEM_CLASSES[i]
@@ -408,6 +423,8 @@ class LauncherItem(CanvasItem):
 
     @classmethod
     def create_from_path(cls, path: str, sp, win):
+        #from MainWindow constructor, etc.
+        
         #print("launcherItem.create_from_path")
         ext = Path(path).suffix.lower()
         d = {
@@ -415,6 +432,11 @@ class LauncherItem(CanvasItem):
             "caption": Path(path).stem,
             "x": sp.x(), "y": sp.y()
         }
+      
+        if ext in cls.EDITABLE_LIKE:
+            d["is_editable"] = True
+        else:
+            d["is_editable"] = False        
 
         if ext == ".url":
             url, icon_file, icon_index = cls.parse_url_shortcut(path)
@@ -514,9 +536,21 @@ class LauncherItem(CanvasItem):
         # 属性代入をプロパティに変更（これが解決策）
         self.workdir = self.d.get("workdir", "")
         self.embed = self.d.get("icon_embed")
+        self.is_editable = self.d.get("is_editable", False)
         self.runas = self.d.get("runas", False)
         self.brightness = None
-
+        
+        # --- "EDIT" ラベル作成 ---
+        self._edit_label = QGraphicsTextItem("EDIT", self)
+        self._edit_label.setDefaultTextColor(QColor("#cc3333"))
+        font = self._edit_label.font()
+        font.setPointSize(8)
+        self._edit_label.setFont(font)
+        self._edit_label.setZValue(9999)
+        self._edit_label.setHtml('<span style="background-color:#0044cc;color:#ffff00;">EDIT</span>')
+        self._edit_label.setVisible(self.is_editable)
+        
+        #self._update_edit_label_pos()
         self._pix_item = QGraphicsPixmapItem(parent=self)
         self._refresh_icon()
 
@@ -524,7 +558,17 @@ class LauncherItem(CanvasItem):
     @property
     def path(self):
         return self.d.get("path", "")
-
+        
+    def _update_edit_label_pos(self):
+        """アイコン右下に EDIT ラベルを配置"""
+        #rect = self._rect_item.rect()
+        #label_rect = self._edit_label.boundingRect()
+        #x = rect.width() - label_rect.width() - 4
+        #y = rect.height() - label_rect.height() - 2
+        x=2
+        y=2
+        self._edit_label.setPos(x, y)
+        
     def _refresh_icon(self):
         """
         アイコン画像を d['width']/d['height'] に合わせて再生成する。
@@ -581,6 +625,13 @@ class LauncherItem(CanvasItem):
 
             self.init_caption()
             self._update_grip_pos()
+            
+            # --- ここに追加 ---
+            if hasattr(self, "_edit_label"):
+                self._update_edit_label_pos()
+                self._edit_label.setVisible(self.is_editable)            
+            else:
+                self._edit_label.setVisible(False)
         except Exception as e:
             print(f"_refresh_icon failed: {e}")            
         
@@ -615,6 +666,9 @@ class LauncherItem(CanvasItem):
             self._refresh_icon()
             if hasattr(self, "cap_item"):
                 self.cap_item.setPlainText(self.d.get("caption", ""))
+        self.is_editable = self.d.get("is_editable", False)
+        self._edit_label.setVisible(self.is_editable)
+        self._update_edit_label_pos()
 
     r"""
     def on_activate(self):
@@ -632,8 +686,7 @@ class LauncherItem(CanvasItem):
             warn(f"Launcher run failed: {e}")
 
     """
-
-          
+         
     def on_activate(self):
         """
         実行モード時のダブルクリック起動処理  
@@ -645,7 +698,6 @@ class LauncherItem(CanvasItem):
             return
 
         ext = Path(path).suffix.lower()
-        exe_like = ext in (".exe", ".bat", ".cmd", ".ps1")
 
         # workdirが未設定なら exe のある場所を代入
         workdir = self.d.get("workdir", "").strip()
@@ -655,14 +707,13 @@ class LauncherItem(CanvasItem):
             except Exception:
                 workdir = ""
                 
-        # --- Pythonスクリプト対応 ---
-        if ext == ".py":
-            try:
-                
-                py_exec = sys.executable
-                args = [py_exec, path]
+        # is_editable フラグチェック
+        is_edit = self.d.get("is_editable", False)
 
-                #print(f"[PYTHON] exec={py_exec}, args={[path]}")
+        # --- Pythonスクリプト ---
+        if ext == ".py" and not is_edit:
+            try:
+                py_exec = sys.executable
                 ok = QProcess.startDetached(py_exec, [path], workdir)
                 if not ok:
                     warn(f"QProcess 起動失敗: {py_exec} {path}")
@@ -670,48 +721,68 @@ class LauncherItem(CanvasItem):
             except Exception as e:
                 warn(f"[LauncherItem.on_activate] .py 起動エラー: {e}")
                 return
-                
-        # --- シェルスクリプト系: runas対応 or QProcess/subprocess ---
-        if exe_like:
+
+        # --- Node.js スクリプト ---
+        if ext == ".js" and not is_edit:
             try:
-                args = shlex_split(quote_if_needed(path), posix=False)
-                print("args",args)
-                if not args:
-                    warn(f"引数分解に失敗: {path}")
-                    return
-
-                exe = args[0]
-                raw_args = args[1:]
-                exe_args = [
-                    a[1:-1] if a.startswith('"') and a.endswith('"') else a
-                    for a in raw_args
-                ]
-
-                # runas 指定あり → PowerShell 経由で cmd 実行
-                if self.d.get("runas", False):
-                    exe = os.path.abspath(exe)
-                    quoted_args = " ".join(f'"{a}"' for a in exe_args)
-                    full_cmd = f'cd /d "{workdir}" && "{exe}" {quoted_args}'
-                    ps_script = f'Start-Process cmd.exe -ArgumentList \'/c {full_cmd}\' -Verb RunAs'
-                    ps_cmd = ["powershell", "-NoProfile", "-Command", ps_script]
-
-                    print("★ runas cmd:", ps_cmd)
-                    subprocess.run(ps_cmd, shell=False)
-                else:
-                    # 通常の QProcess 起動
-                    print(f"[QProcess] exe={exe}, args={exe_args}, cwd={workdir}")
-                    ok = QProcess.startDetached(exe, exe_args, workdir)
-                    if not ok:
-                        warn(f"QProcess 起動失敗: {exe} {exe_args}")
+                ok = QProcess.startDetached("node", [path], workdir)
+                if not ok:
+                    warn(f"QProcess 起動失敗: node {path}")
                 return
             except Exception as e:
-                warn(f"[LauncherItem.on_activate] shell型 起動エラー: {e}")
+                warn(f"[LauncherItem.on_activate] .js 起動エラー: {e}")
                 return
+                
+        # --- シェルスクリプト系: runas対応 or QProcess/subprocess ---
+        if self.EXE_LIKE:
+            if not is_edit:
+                try:
+                    args = shlex_split(quote_if_needed(path), posix=False)
+                    #print("on_activate",args)
+                    if not args:
+                        warn(f"引数分解に失敗: {path}")
+                        return
+
+                    exe = args[0]
+                    raw_args = args[1:]
+                    exe_args = [
+                        a[1:-1] if a.startswith('"') and a.endswith('"') else a
+                        for a in raw_args
+                    ]
+
+                    # runas 指定あり → PowerShell 経由で cmd 実行
+                    if self.d.get("runas", False):
+                        exe = os.path.abspath(exe)
+                        quoted_args = " ".join(f'"{a}"' for a in exe_args)
+                        full_cmd = f'cd /d "{workdir}" && "{exe}" {quoted_args}'
+                        ps_script = f'Start-Process cmd.exe -ArgumentList \'/c {full_cmd}\' -Verb RunAs'
+                        ps_cmd = ["powershell", "-NoProfile", "-Command", ps_script]
+
+                        #print("runas cmd:", ps_cmd)
+                        subprocess.run(ps_cmd, shell=False)
+                    else:
+                        # 通常の QProcess 起動
+                        #print(f"[QProcess] exe={exe}, args={exe_args}, cwd={workdir}")
+                        ok = QProcess.startDetached(exe, exe_args, workdir)
+                        if not ok:
+                            warn(f"QProcess 起動失敗: {exe} {exe_args}")
+                    return
+                except Exception as e:
+                    warn(f"[LauncherItem.on_activate] shell型 起動エラー: {e}")
+                    return
 
         # --- その他: os.startfile（runas 不要） ---
         try:
-            print(f"[startfile] path={path}")
-            os.startfile(path)
+            if  not is_edit:
+                print(f"open, path={path}")
+                os.startfile(path)
+            else:
+                if self.SCRIPT_LIKE:
+                    print(f"open with edit mode, path={path}")
+                    os.startfile(path,"edit")
+                else:
+                    print(f"not handled, path={path}")
+                
         except Exception as e:
             warn(f"[LauncherItem.on_activate] startfile 起動エラー: {e}")
 
@@ -1314,7 +1385,7 @@ class LauncherEditDialog(QDialog):
         h.addWidget(self.spin_index)
         layout.addLayout(h)
 
-        # ── ★ Preview ──
+        # ── Preview ──
         h = QHBoxLayout()
         h.addWidget(QLabel("Preview"))
         self.lbl_prev = QLabel()
@@ -1328,6 +1399,11 @@ class LauncherEditDialog(QDialog):
         self.chk_runas = QCheckBox("管理者として実行（runas）")
         self.chk_runas.setChecked(data.get("runas", False))
         layout.addWidget(self.chk_runas)
+
+        # ── Executable flag ──
+        self.chk_exe = QCheckBox("編集で開く")
+        self.chk_exe.setChecked(data.get("is_editable", False))
+        layout.addWidget(self.chk_exe)
 
         # ── OK / Cancel ──
         h = QHBoxLayout(); h.addStretch(1)
@@ -1434,6 +1510,7 @@ class LauncherEditDialog(QDialog):
         self.data["workdir"] = self.le_workdir.text()
         self.data["icon_index"] = self.spin_index.value()
         self.data["runas"] = self.chk_runas.isChecked()
+        self.data["is_editable"] = self.chk_exe.isChecked()
 
         icon_type = self.combo_icon_type.currentText()
         icon_path = self.le_icon.text().strip()

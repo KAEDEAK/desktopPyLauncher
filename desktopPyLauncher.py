@@ -74,13 +74,39 @@ class CanvasView(QGraphicsView):
             if not items:
                 menu = QMenu(self)
                 act_paste = menu.addAction("ペースト")
+
+                # --- クリップボードの内容を判定して有効/無効を切替 ---
+                cb = QApplication.clipboard()
+                can_paste = False
+
+                try:
+                    js = json.loads(cb.text())
+                    if isinstance(js, dict):
+                        can_paste = "items" in js and isinstance(js["items"], list)
+                    elif isinstance(js, list):
+                        can_paste = all(isinstance(d, dict) for d in js)
+                except Exception:
+                    pass
+
+                if not can_paste and cb.mimeData().hasImage():
+                    can_paste = True
+
+                act_paste.setEnabled(can_paste)
+
                 sel = menu.exec(ev.globalPosition().toPoint() if hasattr(ev, "globalPosition") else ev.globalPos())
                 if sel == act_paste:
                     self.win._paste_image_if_available(scene_pos)
-                    self.win._paste_items_at(scene_pos)
+                    pasted_items = self.win._paste_items_at(scene_pos)
+                    if pasted_items:
+                        for item in pasted_items:
+                            if hasattr(item, "set_editable"):
+                                item.set_editable(True)
+                            if hasattr(item, "set_run_mode"):
+                                item.set_run_mode(False)
                 ev.accept()
                 return
         super().mousePressEvent(ev)
+
 
 # ==============================================================
 #  MainWindow - メインウィンドウ
@@ -257,7 +283,27 @@ class MainWindow(QMainWindow):
         
         act_copy = menu.addAction("コピー")
         act_cut  = menu.addAction("カット")
+        
+        r"""
         act_paste = menu.addAction("ペースト")
+        
+        # --- ペースト可否を判定して有効/無効を切り替え ---
+        cb_text = QApplication.clipboard().text()
+        try:
+            js = json.loads(cb_text)
+            if isinstance(js, dict):
+                # base/items 構造 or 単一アイテムdict想定
+                valid = "items" in js and isinstance(js["items"], list)
+            elif isinstance(js, list):
+                # リスト形式（旧バージョン複数アイテム）
+                valid = all(isinstance(d, dict) for d in js)
+            else:
+                valid = False
+            act_paste.setEnabled(valid)
+        except Exception:
+            act_paste.setEnabled(False)
+        """
+        
         menu.addSeparator()
         
         act_front = menu.addAction("最前面へ")
@@ -314,6 +360,7 @@ class MainWindow(QMainWindow):
             return
 
         # --- ペースト ---
+        r"""
         if sel == act_paste:
             txt = QApplication.clipboard().text()
             try:
@@ -357,7 +404,8 @@ class MainWindow(QMainWindow):
                 warn(f"ペースト失敗: {e}")
             ev.accept()
             return
-
+        """
+        
         # --- Zオーダー変更 ---
         if sel == act_front:
             item.setZValue(max((i.zValue() for i in self.scene.items()), default=0) + 1)
@@ -373,7 +421,7 @@ class MainWindow(QMainWindow):
 
                 embed_data = item.d.get("icon_embed")
                 if embed_data:
-                    # ⭐ Embed から復元
+                    # Embed から復元
                     pix = QPixmap()
                     pix.loadFromData(b64decode(embed_data))
                 else:
@@ -476,11 +524,13 @@ class MainWindow(QMainWindow):
     # --- 指定座標へペースト ---
     def _paste_items_at(self, scene_pos):
         """
-        クリップボードデータを現在座標へ貼り付け
-        * 新形式 (base/items) → 相対配置
-        * 旧形式 (単一/複数)  → そのまま配置
+        クリップボードデータを現在座標へ貼り付け  
+        * 新形式 (base/items) → 相対配置  
+        * 旧形式 (単一/複数)  → そのまま配置  
+        戻り値: List[QGraphicsItem]
         """
         txt = QApplication.clipboard().text()
+        pasted_items = []
         try:
             js = json.loads(txt)
             items = []
@@ -499,17 +549,20 @@ class MainWindow(QMainWindow):
                 if cls is None:
                     warn(f"[paste] unknown type: {d.get('type')}")
                     continue
-                d_new         = d.copy()
-                d_new["x"]    = int(scene_pos.x()) + dx
-                d_new["y"]    = int(scene_pos.y()) + dy
-                item_instance = cls(d_new, self.text_color) \
-                                if cls.TYPE_NAME != "video" else cls(d_new, win=self)
+                d_new      = d.copy()
+                d_new["x"] = int(scene_pos.x()) + dx
+                d_new["y"] = int(scene_pos.y()) + dy
 
-                self.scene.addItem(item_instance)
+                item = cls(d_new, self.text_color) if cls.TYPE_NAME != "video" else cls(d_new, win=self)
+                self.scene.addItem(item)
                 self.data["items"].append(d_new)
+                pasted_items.append(item)
 
         except Exception as e:
             warn(f"ペースト失敗: {e}")
+
+        return pasted_items  # ←←← これが重要！
+
 
     # --- 画像ペースト処理 ---
     def _paste_image_if_available(self, scene_pos):
