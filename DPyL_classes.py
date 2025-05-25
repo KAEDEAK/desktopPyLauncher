@@ -379,6 +379,17 @@ class LauncherItem(CanvasItem):
     @classmethod
     def supports_path(cls, path: str) -> bool:
         ext = Path(path).suffix.lower()
+
+        # --- プロジェクト JSON は JSONItem に譲る ---
+        if ext == ".json":
+            try:
+                with open(path, encoding="utf-8") as f:
+                    fi = json.load(f).get("fileinfo", {})
+                    if fi.get("name") == "desktopPyLauncher.py":
+                        return False  # 🏳 JSONItem の担当
+            except Exception:
+                pass  # 読めない→普通の JSON とみなす
+
         return ext in (
             cls.SHORTCUT_LIKE +
             cls.EXE_LIKE +
@@ -386,14 +397,14 @@ class LauncherItem(CanvasItem):
             cls.EDITABLE_LIKE
         )
     @classmethod
-    def _create_item_from_path(self, path: str, sp):
+    def _create_item_from_path(cls, path: str, sp):
         # from handle_drop
        
         ext = Path(path).suffix.lower()
 
         # .url (Internet Shortcut)
         if ext == ".url":
-            url, icon_file, icon_index = parse_url_shortcut(path)
+            url, icon_file, icon_index = cls.parse_url_shortcut(path)
             if url:
                 d = {
                     "type": "launcher",
@@ -407,7 +418,7 @@ class LauncherItem(CanvasItem):
                     d["icon_index"] = icon_index
                 d["x"] = sp.x()
                 d["y"] = sp.y()
-                return LauncherItem(d, self.text_color), d
+                return LauncherItem(d, cls.text_color), d
             else:
                 warn(f".url parse failed: {path}")
             
@@ -416,7 +427,7 @@ class LauncherItem(CanvasItem):
             cls = CanvasItem.ITEM_CLASSES[i]
             try:
                 if cls.supports_path(path):
-                    return cls.create_from_path(path, sp, self)
+                    return cls.create_from_path(path, sp, cls)
             except Exception as e:
                 warn(f"[factory] {cls.__name__}: {e}")
         return None, None
@@ -957,13 +968,19 @@ class JSONItem(CanvasItem):
             with open(self.path, encoding="utf-8") as f:
                 j = json.load(f)
             fi = j.get("fileinfo", {})
+
+            # --- 文字列→数値タプルへ変換して厳密比較 ---
+            def _v(s: str) -> tuple[int, ...]:
+                return tuple(int(p) for p in s.split(".") if p.isdigit())
+
             return (
                 fi.get("name") == "desktopPyLauncher.py" and
-                fi.get("version", "0") >= "1.0"
+                _v(fi.get("version", "0")) >= (1, 0)
             )
         except Exception as e:
             warn(f"[JSONItem] _is_launcher_project failed: {e}")
             return False
+
     def _refresh_icon(self):
         """
         アイコン画像を d['width']/d['height'] に合わせて再生成する。

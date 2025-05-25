@@ -25,6 +25,7 @@ DEBUG_MODE = any(arg == "-debug" for arg in sys.argv)
 
 ICON_SIZE          = 48
 IMAGE_EXTS         = (".png", ".jpg", ".jpeg", ".bmp", ".gif")
+#VIDEO_EXTS         = (".wav",".mp3",".mp4", ".mov", ".avi", ".mkv", ".webm", ".wmv")
 VIDEO_EXTS         = (".mp4", ".mov", ".avi", ".mkv", ".webm", ".wmv")
 EXECUTE_EXTS       = (".lnk", ".bat", ".txt", ".html", ".htm", ".url")
 PYTHON_SCRIPT_EXT  = ".py"
@@ -216,10 +217,6 @@ def _extract_hicon(path: str, index: int) -> QPixmap | None:
         if not img.isNull():
             return QPixmap.fromImage(img)
     return None
-
-def is_network_drive(path: str) -> bool:
-    """UNC/ネットワークドライブかどうか判定"""
-    return path.startswith("\\\\") or path.startswith("//")
 
 def get_fixed_local_icon(index: int, size: int = ICON_SIZE) -> QPixmap:
     r"""
