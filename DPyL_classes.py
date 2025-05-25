@@ -367,7 +367,7 @@ def quote_if_needed(path: str) -> str:
 class LauncherItem(CanvasItem):
     TYPE_NAME = "launcher"
     # 実行系拡張子
-    SCRIPT_LIKE = (".bat", ".cmd", ".ps1", ".py", ".js")
+    SCRIPT_LIKE = (".bat", ".cmd", ".ps1", ".py", ".js", ".vbs", ".wsf")
     EXE_LIKE    = (".exe", ".com", ".jar", ".msi")
 
     # 編集系拡張子（NOTE: EDITABLE_LIKEでもいい）
@@ -740,7 +740,17 @@ class LauncherItem(CanvasItem):
             except Exception as e:
                 warn(f"[LauncherItem.on_activate] .js 起動エラー: {e}")
                 return
-
+        # --- .vbs スクリプト ---
+        if ext in (".vbs", ".wsf"):
+            try:
+                # 明示的に workdir を設定して wscript 起動！
+                ok = QProcess.startDetached("wscript", [path], workdir)
+                if not ok:
+                    warn(f"QProcess 起動失敗: wscript {path}")
+                return
+            except Exception as e:
+                warn(f"[LauncherItem.on_activate] .vbs 起動エラー: {e}")
+            return
         # --- 実行ファイル系 (.exe, .com, .jar, .msi) ---
         if ext in self.EXE_LIKE:
             try:
