@@ -690,24 +690,32 @@ class LauncherItem(CanvasItem):
     def on_activate(self):
         """
         実行モード時のダブルクリック起動処理  
-        拡張子に応じて subprocess / QProcess / os.startfile を使い分ける
+        フォルダ → エクスプローラーで開く  
+        拡張子に応じて subprocess / QProcess / os.startfile を使い分け
         """
         path = self.d.get("path", "")
         if not path:
-            warn("path が設定されていません")
+            warn("[LauncherItem] path が設定されていません")
+            return
+
+        # --- フォルダなら explorer で開く ---
+        if os.path.isdir(path):
+            try:
+                os.startfile(path)
+            except Exception as e:
+                warn(f"[LauncherItem] フォルダオープン失敗: {e}")
             return
 
         ext = Path(path).suffix.lower()
 
-        # workdirが未設定なら exe のある場所を代入
+        # --- 作業ディレクトリの初期化 ---
         workdir = self.d.get("workdir", "").strip()
         if not workdir:
             try:
                 workdir = str(Path(path).parent)
             except Exception:
                 workdir = ""
-                
-        # is_editable フラグチェック
+
         is_edit = self.d.get("is_editable", False)
 
         # --- Pythonスクリプト ---
@@ -732,59 +740,39 @@ class LauncherItem(CanvasItem):
             except Exception as e:
                 warn(f"[LauncherItem.on_activate] .js 起動エラー: {e}")
                 return
-                
-        # --- シェルスクリプト系: runas対応 or QProcess/subprocess ---
-        if self.EXE_LIKE:
-            if not is_edit:
-                try:
-                    args = shlex_split(quote_if_needed(path), posix=False)
-                    #print("on_activate",args)
-                    if not args:
-                        warn(f"引数分解に失敗: {path}")
-                        return
 
-                    exe = args[0]
-                    raw_args = args[1:]
-                    exe_args = [
-                        a[1:-1] if a.startswith('"') and a.endswith('"') else a
-                        for a in raw_args
-                    ]
-
-                    # runas 指定あり → PowerShell 経由で cmd 実行
-                    if self.d.get("runas", False):
-                        exe = os.path.abspath(exe)
-                        quoted_args = " ".join(f'"{a}"' for a in exe_args)
-                        full_cmd = f'cd /d "{workdir}" && "{exe}" {quoted_args}'
-                        ps_script = f'Start-Process cmd.exe -ArgumentList \'/c {full_cmd}\' -Verb RunAs'
-                        ps_cmd = ["powershell", "-NoProfile", "-Command", ps_script]
-
-                        #print("runas cmd:", ps_cmd)
-                        subprocess.run(ps_cmd, shell=False)
-                    else:
-                        # 通常の QProcess 起動
-                        #print(f"[QProcess] exe={exe}, args={exe_args}, cwd={workdir}")
-                        ok = QProcess.startDetached(exe, exe_args, workdir)
-                        if not ok:
-                            warn(f"QProcess 起動失敗: {exe} {exe_args}")
-                    return
-                except Exception as e:
-                    warn(f"[LauncherItem.on_activate] shell型 起動エラー: {e}")
+        # --- 実行ファイル系 (.exe, .com, .jar, .msi) ---
+        if ext in self.EXE_LIKE:
+            try:
+                args = shlex_split(quote_if_needed(path), posix=False)
+                if not args:
+                    warn(f"引数分解に失敗: {path}")
                     return
 
-        # --- その他: os.startfile（runas 不要） ---
-        try:
-            if  not is_edit:
-                print(f"open, path={path}")
-                os.startfile(path)
-            else:
-                if self.SCRIPT_LIKE:
-                    print(f"open with edit mode, path={path}")
-                    os.startfile(path,"edit")
+                exe = args[0]
+                exe_args = [a[1:-1] if a.startswith('"') and a.endswith('"') else a for a in args[1:]]
+
+                if self.d.get("runas", False):
+                    exe = os.path.abspath(exe)
+                    quoted_args = " ".join(f'"{a}"' for a in exe_args)
+                    full_cmd = f'cd /d "{workdir}" && "{exe}" {quoted_args}'
+                    ps_script = f'Start-Process cmd.exe -ArgumentList \'/c {full_cmd}\' -Verb RunAs'
+                    ps_cmd = ["powershell", "-NoProfile", "-Command", ps_script]
+                    subprocess.run(ps_cmd, shell=False)
                 else:
-                    print(f"not handled, path={path}")
-                
+                    ok = QProcess.startDetached(exe, exe_args, workdir)
+                    if not ok:
+                        warn(f"QProcess 起動失敗: {exe} {exe_args}")
+            except Exception as e:
+                warn(f"[LauncherItem.on_activate] 起動エラー: {e}")
+            return
+
+        # --- その他（is_editableなファイル等） ---
+        try:
+            os.startfile(path)
         except Exception as e:
-            warn(f"[LauncherItem.on_activate] startfile 起動エラー: {e}")
+            warn(f"[LauncherItem.on_activate] startfile 失敗: {e}")
+
 
 
 # ==================================================================
