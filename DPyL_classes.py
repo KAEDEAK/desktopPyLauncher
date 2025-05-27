@@ -232,9 +232,13 @@ class CanvasItem(QGraphicsItemGroup):
         pix = QPixmap()
         if hasattr(self, "embed") and self.embed:
             pix.loadFromData(b64decode(self.embed))
-        elif hasattr(self, "path") and self.path:
-            pix = QPixmap(self.path)
-
+        #elif hasattr(self, "path") and self.path:
+        #    pix = QPixmap(self.path)
+        else:
+            icon_path = getattr(self, "icon", None) or getattr(self, "path", "")
+            if icon_path:
+                pix = QPixmap(icon_path)
+                
         # 2) 代替アイコン
         if pix.isNull():
             pix = _icon_pixmap(getattr(self, "path", "") or "", 0, ICON_SIZE)
@@ -1402,12 +1406,23 @@ class LauncherEditDialog(QDialog):
 
         # ── Preview ──
         h = QHBoxLayout()
-        h.addWidget(QLabel("Preview"))
+        lbl_prev_title = QLabel("Preview")
+        h.addWidget(lbl_prev_title)
+
+        # ▼ プレビュー画像 ＋ Paste ボタン（縦配置）
+        v_prev = QVBoxLayout()
         self.lbl_prev = QLabel()
         self.lbl_prev.setFixedSize(_PREV_SIZE, _PREV_SIZE)
         self.lbl_prev.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.lbl_prev.setStyleSheet("border:1px solid #888;")  # 視認しやすく
-        h.addWidget(self.lbl_prev, 1)
+        self.lbl_prev.setStyleSheet("border:1px solid #888;")
+        v_prev.addWidget(self.lbl_prev, alignment=Qt.AlignmentFlag.AlignCenter)
+
+        self.btn_paste = QPushButton("Paste")
+        self.btn_paste.setEnabled(False)
+        self.btn_paste.clicked.connect(self._paste_from_clipboard)
+        v_prev.addWidget(self.btn_paste, alignment=Qt.AlignmentFlag.AlignCenter)
+
+        h.addLayout(v_prev, 1)
         layout.addLayout(h)
 
         # ── Run as Admin ──
@@ -1429,6 +1444,9 @@ class LauncherEditDialog(QDialog):
 
         # 初期プレビュー
         self._update_preview()
+        # ▼ クリップボード監視で Paste ボタン有効化
+        QApplication.clipboard().dataChanged.connect(self._update_paste_button)
+        self._update_paste_button()
         #QTimer.singleShot(0, self._update_preview)
 
     # ---------------- browse helpers ----------------
@@ -1515,7 +1533,39 @@ class LauncherEditDialog(QDialog):
                 Qt.TransformationMode.SmoothTransformation,
             )
         self.lbl_prev.setPixmap(pm)
+    # ---------------- clipboard paste ----------------
+    def _update_paste_button(self):
+        """クリップボードに画像がある時だけ Paste ボタンを有効化"""
+        mime = QApplication.clipboard().mimeData()
+        self.btn_paste.setEnabled(mime.hasImage())
 
+    def _paste_from_clipboard(self):
+        """画像をEmbed化してプレビューに即反映"""
+        cb      = QApplication.clipboard()
+        mime    = cb.mimeData()
+        if not mime.hasImage():
+            return
+        img = cb.image()
+        if img.isNull():
+            return
+
+        pix = QPixmap.fromImage(img)
+
+        # PNG → Base64 へエンコード
+        buf = QBuffer()
+        buf.open(QIODevice.OpenModeFlag.WriteOnly)
+        pix.save(buf, "PNG")
+        embed_b64 = base64.b64encode(buf.data()).decode("ascii")
+
+        # データモデル更新
+        self.data["icon_embed"] = embed_b64
+        self.combo_icon_type.setCurrentText("Embed")   # 強制 Embed モード
+        self.le_icon.clear()
+        self.spin_index.setValue(0)
+
+        # プレビュー更新
+        self._update_preview()
+        self._update_paste_button()
 
     # ---------------- accept ----------------
     def accept(self):
