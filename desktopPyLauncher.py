@@ -205,6 +205,12 @@ class MainWindow(QMainWindow):
             c = CanvasItem.ITEM_CLASSES[i]
             if getattr(c, "TYPE_NAME", None) == t:
                 return c
+
+        # --- 特例: CanvasItem を継承していない VideoItem を手動で対応 ---
+        if t == "video":
+            from DPyL_video import VideoItem
+            return VideoItem
+
         return None
 
     def _new_project(self):
@@ -432,9 +438,8 @@ class MainWindow(QMainWindow):
             cur_w = int(item.boundingRect().width())
             cur_h = int(item.boundingRect().height())
 
-            # 2) ソースから元のピクセルマップを再取得
+            # 2) ソース元サイズの取得
             if isinstance(item, GifItem):
-                # GIF の全フレーム中の最大サイズを取るため frameRect を利用
                 frame_rect = item.movie.frameRect()
                 if not frame_rect.isValid():
                     warn("GIFフレームサイズ取得失敗")
@@ -444,8 +449,16 @@ class MainWindow(QMainWindow):
                 if src_pix.isNull():
                     warn("GIFフレーム取得失敗")
                     return
+
+            elif is_vid:
+                ns = item.nativeSize()
+                if not ns.isValid():
+                    warn("動画サイズ取得失敗")
+                    return
+                orig_w, orig_h = ns.width(), ns.height()
+                src_pix = None  # 動画はpixmap使わない
+
             else:
-                # 静止画系（ImageItem/JSONItem/LauncherItem）は埋め込み or ファイルから生成
                 embed_data = item.d.get("icon_embed")
                 if embed_data:
                     pix = QPixmap()
@@ -463,20 +476,20 @@ class MainWindow(QMainWindow):
             # 3) アスペクト比を保って縮小（内側にフィット）
             scale = min(cur_w / orig_w, cur_h / orig_h)
             w, h = int(orig_w * scale), int(orig_h * scale)
-            pm = src_pix.scaled(
-                w, h,
-                Qt.AspectRatioMode.KeepAspectRatio,
-                Qt.TransformationMode.SmoothTransformation)
 
-            # 4) 表示更新
+            # 静止画/動画別で描画処理
             item.prepareGeometryChange()
             if is_pix:
+                pm = src_pix.scaled(
+                    w, h,
+                    Qt.AspectRatioMode.KeepAspectRatio,
+                    Qt.TransformationMode.SmoothTransformation)
                 item._rect_item.setRect(0, 0, w, h)
                 item._pix_item.setPixmap(pm)
             else:
                 item.setSize(QSizeF(w, h))
 
-            # 5) d 属性とUI後処理
+            # 共通後処理
             item.d["width"], item.d["height"] = w, h
             if hasattr(item, "resize_content"):
                 item.resize_content(w, h)
@@ -486,8 +499,9 @@ class MainWindow(QMainWindow):
                 item.init_caption()
             if hasattr(item, "update_layout"):
                 item.update_layout()
+
              
-            return
+            #return
         # --- 削除 ---
         elif sel == act_del:
             self._remove_item(item)
