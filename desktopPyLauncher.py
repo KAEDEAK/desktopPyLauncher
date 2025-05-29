@@ -31,11 +31,11 @@ from PyQt6.QtCore import (
     QBuffer, QIODevice, QTimer, 
     QUrl
 )
-
 # --- プロジェクト内モジュール ---
 from DPyL_utils   import (
     warn, b64e, fetch_favicon_base64,
-    compose_url_icon, b64encode_pixmap, normalize_unc_path, is_network_drive
+    compose_url_icon, b64encode_pixmap, normalize_unc_path, 
+    is_network_drive, _icon_pixmap, ICON_SIZE
 )
 from DPyL_classes import (
     LauncherItem, JSONItem, ImageItem, GifItem,
@@ -386,7 +386,7 @@ class MainWindow(QMainWindow):
                     embed_data = item.d.get("icon_embed")
                     if embed_data:
                         pix = QPixmap()
-                        pix.loadFromData(b64decode(embed_data))
+                        pix.loadFromData(base64.b64decode(embed_data))
                     else:
                         src = item.d.get("icon") or item.d.get("path")
                         idx = item.d.get("icon_index", 0)
@@ -446,14 +446,10 @@ class MainWindow(QMainWindow):
                     return
             else:
                 # 静止画系（ImageItem/JSONItem/LauncherItem）は埋め込み or ファイルから生成
-                from DPyL_utils import ICON_SIZE, _icon_pixmap
-                from base64      import b64decode
-                from PyQt6.QtGui import QPixmap
-
                 embed_data = item.d.get("icon_embed")
                 if embed_data:
                     pix = QPixmap()
-                    pix.loadFromData(b64decode(embed_data))
+                    pix.loadFromData(base64.b64decode(embed_data))
                 else:
                     src = item.d.get("icon") or item.d.get("path")
                     idx = item.d.get("icon_index", 0)
@@ -571,7 +567,6 @@ class MainWindow(QMainWindow):
 
             pixmap = QPixmap.fromImage(img)
             # base64エンコードして保存用に変換
-            from DPyL_utils import b64encode_pixmap
             embed = b64encode_pixmap(pixmap)
             now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
