@@ -1826,7 +1826,7 @@ class LauncherEditDialog(QDialog):
                     pm = QPixmap(icon_path)
                     if not pm.isNull():
                         buf = QBuffer()
-                        buf.open(QIODevice.WriteOnly)
+                        buf.open(QIODevice.OpenModeFlag.WriteOnly)
                         if pm.save(buf, "PNG"):
                             embed_b64 = base64.b64encode(buf.data()).decode("ascii")
 
@@ -1835,7 +1835,7 @@ class LauncherEditDialog(QDialog):
                 pm = self.lbl_prev.pixmap()
                 if pm and not pm.isNull():
                     buf = QBuffer()
-                    buf.open(QIODevice.WriteOnly)
+                    buf.open(QIODevice.OpenModeFlag.WriteOnly)
                     pm.save(buf, "PNG")
                     embed_b64 = base64.b64encode(buf.data()).decode("ascii")
 
