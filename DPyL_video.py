@@ -104,7 +104,13 @@ class ResizeGripItem(QGraphicsRectItem):
             self.target.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsMovable, True)
 
         ev.accept()
-
+    def update_zvalue(self):
+        """
+        グリップのZ値を常に親アイテムの1上に設定
+        """
+        parent = self.parentItem()
+        if parent:
+            self.setZValue(parent.zValue() + 1)
 # ======================================================================
 #   VideoItem
 # ======================================================================
@@ -322,7 +328,8 @@ class VideoItem(QGraphicsVideoItem):
         # グリップを右下へ
         self.resize_grip.setPos(sz.width() - self.resize_grip.rect().width(),
                                 sz.height() - self.resize_grip.rect().height())
-
+        if hasattr(self.resize_grip, "update_zvalue"):
+            self.resize_grip.update_zvalue()
     # --------------------------------------------------------------
     #   VideoItem / プレイヤーコールバック
     # --------------------------------------------------------------

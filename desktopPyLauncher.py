@@ -7,7 +7,7 @@ desktopPyLauncher.py ― エントリポイント
 from __future__ import annotations
 
 # --- 標準・サードパーティライブラリ ---
-import sys, json, base64, os
+import sys, json, base64, os, inspect
 from datetime import datetime
 from pathlib import Path
 
@@ -38,10 +38,12 @@ from DPyL_utils   import (
     compose_url_icon, b64encode_pixmap, normalize_unc_path, is_network_drive
 )
 from DPyL_classes import (
-    LauncherItem, JSONItem, ImageItem,
+    LauncherItem, JSONItem, ImageItem, GifItem,
     CanvasItem, CanvasResizeGrip,
     BackgroundDialog
 )
+
+
 from DPyL_note    import NoteItem
 from DPyL_video   import VideoItem
 from configparser import ConfigParser
@@ -88,15 +90,40 @@ class CanvasView(QGraphicsView):
                 except Exception:
                     pass
 
-                if not can_paste and cb.mimeData().hasImage():
-                    can_paste = True
+                # 静止画 or GIFファイルURL を貼れるように判定
+                if not can_paste:
+                    mime = cb.mimeData()
+                    if mime.hasImage():
+                        can_paste = True
+                    elif mime.hasUrls() and any(
+                        u.isLocalFile() and u.toLocalFile().lower().endswith(".gif")
+                        for u in mime.urls()
+                    ):
+                        can_paste = True                    
+                    #can_paste = True
 
                 act_paste.setEnabled(can_paste)
 
                 sel = menu.exec(ev.globalPosition().toPoint() if hasattr(ev, "globalPosition") else ev.globalPos())
                 if sel == act_paste:
-                    self.win._paste_image_if_available(scene_pos)
-                    pasted_items = self.win._paste_items_at(scene_pos)
+                    pasted_items = []
+                    mime = cb.mimeData()
+                    # 1) クリップボードにGIFファイルURLがあれば優先貼り付け
+                    if mime.hasUrls():
+                        for u in mime.urls():
+                            if u.isLocalFile() and u.toLocalFile().lower().endswith(".gif"):
+                                path = u.toLocalFile()
+                                # ファクトリ経由でGifItemを生成・追加
+                                item, d = self.win._create_item_from_path(path, scene_pos)
+                                if item:
+                                    self.win.scene.addItem(item)
+                                    self.win.data["items"].append(d)
+                                    pasted_items.append(item)
+                                break
+                    # 2) GIFがなければ従来の画像／JSON貼り付け
+                    if not pasted_items:
+                        self.win._paste_image_if_available(scene_pos)
+                        pasted_items = self.win._paste_items_at(scene_pos)
                     if pasted_items:
                         for item in pasted_items:
                             if hasattr(item, "set_editable"):
@@ -174,7 +201,6 @@ class MainWindow(QMainWindow):
 
 
     def _get_item_class_by_type(self, t: str):
-        from DPyL_classes import CanvasItem
         for i in range(len(CanvasItem.ITEM_CLASSES)):
             c = CanvasItem.ITEM_CLASSES[i]
             if getattr(c, "TYPE_NAME", None) == t:
@@ -276,32 +302,13 @@ class MainWindow(QMainWindow):
 
         from DPyL_video import VideoItem as _Vid
         is_vid = isinstance(item, _Vid)
-        is_pix = hasattr(item, "_src_pixmap") and item._src_pixmap
+        #is_pix = hasattr(item, "_src_pixmap") and item._src_pixmap or isinstance(item, GifItem)
+        is_pix = isinstance(item, (ImageItem, GifItem, JSONItem, LauncherItem))
 
         menu = QMenu(self)
         
         act_copy = menu.addAction("コピー")
         act_cut  = menu.addAction("カット")
-        
-        r"""
-        act_paste = menu.addAction("ペースト")
-        
-        # --- ペースト可否を判定して有効/無効を切り替え ---
-        cb_text = QApplication.clipboard().text()
-        try:
-            js = json.loads(cb_text)
-            if isinstance(js, dict):
-                # base/items 構造 or 単一アイテムdict想定
-                valid = "items" in js and isinstance(js["items"], list)
-            elif isinstance(js, list):
-                # リスト形式（旧バージョン複数アイテム）
-                valid = all(isinstance(d, dict) for d in js)
-            else:
-                valid = False
-            act_paste.setEnabled(valid)
-        except Exception:
-            act_paste.setEnabled(False)
-        """
         
         menu.addSeparator()
         
@@ -357,53 +364,6 @@ class MainWindow(QMainWindow):
                     self._remove_item(it)
             ev.accept()
             return
-
-        # --- ペースト ---
-        r"""
-        if sel == act_paste:
-            txt = QApplication.clipboard().text()
-            try:
-                js = json.loads(txt)
-                # 新形式（複数・相対座標付き）
-                if isinstance(js, dict) and "base" in js and "items" in js:
-                    base_x, base_y = js["base"]
-                    for d in js["items"]:
-                        t = d.get("type")
-                        dx = d.get("x", 0) - base_x
-                        dy = d.get("y", 0) - base_y
-                        d_new = d.copy()
-                        paste_x = d.get("x", 100) + 24
-                        paste_y = d.get("y", 100) + 24
-                        d_new["x"] = paste_x + dx
-                        d_new["y"] = paste_y + dy
-                        item_new = None
-                        if t == "json":
-                            item_new = JSONItem(d_new, self.text_color)
-                        elif t == "image":
-                            item_new = ImageItem(d_new, self.text_color)
-                        elif t == "note":
-                            item_new = NoteItem(d_new)
-                        elif t == "video":
-                            item_new = VideoItem(d_new, win=self)
-                        elif t == "launcher":
-                            item_new = LauncherItem(d_new, self.text_color)
-                        if item_new:
-                            self.scene.addItem(item_new)
-                            self.data["items"].append(d_new)
-                else:
-                    # 旧形式（単一アイテム貼り付け）
-                    items = js if isinstance(js, list) else [js]
-                    for d in items:
-                        t = d.get("type")
-                        d_new = d.copy()
-                        d_new["x"] = d.get("x", 100) + 24
-                        d_new["y"] = d.get("y", 100) + 24
-                        # ...同様に分岐
-            except Exception as e:
-                warn(f"ペースト失敗: {e}")
-            ev.accept()
-            return
-        """
         
         # --- Zオーダー変更 ---
         if sel == act_front:
@@ -414,30 +374,32 @@ class MainWindow(QMainWindow):
         # --- 元のサイズに合わせる 
         elif sel == act_fit_orig:
             if is_pix:
-                from DPyL_utils import ICON_SIZE, _icon_pixmap
-                from base64 import b64decode
-                from PyQt6.QtGui import QPixmap
-
-                embed_data = item.d.get("icon_embed")
-                if embed_data:
-                    # Embed から復元
-                    pix = QPixmap()
-                    pix.loadFromData(b64decode(embed_data))
+                if isinstance(item, GifItem):
+                    pix = item.movie.currentPixmap()
+                    if pix.isNull():
+                        warn("GIFフレーム取得失敗")
+                        return
+                    w = pix.width()
+                    h = pix.height()
+                    item._pix_item.setPixmap(pix)
                 else:
-                    # 通常の icon パスから取得
-                    src = item.d.get("icon") or item.d.get("path")
-                    idx = item.d.get("icon_index", 0)
-                    pix = _icon_pixmap(src, idx, ICON_SIZE)
+                    embed_data = item.d.get("icon_embed")
+                    if embed_data:
+                        pix = QPixmap()
+                        pix.loadFromData(b64decode(embed_data))
+                    else:
+                        src = item.d.get("icon") or item.d.get("path")
+                        idx = item.d.get("icon_index", 0)
+                        pix = _icon_pixmap(src, idx, ICON_SIZE)
+                    if pix.isNull():
+                        warn("アイコン取得失敗")
+                        return
+                    w = max(pix.width(), ICON_SIZE)
+                    h = max(pix.height(), ICON_SIZE)
+                    item._src_pixmap = pix.copy()
+                    item._pix_item.setPixmap(pix)
 
-                if pix.isNull():
-                    warn("アイコン取得失敗")
-                    return
 
-                # 最小サイズ制限
-                w = max(pix.width(),  ICON_SIZE)
-                h = max(pix.height(), ICON_SIZE)
-
-                item._src_pixmap = pix.copy()
                 item.prepareGeometryChange()
                 item._rect_item.setRect(0, 0, w, h)
                 item.d["width"], item.d["height"] = w, h
@@ -466,28 +428,59 @@ class MainWindow(QMainWindow):
 
         # --- 内側にフィット ---
         elif sel == act_fit_inside:
+            # 1) 現在の表示領域サイズを取得
             cur_w = int(item.boundingRect().width())
             cur_h = int(item.boundingRect().height())
 
-            if is_pix:
-                pm = item._src_pixmap.scaled(
-                    cur_w, cur_h,
-                    Qt.AspectRatioMode.KeepAspectRatio,
-                    Qt.TransformationMode.SmoothTransformation)
-                w, h = pm.width(), pm.height()
-            else:
-                ns = item.nativeSize()
-                if not ns.isValid():
+            # 2) ソースから元のピクセルマップを再取得
+            if isinstance(item, GifItem):
+                # GIF の全フレーム中の最大サイズを取るため frameRect を利用
+                frame_rect = item.movie.frameRect()
+                if not frame_rect.isValid():
+                    warn("GIFフレームサイズ取得失敗")
                     return
-                scale = min(cur_w / ns.width(), cur_h / ns.height())
-                w, h = int(ns.width() * scale), int(ns.height() * scale)
+                orig_w, orig_h = frame_rect.width(), frame_rect.height()
+                src_pix = item.movie.currentPixmap()
+                if src_pix.isNull():
+                    warn("GIFフレーム取得失敗")
+                    return
+            else:
+                # 静止画系（ImageItem/JSONItem/LauncherItem）は埋め込み or ファイルから生成
+                from DPyL_utils import ICON_SIZE, _icon_pixmap
+                from base64      import b64decode
+                from PyQt6.QtGui import QPixmap
 
+                embed_data = item.d.get("icon_embed")
+                if embed_data:
+                    pix = QPixmap()
+                    pix.loadFromData(b64decode(embed_data))
+                else:
+                    src = item.d.get("icon") or item.d.get("path")
+                    idx = item.d.get("icon_index", 0)
+                    pix = _icon_pixmap(src, idx, ICON_SIZE)
+                if pix.isNull():
+                    warn("アイコン取得失敗")
+                    return
+                orig_w, orig_h = pix.width(), pix.height()
+                src_pix = pix
+
+            # 3) アスペクト比を保って縮小（内側にフィット）
+            scale = min(cur_w / orig_w, cur_h / orig_h)
+            w, h = int(orig_w * scale), int(orig_h * scale)
+            pm = src_pix.scaled(
+                w, h,
+                Qt.AspectRatioMode.KeepAspectRatio,
+                Qt.TransformationMode.SmoothTransformation)
+
+            # 4) 表示更新
             item.prepareGeometryChange()
             if is_pix:
                 item._rect_item.setRect(0, 0, w, h)
                 item._pix_item.setPixmap(pm)
             else:
                 item.setSize(QSizeF(w, h))
+
+            # 5) d 属性とUI後処理
             item.d["width"], item.d["height"] = w, h
             if hasattr(item, "resize_content"):
                 item.resize_content(w, h)
@@ -497,6 +490,8 @@ class MainWindow(QMainWindow):
                 item.init_caption()
             if hasattr(item, "update_layout"):
                 item.update_layout()
+             
+            return
         # --- 削除 ---
         elif sel == act_del:
             self._remove_item(item)
@@ -640,6 +635,8 @@ class MainWindow(QMainWindow):
         for it in self.scene.items():
             if isinstance(it, VideoItem):
                 it.player.play(); it.btn_play.setChecked(True); it.btn_play.setText("⏸")
+            elif isinstance(it, GifItem):
+                it.play() 
 
     def _pause_all_videos(self):
         for it in self.scene.items():
@@ -651,6 +648,8 @@ class MainWindow(QMainWindow):
                 it.btn_play.setChecked(False)
                 it.btn_play.setText("▶")
                 it.active_point_index = None
+            elif isinstance(it, GifItem):
+                it.pause() 
 
     def _mute_all_videos(self):
         for it in self.scene.items():
@@ -1010,20 +1009,34 @@ class MainWindow(QMainWindow):
             warn(f"LOAD failed: {e}")
             QMessageBox.critical(self, "Error", str(e))
             return
-
         # アイテム復元
-        map_cls = {
-            "launcher": LauncherItem, "json": JSONItem,
-            "image": ImageItem, "video": VideoItem, "note": NoteItem
-        }
         for d in self.data.get("items", []):
-            cls = map_cls.get(d.get("type", "launcher"))
-            if not cls: continue
-            it = cls(d, win=self) if cls is VideoItem else cls(d, self.text_color)
-            it.setZValue(d.get("z", 0)); self.scene.addItem(it)
+            cls = self._get_item_class_by_type(d.get("type", ""))
+            if not cls:
+                warn(f"[LOAD] Unknown item type: {d.get('type')}")
+                continue
+
+            # ---- コンストラクタの引数を動的に組み立てる ----
+            kwargs = {}
+            sig = inspect.signature(cls.__init__).parameters
+            if "win" in sig:
+                kwargs["win"] = self
+            if "text_color" in sig:
+                kwargs["text_color"] = self.text_color
+
+            try:
+                it = cls(d, **kwargs)  # ← これで GifItem も OK！
+            except Exception as e:
+                warn(f"[LOAD] {cls.__name__} create failed: {e}")
+                continue
+
+            # ---- 共通後処理 ----
+            it.setZValue(d.get("z", 0))
+            self.scene.addItem(it)
             it.setPos(d.get("x", 0), d.get("y", 0))
-            
-            # VideoItemはリサイズグリップを追加
+
+            # VideoItem はリサイズグリップをシーンに載せる
+            from DPyL_video import VideoItem
             if isinstance(it, VideoItem) and it.resize_grip.scene() is None:
                 self.scene.addItem(it.resize_grip)
 
