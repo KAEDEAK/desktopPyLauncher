@@ -252,17 +252,17 @@ def _default_icon(size: int = ICON_SIZE) -> QPixmap:
     return pm
 
 def _icon_pixmap(path: str, index: int = 0, size: int = ICON_SIZE) -> QPixmap:
-
-
     return _icon_pixmap_basic(path, index, size);
+    
+    
 def _icon_pixmap_basic(path: str, index: int = 0, size: int = ICON_SIZE) -> QPixmap:
     """
     DLL/EXE/ICOファイルから、指定サイズに最も近いアイコンを抽出する
     """
-    from PyQt6.QtGui import QPixmap, QImageReader
-    from PyQt6.QtCore import QFileInfo, QSize
-    from PyQt6.QtWidgets import QFileIconProvider
-
+    if not path:
+        print("path is empty")
+        return _default_icon(size)
+        
     # 1. ICOファイル
     if path.lower().endswith(".ico"):
         try:

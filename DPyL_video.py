@@ -44,16 +44,28 @@ from DPyL_classes import CanvasResizeGrip
 class ResizeGripItem(QGraphicsRectItem):
     def __init__(self, target: "VideoItem"):
         super().__init__(target)
-        self.target = target
-        self.setRect(0, 0, 12, 12)
-        self.setBrush(QBrush(Qt.GlobalColor.darkGray))
-        self.setCursor(Qt.CursorShape.SizeFDiagCursor)
-        self.setZValue(10_000)
-        self.setAcceptedMouseButtons(Qt.MouseButton.LeftButton)
-        # Grip自体は動かさない
-        self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsMovable, False)
-        self._drag = False
-        self._was_movable = False  # ← 親アイテムの可動状態を一時保存
+        try:
+            self.target = target
+            self.setRect(0, 0, 12, 12)
+            self.setBrush(QBrush(Qt.GlobalColor.darkGray))
+            
+            # TEST ---
+            #枠線 
+            #w, h = self.target.size().width(), self.target.size().height()            
+            #self.setRect(0, 0, w + 2, h + 2)
+            #self.setBrush(Qt.BrushStyle.NoBrush)        # 塗りなし
+            #self.setPen(QPen(QColor(200, 200, 200)))    # 枠線だけ描く（任意）
+            # TEST ---
+            
+            self.setCursor(Qt.CursorShape.SizeFDiagCursor)
+            self.setZValue(10_000)
+            self.setAcceptedMouseButtons(Qt.MouseButton.LeftButton)
+            # Grip自体は動かさない
+            self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsMovable, False)
+            self._drag = False
+            self._was_movable = False  # ← 親アイテムの可動状態を一時保存
+        except Exception as e:
+            print(f"[VideoItem] init failed: {e}")        
 
     # ------------------------------------------------------------------
     def mousePressEvent(self, ev):

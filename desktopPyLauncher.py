@@ -389,23 +389,40 @@ class MainWindow(QMainWindow):
                     h = pix.height()
                     item._pix_item.setPixmap(pix)
                 else:
-                    embed_data = item.d.get("icon_embed")
+                    # ▷ あらゆるソースからピクスマップを復元（順に検査）
+                    pix = None
+                    src_pix = None
+
+                    # 1) embed: icon_embed or embed
+                    embed_data = item.d.get("icon_embed") or item.d.get("embed")
                     if embed_data:
                         pix = QPixmap()
-                        pix.loadFromData(base64.b64decode(embed_data))
-                    else:
-                        src = item.d.get("icon") or item.d.get("path")
+                        try:
+                            pix.loadFromData(base64.b64decode(embed_data))
+                        except Exception as e:
+                            warn(f"Base64デコード失敗: {e}")
+                            pix = None
+
+                    # 2) icon/path から取得（embed なければ）
+                    if not pix or pix.isNull():
+                        src = item.d.get("icon") or item.d.get("path") or ""
                         idx = item.d.get("icon_index", 0)
-                        pix = _icon_pixmap(src, idx, ICON_SIZE)
-                    if pix.isNull():
-                        warn("アイコン取得失敗")
-                        return
+                        if src:
+                            pix = _icon_pixmap(src, idx, ICON_SIZE)
+
+                    # 3) 最終手段: _default_icon
+                    if not pix or pix.isNull():
+                        warn("画像ソース取得に失敗（embed/icon/path 無効）")
+                        pix = _default_icon(ICON_SIZE)
+
+                    # --- サイズ判定 ---
                     w = max(pix.width(), ICON_SIZE)
                     h = max(pix.height(), ICON_SIZE)
+
                     item._src_pixmap = pix.copy()
                     item._pix_item.setPixmap(pix)
 
-
+                # --- 共通処理（画像・GIF） ---
                 item.prepareGeometryChange()
                 item._rect_item.setRect(0, 0, w, h)
                 item.d["width"], item.d["height"] = w, h
@@ -419,6 +436,7 @@ class MainWindow(QMainWindow):
             elif is_vid:
                 ns = item.nativeSize()
                 if not ns.isValid():
+                    warn("動画サイズ取得失敗: nativeSize が無効")
                     return
                 w, h = int(ns.width()), int(ns.height())
                 item.prepareGeometryChange()
@@ -438,7 +456,7 @@ class MainWindow(QMainWindow):
             cur_w = int(item.boundingRect().width())
             cur_h = int(item.boundingRect().height())
 
-            # 2) ソース元サイズの取得
+            # 2) ソース元サイズの取得（全タイプ網羅）
             if isinstance(item, GifItem):
                 frame_rect = item.movie.frameRect()
                 if not frame_rect.isValid():
@@ -453,32 +471,51 @@ class MainWindow(QMainWindow):
             elif is_vid:
                 ns = item.nativeSize()
                 if not ns.isValid():
-                    warn("動画サイズ取得失敗")
+                    warn("動画サイズ取得失敗: nativeSizeが無効")
                     return
                 orig_w, orig_h = ns.width(), ns.height()
-                src_pix = None  # 動画はpixmap使わない
+                src_pix = None  # 動画はpixmap不要
 
-            else:
-                embed_data = item.d.get("icon_embed")
+            elif is_pix:
+                # ✅ embed/icon/path の順に取得を試みる
+                pix = None
+                embed_data = item.d.get("icon_embed") or item.d.get("embed")
                 if embed_data:
                     pix = QPixmap()
-                    pix.loadFromData(base64.b64decode(embed_data))
-                else:
-                    src = item.d.get("icon") or item.d.get("path")
+                    try:
+                        pix.loadFromData(base64.b64decode(embed_data))
+                    except Exception as e:
+                        warn(f"Base64デコード失敗: {e}")
+                        pix = None
+
+                if not pix or pix.isNull():
+                    src = item.d.get("icon") or item.d.get("path") or ""
                     idx = item.d.get("icon_index", 0)
-                    pix = _icon_pixmap(src, idx, ICON_SIZE)
-                if pix.isNull():
-                    warn("アイコン取得失敗")
-                    return
+                    if src:
+                        pix = _icon_pixmap(src, idx, ICON_SIZE)
+
+                if not pix or pix.isNull():
+                    warn("画像取得失敗: embed/icon/path 無効")
+                    pix = _default_icon(ICON_SIZE)
+
                 orig_w, orig_h = pix.width(), pix.height()
                 src_pix = pix
 
+            else:
+                warn("未対応のアイテムタイプ")
+                return
+
             # 3) アスペクト比を保って縮小（内側にフィット）
+            if orig_w <= 0 or orig_h <= 0:
+                warn("元サイズが無効")
+                return
+
             scale = min(cur_w / orig_w, cur_h / orig_h)
             w, h = int(orig_w * scale), int(orig_h * scale)
 
-            # 静止画/動画別で描画処理
+            # 4) 描画とリサイズ（静止画と動画で処理分岐）
             item.prepareGeometryChange()
+
             if is_pix:
                 pm = src_pix.scaled(
                     w, h,
@@ -489,7 +526,7 @@ class MainWindow(QMainWindow):
             else:
                 item.setSize(QSizeF(w, h))
 
-            # 共通後処理
+            # 5) 共通後処理
             item.d["width"], item.d["height"] = w, h
             if hasattr(item, "resize_content"):
                 item.resize_content(w, h)
@@ -499,6 +536,7 @@ class MainWindow(QMainWindow):
                 item.init_caption()
             if hasattr(item, "update_layout"):
                 item.update_layout()
+
 
              
             #return
