@@ -5,13 +5,11 @@
 
 from __future__ import annotations
 
-import sys
-import os
+import os,sys,io
 import base64
 import ctypes
-from PIL import Image
-import io
 from ctypes import wintypes
+from PIL import Image
 from urllib.parse import urlparse
 from urllib.request import Request,urlopen
 from pathlib import Path
@@ -19,7 +17,7 @@ from PyQt6.QtGui     import QPixmap, QPainter, QImage, QImageReader, QIcon, QPal
 from PyQt6.QtGui     import QBrush, QPen
 from PyQt6.QtCore    import Qt, QSize, QFileInfo, QIODevice, QBuffer
 from PyQt6.QtWidgets import QApplication, QFileIconProvider
-    
+  
 # ────────────────────────────── 定数 ──────────────────────────────
 DEBUG_MODE = any(arg == "-debug" for arg in sys.argv)
 
@@ -29,10 +27,6 @@ IMAGE_EXTS         = (".png", ".jpg", ".jpeg", ".bmp", ".gif")
 VIDEO_EXTS         = (".mp4", ".mov", ".avi", ".mkv", ".webm", ".wmv")
 EXECUTE_EXTS       = (".lnk", ".bat", ".txt", ".html", ".htm", ".url")
 PYTHON_SCRIPT_EXT  = ".py"
-
-# ────────────────────────────── PyQt (遅延import) ──────────────────────────────
-
-
 ICON_PROVIDER = QFileIconProvider()
 
 # ────────────────────────────── 基本ユーティリティ ──────────────────────────────
@@ -267,8 +261,6 @@ def _icon_pixmap_basic(path: str, index: int = 0, size: int = ICON_SIZE) -> QPix
     if path.lower().endswith(".ico"):
         try:
             # PILで全サイズ調査
-            from PIL import Image
-            import io
             with open(path, "rb") as f:
                 img = Image.open(f)
                 if hasattr(img, "ico"):
@@ -287,8 +279,6 @@ def _icon_pixmap_basic(path: str, index: int = 0, size: int = ICON_SIZE) -> QPix
     # 2. DLL/EXE/その他（Windowsアイコン）
     try:
         # ctypesでHICON抽出（拡張可）
-        import ctypes
-        from ctypes import wintypes
         arr = (wintypes.HICON * 1)()
         # ExtractIconExW: size引数は無いので、まず全部のアイコンを取得
         num_icons = ctypes.windll.shell32.ExtractIconExW(path, index, arr, None, 1)

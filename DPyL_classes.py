@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Callable, Any
 from base64 import b64decode            
 from shlex import split as shlex_split
+from win32com.client import Dispatch
 import subprocess
 from PyQt6.QtCore import (
     Qt, QPointF, QRectF, QSizeF, QTimer, QSize, QFileInfo, QBuffer, QByteArray, QIODevice, QProcess
@@ -518,7 +519,6 @@ class LauncherItem(CanvasItem):
         (TargetPath + Arguments, WorkDir, IconLocation) を抽出
         """
         try:
-            from win32com.client import Dispatch
             shell = Dispatch("WScript.Shell")
             link  = shell.CreateShortcut(path)
 
@@ -1029,8 +1029,6 @@ class GifItem(CanvasItem):
         QProcess.startDetached("explorer", [str(self.path)])
 
     def on_edit(self):
-        from PyQt6.QtWidgets import QDialog
-        from DPyL_classes import ImageEditDialog
         dlg = ImageEditDialog(self)
         if dlg.exec() == QDialog.DialogCode.Accepted:
             self.caption = self.d.get("caption", "")
@@ -1497,9 +1495,6 @@ class ImageEditDialog(QDialog):
         Browse ダイアログの拡張子フィルタを
         GifItem vs ImageItem で切り替えっす。
         """
-        # 必要なクラスを取り込む
-        from DPyL_classes import GifItem, ImageItem
-
         # フィルタ設定
         if isinstance(self.item, GifItem):
             file_filter = "GIF files (*.gif)"

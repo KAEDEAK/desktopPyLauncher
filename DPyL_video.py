@@ -156,7 +156,7 @@ class VideoItem(QGraphicsVideoItem):
             "x": sp.x(), "y": sp.y(),
             "width": 320, "height": 180
         }
-        from DPyL_video import VideoItem  # 遅延 import
+        #from DPyL_video import VideoItem
         return VideoItem(d, win=win), d
 
     # --------------------------------------------------------------

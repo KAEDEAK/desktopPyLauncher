@@ -37,7 +37,7 @@ from PyQt6.QtWidgets import (
     QScrollArea,
     QWidget,
 )
-from PyQt6.QtGui import QColor, QBrush, QPen, QFont, QTextDocument
+from PyQt6.QtGui import QColor, QBrush, QPainterPath, QPen, QFont, QTextDocument
 from PyQt6.QtCore import Qt, QPointF, QRectF, QTimer
 
 # ───────── internal modules ───────────────────────────────────────────
@@ -227,8 +227,6 @@ class NoteItem(CanvasItem):
         return QRectF(0, 0, w, h)
 
     def shape(self):
-        from PyQt6.QtGui import QPainterPath
-
         p = QPainterPath()
         p.addRect(self.boundingRect())
         return p

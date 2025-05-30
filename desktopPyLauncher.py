@@ -180,7 +180,6 @@ class MainWindow(QMainWindow):
         ドロップされたファイルから対応するアイテムを生成する。
         VideoItem は CanvasItem に含まれないので、特別扱いする。
         """
-        from DPyL_video import VideoItem
         ext = Path(path).suffix.lower()
 
         # --- VideoItem 特別対応 ---
@@ -305,9 +304,7 @@ class MainWindow(QMainWindow):
     def show_context_menu(self, item: QGraphicsItem, ev):
         if not self.a_edit.isChecked():
             return
-
-        from DPyL_video import VideoItem as _Vid
-        is_vid = isinstance(item, _Vid)
+        is_vid = isinstance(item, VideoItem)
         #is_pix = hasattr(item, "_src_pixmap") and item._src_pixmap or isinstance(item, GifItem)
         is_pix = isinstance(item, (ImageItem, GifItem, JSONItem, LauncherItem))
 
