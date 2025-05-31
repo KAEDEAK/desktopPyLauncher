@@ -833,7 +833,16 @@ class LauncherItem(CanvasItem):
             return
 
         ext = Path(path).suffix.lower()
-
+        
+        # --- URL ならブラウザで開く（例: https://example.com/ など） ---
+        #     Path(path).suffix が ".com" になっちゃうケースを防ぐため
+        if isinstance(path, str) and path.lower().startswith(("http://", "https://")):
+            try:
+                os.startfile(path)  # Windows なら既定のブラウザで開くっす
+            except Exception as e:
+                warn(f"[LauncherItem.on_activate] URLオープン失敗: {e}")
+            return
+            
         # --- 作業ディレクトリの初期化 ---
         workdir = self.d.get("workdir", "").strip()
         if not workdir:

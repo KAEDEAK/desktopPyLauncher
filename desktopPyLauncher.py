@@ -76,135 +76,7 @@ class CanvasView(QGraphicsView):
         
     def dropEvent(self, e):      
         self.win.handle_drop(e)
-        
-    def mousePressEvent(self, ev):
-        # 右クリック時、空白エリアならペーストメニュー表示
-        if ev.button() == Qt.MouseButton.RightButton:
-            pos = ev.position().toPoint()
-            scene_pos = self.mapToScene(pos)
-            items = self.items(pos)
-            if not items:
-                menu = QMenu(self)
-                act_paste = menu.addAction("ペースト")
-
-                # --- クリップボードの内容を判定して有効/無効を切替 ---
-                cb = QApplication.clipboard()
-                can_paste = False
-
-                try:
-                    js = json.loads(cb.text())
-                    if isinstance(js, dict):
-                        can_paste = "items" in js and isinstance(js["items"], list)
-                    elif isinstance(js, list):
-                        can_paste = all(isinstance(d, dict) for d in js)
-                except Exception:
-                    pass
-
-                # 静止画 or GIFファイルURL を貼れるように判定
-                if not can_paste:
-                    mime = cb.mimeData()
-                    if mime.hasImage():
-                        can_paste = True
-                    elif mime.hasUrls() and any(
-                        u.isLocalFile() and u.toLocalFile().lower().endswith(".gif")
-                        for u in mime.urls()
-                    ):
-                        can_paste = True                    
-                    #can_paste = True
-
-                act_paste.setEnabled(can_paste)
-
-                sel = menu.exec(ev.globalPosition().toPoint())
-                if sel == act_paste:
-                    pasted_items = []
-                    mime = cb.mimeData()
-                    # 1) クリップボードにGIFファイルURLがあれば優先貼り付け
-                    if mime.hasUrls():
-                        for u in mime.urls():
-                            if u.isLocalFile() and u.toLocalFile().lower().endswith(".gif"):
-                                path = u.toLocalFile()
-                                # ファクトリ経由でGifItemを生成・追加
-                                item, d = self.win._create_item_from_path(path, scene_pos)
-                                if item:
-                                    self.win.scene.addItem(item)
-                                    self.win.data["items"].append(d)
-                                    pasted_items.append(item)
-                                break
-                    # 2) GIFがなければ従来の画像／JSON貼り付け
-                    if not pasted_items:
-                        self.win._paste_image_if_available(scene_pos)
-                        pasted_items = self.win._paste_items_at(scene_pos)
-                    if pasted_items:
-                        for item in pasted_items:
-                            item.set_editable(True)
-                            item.set_run_mode(False)
-                ev.accept()
-                return
-        super().mousePressEvent(ev)
-        
-    def mousePressEvent(self, ev):
-        # 右クリック時、空白エリアならペーストメニュー表示
-        if ev.button() == Qt.MouseButton.RightButton:
-            pos = ev.position().toPoint()
-            scene_pos = self.mapToScene(pos)
-            items = self.items(pos)
-            if not items:
-                menu = QMenu(self)
-                act_paste = menu.addAction("ペースト")
-
-                # --- クリップボードの内容を判定して有効/無効を切替 ---
-                cb = QApplication.clipboard()
-                can_paste = False
-
-                try:
-                    js = json.loads(cb.text())
-                    if isinstance(js, dict):
-                        can_paste = "items" in js and isinstance(js["items"], list)
-                    elif isinstance(js, list):
-                        can_paste = all(isinstance(d, dict) for d in js)
-                except Exception:
-                    pass
-
-                # 静止画 or GIFファイルURL を貼れるように判定
-                if not can_paste:
-                    mime = cb.mimeData()
-                    if mime.hasImage():
-                        can_paste = True
-                    elif mime.hasUrls() and any(
-                        u.isLocalFile() and u.toLocalFile().lower().endswith(".gif")
-                        for u in mime.urls()
-                    ):
-                        can_paste = True                    
-                act_paste.setEnabled(can_paste)
-
-                sel = menu.exec(ev.globalPosition().toPoint())
-                if sel == act_paste:
-                    pasted_items = []
-                    mime = cb.mimeData()
-                    # 1) クリップボードにGIFファイルURLがあれば優先貼り付け
-                    if mime.hasUrls():
-                        for u in mime.urls():
-                            if u.isLocalFile() and u.toLocalFile().lower().endswith(".gif"):
-                                path = u.toLocalFile()
-                                # ファクトリ経由でGifItemを生成・追加
-                                item, d = self.win._create_item_from_path(path, scene_pos)
-                                if item:
-                                    self.win.scene.addItem(item)
-                                    self.win.data["items"].append(d)
-                                    pasted_items.append(item)
-                                break
-                    # 2) GIFがなければ従来の画像／JSON貼り付け
-                    if not pasted_items:
-                        self.win._paste_image_if_available(scene_pos)
-                        pasted_items = self.win._paste_items_at(scene_pos)
-                    if pasted_items:
-                        for item in pasted_items:
-                            item.set_editable(True)
-                            item.set_run_mode(False)
-                ev.accept()
-                return
-        super().mousePressEvent(ev)
-
+    
     def mouseMoveEvent(self, ev):
         # 親のマウスムーブイベント（＝スクロール処理など）を先に実行
         super().mouseMoveEvent(ev)
@@ -394,7 +266,33 @@ class MainWindow(QMainWindow):
         # --- データ読み込み＆編集モード初期化 ---
         self._load()
         self._set_mode(edit=False)
+        
+        #self.view.installEventFilter(self)
+        
 
+    def mouseReleaseEvent(self, ev):
+        """
+        5ボタンマウス（XButton1/XButton2）に対応して、
+        戻る／進むを実行する。
+        PyQt6 は mousePressEvent より、こっちのほうが安定するらしい 。
+        """
+        # XButton1 → 戻る（_go_prev）、XButton2 → 進む（_go_next）
+        if ev.button() == Qt.MouseButton.XButton1:
+            # 戻るボタンが押されたら _go_prev を呼ぶっす
+            self._go_prev()
+            return
+        elif ev.button() == Qt.MouseButton.XButton2:
+            # 進むボタンが押されたら _go_next を呼ぶっす
+            self._go_next()
+            return
+        elif ev.button() == Qt.MouseButton.MiddleButton:
+            # 中央のボタンで編集/実行切り替え
+            # これが、mousePressEventではなく releaseEventでやらないと、偶数回目のトグルでダブルクリックが必要になる
+            self.a_run.trigger()
+            return
+        
+        super().mouseReleaseEvent(ev)
+        
     # --- CanvasItem レジストリ経由でアイテム生成 ----------
     def _create_item_from_path(self, path, sp):
         """
@@ -483,6 +381,13 @@ class MainWindow(QMainWindow):
         self.a_home = act("🏠HOME",    self._go_home)
         self.a_prev = act("⏪️PREV",    self._go_prev)
         self.a_next = act("⏩NEXT",    self._go_next)
+        
+        # 5 button mouse --
+        self.prev_action = QAction("PREV", self)
+        self.next_action = QAction("NEXT", self)
+        self.prev_action.triggered.connect(self._go_prev)
+        self.next_action.triggered.connect(self._go_next)
+        # ---
         
         self.add_toolbar_spacer(tb, width=24)
 
