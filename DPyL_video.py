@@ -178,6 +178,7 @@ class VideoItem(QGraphicsVideoItem):
     # --------------------------------------------------------------
     def __init__(self, d: dict[str, Any], *, win=None):
         super().__init__()
+        self.run_mode = True
         self.d   = d
         self.win = win
         self.setPos(d.get("x", 0), d.get("y", 0))
@@ -243,6 +244,9 @@ class VideoItem(QGraphicsVideoItem):
             self.d.__setitem__("muted", c)
         ))
         self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsSelectable, True)
+        
+        self.set_editable(False)
+        self._update_grip_pos()
 
     # -------------------------------------------------------------
     #   ミュート制御
@@ -619,13 +623,19 @@ class VideoItem(QGraphicsVideoItem):
         if self.scene():
             self.scene().removeItem(self)
         self.deleteLater()
-    
-    def set_run_mode(self, edit: bool):
-        """編集モード切替：動画プレイヤーとUI更新"""
-        self.video_resize_dots.setVisible(edit)
-        self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsMovable, edit)
-        self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsSelectable, edit)
-        self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsFocusable, edit)
+        
+
+    def set_run_mode(self, run: bool):
+        """実行(True)/編集(False)モード切替"""
+        self.run_mode = run
+        self.set_editable(not run)
+
+    def set_editable(self, editable: bool):
+        self.video_resize_dots.setVisible(editable)
+        self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsMovable, editable)
+        self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsSelectable, editable)
+        self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsFocusable, editable)        
+        
     def init_caption(self):
         pass
         

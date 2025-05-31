@@ -26,7 +26,7 @@ from PyQt6.QtGui import (
     QIcon, QImage, QPen, QTransform, QFont
 )
 from PyQt6.QtCore import (
-    Qt, QSizeF, QPointF, QFileInfo, QProcess,
+    Qt, QRectF, QSizeF, QPointF, QFileInfo, QProcess,
     QBuffer, QIODevice, QTimer, 
     QUrl
 )
@@ -50,6 +50,8 @@ from urllib.parse import urlparse
 
 from DPyL_debug import (my_has_attr,dump_missing_attrs,trace_this)
 
+EXPAND_STEP = 500  # 端に到達したときに拡張する幅・高さ（px）
+
 # ==============================================================
 #  CanvasView - キャンバス表示・ドラッグ&ドロップ対応
 # ==============================================================
@@ -61,13 +63,20 @@ class CanvasView(QGraphicsView):
         self.viewport().setAcceptDrops(True)
         self.setRenderHint(self.renderHints() | self.renderHints().Antialiasing)
 
+        # --- スクロールバー端到達時のシーン拡張 ---
+        self.horizontalScrollBar().valueChanged.connect(self._on_hscroll)
+        self.verticalScrollBar().valueChanged.connect(self._on_vscroll)
+        
     def dragEnterEvent(self, e): 
         # ファイルやURLドロップの受付
         e.acceptProposedAction() if e.mimeData().hasUrls() else super().dragEnterEvent(e)
+        
     def dragMoveEvent(self, e):  
         e.acceptProposedAction()
+        
     def dropEvent(self, e):      
         self.win.handle_drop(e)
+        
     def mousePressEvent(self, ev):
         # 右クリック時、空白エリアならペーストメニュー表示
         if ev.button() == Qt.MouseButton.RightButton:
@@ -132,7 +141,212 @@ class CanvasView(QGraphicsView):
                 ev.accept()
                 return
         super().mousePressEvent(ev)
+        
+    def mousePressEvent(self, ev):
+        # 右クリック時、空白エリアならペーストメニュー表示
+        if ev.button() == Qt.MouseButton.RightButton:
+            pos = ev.position().toPoint()
+            scene_pos = self.mapToScene(pos)
+            items = self.items(pos)
+            if not items:
+                menu = QMenu(self)
+                act_paste = menu.addAction("ペースト")
 
+                # --- クリップボードの内容を判定して有効/無効を切替 ---
+                cb = QApplication.clipboard()
+                can_paste = False
+
+                try:
+                    js = json.loads(cb.text())
+                    if isinstance(js, dict):
+                        can_paste = "items" in js and isinstance(js["items"], list)
+                    elif isinstance(js, list):
+                        can_paste = all(isinstance(d, dict) for d in js)
+                except Exception:
+                    pass
+
+                # 静止画 or GIFファイルURL を貼れるように判定
+                if not can_paste:
+                    mime = cb.mimeData()
+                    if mime.hasImage():
+                        can_paste = True
+                    elif mime.hasUrls() and any(
+                        u.isLocalFile() and u.toLocalFile().lower().endswith(".gif")
+                        for u in mime.urls()
+                    ):
+                        can_paste = True                    
+                act_paste.setEnabled(can_paste)
+
+                sel = menu.exec(ev.globalPosition().toPoint())
+                if sel == act_paste:
+                    pasted_items = []
+                    mime = cb.mimeData()
+                    # 1) クリップボードにGIFファイルURLがあれば優先貼り付け
+                    if mime.hasUrls():
+                        for u in mime.urls():
+                            if u.isLocalFile() and u.toLocalFile().lower().endswith(".gif"):
+                                path = u.toLocalFile()
+                                # ファクトリ経由でGifItemを生成・追加
+                                item, d = self.win._create_item_from_path(path, scene_pos)
+                                if item:
+                                    self.win.scene.addItem(item)
+                                    self.win.data["items"].append(d)
+                                    pasted_items.append(item)
+                                break
+                    # 2) GIFがなければ従来の画像／JSON貼り付け
+                    if not pasted_items:
+                        self.win._paste_image_if_available(scene_pos)
+                        pasted_items = self.win._paste_items_at(scene_pos)
+                    if pasted_items:
+                        for item in pasted_items:
+                            item.set_editable(True)
+                            item.set_run_mode(False)
+                ev.accept()
+                return
+        super().mousePressEvent(ev)
+
+    def mouseMoveEvent(self, ev):
+        # 親のマウスムーブイベント（＝スクロール処理など）を先に実行
+        super().mouseMoveEvent(ev)
+
+        # ビューポートに映っているシーン領域を取得
+        rect = self.mapToScene(self.viewport().rect()).boundingRect()
+        scene = self.scene()
+        if scene:
+            scene_rect = scene.sceneRect()
+            # ビューに映る領域がシーン外ならシーンを拡張
+            if not scene_rect.contains(rect):
+                new_rect = scene_rect.united(rect)
+                scene.setSceneRect(new_rect)
+
+    def mousePressEvent(self, ev):
+        # 右クリック時、空白エリアならペーストメニュー表示
+        if ev.button() == Qt.MouseButton.RightButton:
+            pos = ev.position().toPoint()
+            scene_pos = self.mapToScene(pos)
+            items = self.items(pos)
+            if not items:
+                menu = QMenu(self)
+                act_paste = menu.addAction("ペースト")
+
+                # --- クリップボードの内容を判定して有効/無効を切替 ---
+                cb = QApplication.clipboard()
+                can_paste = False
+
+                try:
+                    js = json.loads(cb.text())
+                    if isinstance(js, dict):
+                        can_paste = "items" in js and isinstance(js["items"], list)
+                    elif isinstance(js, list):
+                        can_paste = all(isinstance(d, dict) for d in js)
+                except Exception:
+                    pass
+
+                # 静止画 or GIFファイルURL を貼れるように判定
+                if not can_paste:
+                    mime = cb.mimeData()
+                    if mime.hasImage():
+                        can_paste = True
+                    elif mime.hasUrls() and any(
+                        u.isLocalFile() and u.toLocalFile().lower().endswith(".gif")
+                        for u in mime.urls()
+                    ):
+                        can_paste = True                    
+                act_paste.setEnabled(can_paste)
+
+                sel = menu.exec(ev.globalPosition().toPoint())
+                if sel == act_paste:
+                    pasted_items = []
+                    mime = cb.mimeData()
+                    # 1) クリップボードにGIFファイルURLがあれば優先貼り付け
+                    if mime.hasUrls():
+                        for u in mime.urls():
+                            if u.isLocalFile() and u.toLocalFile().lower().endswith(".gif"):
+                                path = u.toLocalFile()
+                                # ファクトリ経由でGifItemを生成・追加
+                                item, d = self.win._create_item_from_path(path, scene_pos)
+                                if item:
+                                    self.win.scene.addItem(item)
+                                    self.win.data["items"].append(d)
+                                    pasted_items.append(item)
+                                break
+                    # 2) GIFがなければ従来の画像／JSON貼り付け
+                    if not pasted_items:
+                        self.win._paste_image_if_available(scene_pos)
+                        pasted_items = self.win._paste_items_at(scene_pos)
+                    if pasted_items:
+                        for item in pasted_items:
+                            item.set_editable(True)
+                            item.set_run_mode(False)
+                ev.accept()
+                return
+        super().mousePressEvent(ev)
+        
+    def _on_vscroll(self, value: int):
+        vbar = self.verticalScrollBar()
+        scene = self.scene()
+        if not scene:
+            return
+        rect = scene.sceneRect()
+        # 「下端」に達したら下方向に領域を広げる
+        if value >= vbar.maximum():
+            new_rect = QRectF(
+                rect.x(),
+                rect.y(),
+                rect.width(),
+                rect.height() + EXPAND_STEP
+            )
+            scene.setSceneRect(new_rect)
+            # スクロールバー範囲を更新
+            new_max = int(new_rect.height() - self.viewport().height())
+            if new_max < 0:
+                new_max = 0
+            vbar.setRange(int(new_rect.y()), int(new_rect.y() + new_max))
+        # 「上端」に達したら上方向に領域を広げる
+        elif value <= vbar.minimum():
+            new_rect = QRectF(
+                rect.x(),
+                rect.y() - EXPAND_STEP,
+                rect.width(),
+                rect.height() + EXPAND_STEP
+            )
+            scene.setSceneRect(new_rect)
+            # 上方向に広げたぶん、スクロール位置をシフトさせる
+            vbar.setRange(int(new_rect.y()), int(new_rect.y() + new_rect.height() - self.viewport().height()))
+            vbar.setValue(vbar.minimum() + EXPAND_STEP)
+            
+    def _on_hscroll(self, value: int):
+        hbar = self.horizontalScrollBar()
+        scene = self.scene()
+        if not scene:
+            return
+        rect = scene.sceneRect()
+        # 「右端」に達したら右方向に領域を広げる
+        if value >= hbar.maximum():
+            new_rect = QRectF(
+                rect.x(),
+                rect.y(),
+                rect.width() + EXPAND_STEP,
+                rect.height()
+            )
+            scene.setSceneRect(new_rect)
+            # スクロールバー範囲を更新
+            new_max = int(new_rect.width() - self.viewport().width())
+            if new_max < 0:
+                new_max = 0
+            hbar.setRange(int(new_rect.x()), int(new_rect.x() + new_max))
+        # 「左端」に達したら左方向に領域を広げる
+        elif value <= hbar.minimum():
+            new_rect = QRectF(
+                rect.x() - EXPAND_STEP,
+                rect.y(),
+                rect.width() + EXPAND_STEP,
+                rect.height()
+            )
+            scene.setSceneRect(new_rect)
+            # 左方向に広げたぶん、スクロール位置をシフトさせる
+            hbar.setRange(int(new_rect.x()), int(new_rect.x() + new_rect.width() - self.viewport().width()))
+            hbar.setValue(hbar.minimum() + EXPAND_STEP)
 
 # ==============================================================
 #  MainWindow - メインウィンドウ
@@ -255,9 +469,10 @@ class MainWindow(QMainWindow):
             a = QAction(text, self, checkable=chk); a.triggered.connect(slot)
             tb.addAction(a); return a
         
-        act("New", self._new_project)
-        act("Load", lambda: (self._load(), self._set_mode(edit=False)))
-        act("Save", self._save)
+        act("🌱NEW", self._new_project)
+        
+        act("💾SAVE", self._save)
+        act("🔁LOAD", lambda: (self._load(), self._set_mode(edit=False)))        
         tb.addSeparator()
         
         spacer1 = QWidget()
@@ -265,9 +480,9 @@ class MainWindow(QMainWindow):
         spacer1.setFixedWidth(24)
         tb.addWidget(spacer1)
         
-        self.a_home = act("Home",    self._go_home)
-        self.a_prev = act("Prev",    self._go_prev)
-        self.a_next = act("Next",    self._go_next)
+        self.a_home = act("🏠HOME",    self._go_home)
+        self.a_prev = act("⏪️PREV",    self._go_prev)
+        self.a_next = act("⏩NEXT",    self._go_next)
         
         self.add_toolbar_spacer(tb, width=24)
 
@@ -997,23 +1212,54 @@ class MainWindow(QMainWindow):
             self._load_path(self.history[0], ignore_geom=True)
 
     def _go_prev(self):
-        # 履歴を1つ戻る
+        """
+        履歴を1つ戻る
+        """
         if self.hidx > 0:
-            self._load_path(self.history[self.hidx - 1], ignore_geom=True)
-
+            self._load_path(
+                self.history[self.hidx - 1],
+                ignore_geom=True,
+                from_history=True
+            )
     def _go_next(self):
-        # 履歴を1つ進める
+        """
+        履歴を1つ進める
+        """
         if self.hidx < len(self.history) - 1:
-            self._load_path(self.history[self.hidx + 1], ignore_geom=True)
+            self._load_path(
+                self.history[self.hidx + 1],
+                ignore_geom=True,
+                from_history=True
+            )
 
-    def _load_path(self, p: Path, *, ignore_geom=False):
-        # 指定パスを履歴にプッシュしつつロード
+
+    def _load_path(self, p: Path, *, ignore_geom=False, from_history=False):
+        """
+        ファイルを読み込む。
+        - from_history=False の場合 → 新規読み込みなので履歴に追加し、hidx を末尾にセット
+        - from_history=True の場合 → 履歴移動なので履歴には追加せず、hidx を history.index(p) にセット
+        """
+        # ウィンドウジオメトリを保持するかどうか
         self._ignore_window_geom = ignore_geom
+        # 読み込む JSON ファイルのパスをセット
         self.json_path = p
-        self._push_history(p)
+
+        if from_history:
+            # 履歴移動：渡されたパスの index を hidx にセット（履歴は変更しない）
+            self.hidx = self.history.index(p)
+        else:
+            # 新規読み込み：履歴に追加し、hidx を履歴末尾に設定
+            self._push_history(p)
+
+        # 実際の JSON 読み込み処理を実行
         self._load()
-        self._ignore_window_geom = False
+        # ジオメトリ保持フラグをリセット
+        self._ignore_window_geom = ignore_geom
+        # 読み込み後は必ず編集モードを解除
         self._set_mode(edit=False)
+        # PREV/NEXT ボタンの有効・無効状態を更新
+        self._update_nav()
+
 
     # --- モード切替（編集⇔実行） ---
     def _set_mode(self, *, edit: bool):
@@ -1063,72 +1309,6 @@ class MainWindow(QMainWindow):
         )
 
     # --- データ読み込み ---
-    # ----------
-    def REPLACED_load(self):
-        # 既存アイテムを全削除
-        for it in list(self.scene.items()):
-            self._remove_item(it)
-
-        self.scene.clear()
-        try:
-            with open(self.json_path, "r", encoding="utf-8") as f:
-                self.data = json.load(f)
-        except Exception as e:
-            warn(f"LOAD failed: {e}")
-            QMessageBox.critical(self, "Error", str(e))
-            return
-        # アイテム復元
-        for d in self.data.get("items", []):
-            cls = self._get_item_class_by_type(d.get("type", ""))
-            if not cls:
-                warn(f"[LOAD] Unknown item type: {d.get('type')}")
-                continue
-
-            # ---- コンストラクタの引数を動的に組み立てる ----
-            kwargs = {}
-            sig = inspect.signature(cls.__init__).parameters
-            if "win" in sig:
-                kwargs["win"] = self
-            if "text_color" in sig:
-                kwargs["text_color"] = self.text_color
-
-            try:
-                it = cls(d, **kwargs)  # ← これで GifItem も OK！
-            except Exception as e:
-                warn(f"[LOAD] {cls.__name__} create failed: {e}")
-                continue
-
-            # ---- 共通後処理 ----
-            it.setZValue(d.get("z", 0))
-            self.scene.addItem(it)
-            it.setPos(d.get("x", 0), d.get("y", 0))
-
-            # VideoItem はリサイズグリップをシーンに載せる
-            from DPyL_video import VideoItem
-            if isinstance(it, VideoItem) and it.video_resize_dots.scene() is None:
-                self.scene.addItem(it.video_resize_dots)
-
-        # ウィンドウジオメトリ復元
-        if not self._ignore_window_geom and (geo := self.data.get("window_geom")):
-            try:
-                self.restoreGeometry(base64.b64decode(geo))
-            except Exception as e:
-                warn(f"Geometry restore failed: {e}")
-
-        self._apply_background()
-        # _set_modeは呼び出し元で維持
-
-        # --- アイテム群を左上へシフト ---
-        items = [it for it in self.scene.items() if isinstance(it, (CanvasItem, VideoItem))]
-        if items:
-            min_x = min((it.x() for it in items), default=0)
-            min_y = min((it.y() for it in items), default=0)
-            dx = 50 - min_x
-            dy = 50 - min_y
-            for it in items:
-                it.setPos(it.x() + dx, it.y() + dy)
-        self._apply_scene_padding()
-       
     # ---------- 
     def _load(self, on_finished=None):
         self._show_loading(True)
