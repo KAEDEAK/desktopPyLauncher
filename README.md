@@ -1,7 +1,9 @@
 # 🚀 desktopPyLauncher
 
-**desktopPyLauncher** は、Windows 11 専用のデスクトップランチャーアプリです。  
+**desktopPyLauncher** は、Windows 11 専用のデスクトップランチャーアプリです。 
+
 ショートカット（アプリ・フォルダ・URL）、画像、動画、メモ、プロジェクトファイル(JSON) などを自由に配置し、プロジェクト単位で管理できます。
+
 ![demo](docs/res/demo_s25.gif)
 ---
 
