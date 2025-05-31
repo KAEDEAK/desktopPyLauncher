@@ -18,6 +18,9 @@ from PyQt6.QtGui     import QBrush, QPen
 from PyQt6.QtCore    import Qt, QSize, QFileInfo, QIODevice, QBuffer
 from PyQt6.QtWidgets import QApplication, QFileIconProvider
   
+from DPyL_debug import my_has_attr
+
+
 # ────────────────────────────── 定数 ──────────────────────────────
 DEBUG_MODE = any(arg == "-debug" for arg in sys.argv)
 
@@ -263,7 +266,7 @@ def _icon_pixmap_basic(path: str, index: int = 0, size: int = ICON_SIZE) -> QPix
             # PILで全サイズ調査
             with open(path, "rb") as f:
                 img = Image.open(f)
-                if hasattr(img, "ico"):
+                if my_has_attr(img, "ico"):
                     sizes = img.ico.sizes()
                     # 一番近いサイズ
                     nearest = min(sizes, key=lambda sz: abs(sz[0] - size))

@@ -92,8 +92,8 @@ class NoteItem(CanvasItem):
         self._apply_text()
 
         # モード切替反映
-        self.set_editable(getattr(self, "editable", True))
-
+        self.set_editable(False)
+        
         # リサイズ遅延タイマー
         self._resize_timer = QTimer()
         self._resize_timer.setSingleShot(True)
@@ -107,6 +107,8 @@ class NoteItem(CanvasItem):
         # クリップ／背景を更新
         self.clip_item.setRect(0, 0, w, h)
         self._rect_item.setRect(0, 0, w, h)
+        
+        self._update_grip_pos()
 
         if self.format == "markdown":
             # Markdown は遅延更新（300ms）
@@ -217,7 +219,8 @@ class NoteItem(CanvasItem):
             self.text = self.d.get("text", self.text)
             self.fill_bg = self.d.get("fill_background", False)
             self._apply_text()
-
+        win = self.scene().views()[0].window()
+        self.set_run_mode(not win.a_edit.isChecked())
     # --------------------------------------------------------------
     # 選択ハンドル用バウンディング矩形
     # --------------------------------------------------------------

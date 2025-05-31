@@ -3,7 +3,6 @@
 desktopPyLauncher.py ― エントリポイント
 ◎ Qt6 / PyQt6 専用
 """
-
 from __future__ import annotations
 
 # --- 標準・サードパーティライブラリ ---
@@ -35,7 +34,7 @@ from PyQt6.QtCore import (
 from DPyL_utils   import (
     warn, b64e, fetch_favicon_base64,
     compose_url_icon, b64encode_pixmap, normalize_unc_path, 
-    is_network_drive, _icon_pixmap, ICON_SIZE
+    is_network_drive, _icon_pixmap, _default_icon, ICON_SIZE
 )
 from DPyL_classes import (
     LauncherItem, JSONItem, ImageItem, GifItem,
@@ -48,6 +47,8 @@ from DPyL_note    import NoteItem
 from DPyL_video   import VideoItem
 from configparser import ConfigParser
 from urllib.parse import urlparse
+
+from DPyL_debug import (my_has_attr,dump_missing_attrs,trace_this)
 
 # ==============================================================
 #  CanvasView - キャンバス表示・ドラッグ&ドロップ対応
@@ -70,7 +71,7 @@ class CanvasView(QGraphicsView):
     def mousePressEvent(self, ev):
         # 右クリック時、空白エリアならペーストメニュー表示
         if ev.button() == Qt.MouseButton.RightButton:
-            pos = ev.position().toPoint() if hasattr(ev, "position") else ev.pos()
+            pos = ev.position().toPoint()
             scene_pos = self.mapToScene(pos)
             items = self.items(pos)
             if not items:
@@ -104,7 +105,7 @@ class CanvasView(QGraphicsView):
 
                 act_paste.setEnabled(can_paste)
 
-                sel = menu.exec(ev.globalPosition().toPoint() if hasattr(ev, "globalPosition") else ev.globalPos())
+                sel = menu.exec(ev.globalPosition().toPoint())
                 if sel == act_paste:
                     pasted_items = []
                     mime = cb.mimeData()
@@ -126,10 +127,8 @@ class CanvasView(QGraphicsView):
                         pasted_items = self.win._paste_items_at(scene_pos)
                     if pasted_items:
                         for item in pasted_items:
-                            if hasattr(item, "set_editable"):
-                                item.set_editable(True)
-                            if hasattr(item, "set_run_mode"):
-                                item.set_run_mode(False)
+                            item.set_editable(True)
+                            item.set_run_mode(False)
                 ev.accept()
                 return
         super().mousePressEvent(ev)
@@ -141,6 +140,14 @@ class CanvasView(QGraphicsView):
 class MainWindow(QMainWindow):
     def __init__(self, json_path: Path):
         super().__init__()
+        self.loading_label = QLabel("LOADING...", self)
+        self.loading_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.loading_label.setStyleSheet(
+            "font-size: 32px; color: white; background-color: rgba(0, 0, 0, 160);"
+        )
+        self.loading_label.setGeometry(self.rect())
+        self.loading_label.setVisible(False)
+
         self.json_path = json_path.expanduser().resolve()
         os.chdir(self.json_path.parent)
         self.data: dict = {"items": []}
@@ -239,6 +246,7 @@ class MainWindow(QMainWindow):
         item = JSONItem(d, self.text_color)
         self.scene.addItem(item)
         self.data["items"].append(d)
+        item.set_run_mode(False)
 
     # --- ツールバー構築 ---
     def _toolbar(self):
@@ -265,6 +273,8 @@ class MainWindow(QMainWindow):
 
         self.a_edit = act("編集モード", lambda c: self._set_mode(edit=c), chk=True)
         self.a_run  = act("実行モード", lambda c: self._set_mode(edit=not c), chk=True)
+        #self.a_edit = act("編集モード", self._on_edit_mode_toggled, chk=True)
+        #self.a_run  = act("実行モード", self._on_run_mode_toggled, chk=True)
         
         self.add_toolbar_spacer(tb, width=24)
 
@@ -288,7 +298,16 @@ class MainWindow(QMainWindow):
         act("Exit", self.close)
         
         self._update_nav()
+        
+    r"""
+    def _on_edit_mode_toggled(self, checked: bool):
+        print(f"[DEBUG] 編集モード toggled: {checked}")
+        self._set_mode(edit=checked)
 
+    def _on_run_mode_toggled(self, checked: bool):
+        print(f"[DEBUG] 実行モード toggled: {checked}")
+        self._set_mode(edit=not checked)
+    """
     def add_toolbar_spacer(self, tb: QToolBar, width: int = 24):
         """
         ツールバーに区切り線と幅固定スペーサーを挿入
@@ -305,9 +324,7 @@ class MainWindow(QMainWindow):
         if not self.a_edit.isChecked():
             return
         is_vid = isinstance(item, VideoItem)
-        #is_pix = hasattr(item, "_src_pixmap") and item._src_pixmap or isinstance(item, GifItem)
         is_pix = isinstance(item, (ImageItem, GifItem, JSONItem, LauncherItem))
-
         menu = QMenu(self)
         
         act_copy = menu.addAction("コピー")
@@ -332,7 +349,7 @@ class MainWindow(QMainWindow):
         # --- コピー（複数選択対応） ---
         if sel == act_copy:
             items = self.scene.selectedItems()
-            ds = [getattr(it, "d", None) for it in items if hasattr(it, "d")]
+            ds = [it.d for it in items if isinstance(it, (CanvasItem, VideoItem))]
             if ds:
                 min_x = min(d.get("x", 0) for d in ds)
                 min_y = min(d.get("y", 0) for d in ds)
@@ -347,7 +364,7 @@ class MainWindow(QMainWindow):
         # --- カット（複数選択対応） ---
         if sel == act_cut:
             items = self.scene.selectedItems()
-            ds = [getattr(it, "d", None) for it in items if hasattr(it, "d")]
+            ds = [it.d for it in items if isinstance(it, (CanvasItem, VideoItem))]
             if ds:
                 min_x = min(d.get("x", 0) for d in ds)
                 min_y = min(d.get("y", 0) for d in ds)
@@ -423,12 +440,9 @@ class MainWindow(QMainWindow):
                 item.prepareGeometryChange()
                 item._rect_item.setRect(0, 0, w, h)
                 item.d["width"], item.d["height"] = w, h
-                if hasattr(item, "resize_content"):
-                    item.resize_content(w, h)
-                if hasattr(item, "_update_grip_pos"):
-                    item._update_grip_pos()
-                if hasattr(item, "init_caption"):
-                    item.init_caption()
+                item.resize_content(w, h)
+                item._update_grip_pos()
+                item.init_caption()
 
             elif is_vid:
                 ns = item.nativeSize()
@@ -439,12 +453,9 @@ class MainWindow(QMainWindow):
                 item.prepareGeometryChange()
                 item.setSize(QSizeF(w, h))
                 item.d["width"], item.d["height"] = w, h
-                if hasattr(item, "resize_content"):
-                    item.resize_content(w, h)
-                if hasattr(item, "_update_grip_pos"):
-                    item._update_grip_pos()
-                if hasattr(item, "init_caption"):
-                    item.init_caption()
+                item.resize_content(w, h)
+                item._update_grip_pos()
+                item.init_caption()
 
 
         # --- 内側にフィット ---
@@ -525,16 +536,9 @@ class MainWindow(QMainWindow):
 
             # 5) 共通後処理
             item.d["width"], item.d["height"] = w, h
-            if hasattr(item, "resize_content"):
-                item.resize_content(w, h)
-            if hasattr(item, "_update_grip_pos"):
-                item._update_grip_pos()
-            if hasattr(item, "init_caption"):
-                item.init_caption()
-            if hasattr(item, "update_layout"):
-                item.update_layout()
-
-
+            item.resize_content(w, h)
+            item._update_grip_pos()
+            item.init_caption()
              
             #return
         # --- 削除 ---
@@ -546,7 +550,7 @@ class MainWindow(QMainWindow):
     # --- 選択アイテムのコピー／カット ---
     def copy_or_cut_selected_items(self, cut=False):
         items = self.scene.selectedItems()
-        ds = [getattr(it, "d", None) for it in items if hasattr(it, "d")]
+        ds = [it.d for it in items if isinstance(it, (CanvasItem, VideoItem))]
         if not ds:
             return
         min_x = min(d.get("x", 0) for d in ds)
@@ -635,12 +639,9 @@ class MainWindow(QMainWindow):
             self.data["items"].append(d)
            
             # ドロップした直後は編集モードON
-            if hasattr(item, "set_run_mode"):
-                item.set_run_mode(False)
-            if hasattr(item, "grip"):
-                item.grip.setVisible(True)
-            elif hasattr(item, "_grip"):
-                item._grip.setVisible(True)     
+            item.set_run_mode(False)
+            item.grip.setVisible(True)
+            item._grip.setVisible(True)     
             
         else:
             warn("画像データがクリップボードにありません")
@@ -654,25 +655,27 @@ class MainWindow(QMainWindow):
         
     def _remove_item(self, item: QGraphicsItem):
         # VideoItemなら後始末
-        if hasattr(item, "delete_self"):
+        if isinstance(item, VideoItem):
             item.delete_self()
+            if item.video_resize_dots.scene():
+                item.video_resize_dots.scene().removeItem(item.video_resize_dots)
+            item.video_resize_dots = None
+
         # 関連Gripを削除
-        for attr in ("grip", "_grip", "resize_grip"):
-            grip = getattr(item, attr, None)
-            if grip and grip.scene():
-                grip.scene().removeItem(grip)
-            setattr(item, attr, None)
+        if isinstance(item, CanvasItem):
+            if item.grip.scene():
+                item.grip.scene().removeItem(item.grip)
+            item.grip = None
+            
         # シーンから本体除去
         if item.scene():
             item.scene().removeItem(item)
+            
+        #TODO: 何で消してるのかわからない
         # JSONから辞書データ削除
-        if hasattr(item, "d") and item.d in self.data.get("items", []):
+        if my_has_attr(item, "d") and item.d in self.data.get("items", []):
             self.data["items"].remove(item.d)
-        # 追加Gripの掃除
-        if hasattr(item, "resize_grip") and item.resize_grip:
-            if item.resize_grip.scene():
-                item.resize_grip.scene().removeItem(item.resize_grip)
-            item.resize_grip = None
+
 
     # --- 動画一括操作 ---
     def _play_all_videos(self):
@@ -830,7 +833,7 @@ class MainWindow(QMainWindow):
         ドロップ後は全体を編集モードへ強制切替！
         """
         added_any = False
-
+        added_items = []
         for url in e.mimeData().urls():
             sp = self.view.mapToScene(e.position().toPoint())
 
@@ -841,6 +844,7 @@ class MainWindow(QMainWindow):
                 if it:
                     self.scene.addItem(it); self.data["items"].append(d)
                     added_any = True
+                    added_items.append(it)
                 continue          # ★ GenericFileItem へフォールバックさせない
 
             # ② ローカルパス判定 ------------------------------------
@@ -850,6 +854,14 @@ class MainWindow(QMainWindow):
                 continue
             path = normalize_unc_path(raw_path)
 
+            # ④ レジストリ経由 (CanvasItem.ITEM_CLASSES) ------------
+            it, d = self._create_item_from_path(path, sp)
+            if it:
+                self.scene.addItem(it); self.data["items"].append(d)
+                added_any = True
+                added_items.append(it)
+                continue
+                
             # ③ ネットワークドライブ -------------------------------
             if is_network_drive(path):
                 dll = os.path.join(os.environ.get("SystemRoot", r"C:\Windows"),
@@ -866,21 +878,23 @@ class MainWindow(QMainWindow):
                 it = LauncherItem(d, self.text_color)
                 self.scene.addItem(it); self.data["items"].append(d)
                 added_any = True
+                added_items.append(it)
                 continue
 
-            # ④ レジストリ経由 (CanvasItem.ITEM_CLASSES) ------------
-            item, d = self._create_item_from_path(path, sp)
-            if item:
-                self.scene.addItem(item); self.data["items"].append(d)
-                added_any = True
-                continue
+
 
             # ⑤ ここまで来ても未判定なら警告 -----------------------
             warn(f"[drop] unsupported: {url}")
 
-        # ---------- ドロップ完了後に全体を編集モードへ ----------
-        if added_any:
-            self._set_mode(edit=True)
+        
+        # 追加アイテムだけ run_mode=False にして編集モードにする
+        # 別の仕組みにより、編集ウィンドウで編集後 OK または CANCEL後、全体の実行/編集モードに同期します
+        for item in added_items:
+            item.set_run_mode(False)
+        
+        # もしくは、ドロップ完了後に全体を編集モードへ。　好きなほうをどうぞ。
+        #if added_any:
+        #    self._set_mode(edit=True)
 
 
     def resizeEvent(self, event):
@@ -901,7 +915,8 @@ class MainWindow(QMainWindow):
         r1 = item.boundingRect().translated(new_pos)
 
         for other in self.scene.items():
-            if other is item or not hasattr(other, "boundingRect"):
+            if other is item or not my_has_attr(other, "boundingRect"):
+            #if isinstance(other, QGraphicsItem) and other is not item:
                 continue
 
             r2 = other.boundingRect().translated(other.pos())
@@ -931,7 +946,7 @@ class MainWindow(QMainWindow):
         x0, y0 = r1.left(), r1.top()
 
         for other in self.scene.items():
-            if other is target_item or not hasattr(other, "boundingRect"):
+            if other is target_item or not my_has_attr(other, "boundingRect"):
                 continue
             r2 = other.mapToScene(other.boundingRect()).boundingRect()
             # 横（幅）端スナップ
@@ -959,7 +974,8 @@ class MainWindow(QMainWindow):
         it = NoteItem(d, self.text_color)
         self.scene.addItem(it)
         self.data.setdefault("items", []).append(d)
-        self._set_mode(edit=True)
+        #self._set_mode(edit=True)
+        it.set_run_mode(False)
 
     # --- 履歴管理 ---
     def _push_history(self, p: Path):
@@ -1005,6 +1021,13 @@ class MainWindow(QMainWindow):
         全CanvasItemの編集可否切替。
         edit=True: 移動・リサイズ可、False: 固定
         """
+
+        #-----------------------
+        # 呼び出し元のスタックトレースを取得
+        #trace_this("edit")
+
+        #-----------------------
+        
         self.a_edit.blockSignals(True)
         self.a_run.blockSignals(True)
         self.a_edit.setChecked(edit)
@@ -1017,22 +1040,22 @@ class MainWindow(QMainWindow):
         focusable_flag  = QGraphicsItem.GraphicsItemFlag.ItemIsFocusable
 
         for it in self.scene.items():
-            if not hasattr(it, "d"):
+            # 保存対象（.d, set_run_mode を持つ）以外はスキップ
+            if not isinstance(it, (CanvasItem, VideoItem)):
                 continue
 
-            # アイテム側にモード伝達
-            if hasattr(it, "set_run_mode"):
-                it.set_run_mode(not edit)
+            # 実行モード切替
+            it.set_run_mode(not edit)
 
             it.setFlag(movable_flag, edit)
             it.setFlag(selectable_flag, edit)
             it.setFlag(focusable_flag, edit)
 
             # リサイズグリップ表示切替
-            if hasattr(it, "grip"):
+            if isinstance(it, CanvasItem):
                 it.grip.setVisible(edit)
-            elif hasattr(it, "_grip"):
-                it._grip.setVisible(edit)
+            elif isinstance(it, VideoItem):
+                it.video_resize_dots.setVisible(edit)
 
         self.view.setDragMode(
             QGraphicsView.DragMode.ScrollHandDrag if not edit
@@ -1040,7 +1063,8 @@ class MainWindow(QMainWindow):
         )
 
     # --- データ読み込み ---
-    def _load(self):
+    # ----------
+    def REPLACED_load(self):
         # 既存アイテムを全削除
         for it in list(self.scene.items()):
             self._remove_item(it)
@@ -1081,8 +1105,8 @@ class MainWindow(QMainWindow):
 
             # VideoItem はリサイズグリップをシーンに載せる
             from DPyL_video import VideoItem
-            if isinstance(it, VideoItem) and it.resize_grip.scene() is None:
-                self.scene.addItem(it.resize_grip)
+            if isinstance(it, VideoItem) and it.video_resize_dots.scene() is None:
+                self.scene.addItem(it.video_resize_dots)
 
         # ウィンドウジオメトリ復元
         if not self._ignore_window_geom and (geo := self.data.get("window_geom")):
@@ -1095,7 +1119,7 @@ class MainWindow(QMainWindow):
         # _set_modeは呼び出し元で維持
 
         # --- アイテム群を左上へシフト ---
-        items = [it for it in self.scene.items() if hasattr(it, "d")]
+        items = [it for it in self.scene.items() if isinstance(it, (CanvasItem, VideoItem))]
         if items:
             min_x = min((it.x() for it in items), default=0)
             min_y = min((it.y() for it in items), default=0)
@@ -1105,9 +1129,97 @@ class MainWindow(QMainWindow):
                 it.setPos(it.x() + dx, it.y() + dy)
         self._apply_scene_padding()
        
+    # ---------- 
+    def _load(self, on_finished=None):
+        self._show_loading(True)
+        self._on_load_finished = on_finished  # ← 後で呼ぶ
+        QTimer.singleShot(50, self._do_load_actual)
+
+
+    def _show_loading(self, show: bool):
+        self.loading_label.setGeometry(self.rect())
+        self.loading_label.setVisible(show)
+        self.loading_label.raise_()
+
+    def _do_load_actual(self):
+        # 既存アイテムを全削除
+        for it in list(self.scene.items()):
+            self._remove_item(it)
+
+        self.scene.clear()
+        try:
+            with open(self.json_path, "r", encoding="utf-8") as f:
+                self.data = json.load(f)
+        except Exception as e:
+            warn(f"LOAD failed: {e}")
+            QMessageBox.critical(self, "Error", str(e))
+            return
+        # アイテム復元
+        for d in self.data.get("items", []):
+            cls = self._get_item_class_by_type(d.get("type", ""))
+            if not cls:
+                warn(f"[LOAD] Unknown item type: {d.get('type')}")
+                continue
+
+            # ---- コンストラクタの引数を動的に組み立てる ----
+            kwargs = {}
+            sig = inspect.signature(cls.__init__).parameters
+            if "win" in sig:
+                kwargs["win"] = self
+            if "text_color" in sig:
+                kwargs["text_color"] = self.text_color
+
+            try:
+                it = cls(d, **kwargs)  # ← これで GifItem も OK！
+            except Exception as e:
+                warn(f"[LOAD] {cls.__name__} create failed: {e}")
+                continue
+
+            # ---- 共通後処理 ----
+            it.setZValue(d.get("z", 0))
+            self.scene.addItem(it)
+            it.setPos(d.get("x", 0), d.get("y", 0))
+
+            # VideoItem はリサイズグリップをシーンに載せる
+            from DPyL_video import VideoItem
+            if isinstance(it, VideoItem) and it.video_resize_dots.scene() is None:
+                self.scene.addItem(it.video_resize_dots)
+
+        # ウィンドウジオメトリ復元
+        if not self._ignore_window_geom and (geo := self.data.get("window_geom")):
+            try:
+                self.restoreGeometry(base64.b64decode(geo))
+            except Exception as e:
+                warn(f"Geometry restore failed: {e}")
+
+        self._apply_background()
+        # _set_modeは呼び出し元で維持
+
+        # --- アイテム群を左上へシフト ---
+        #items = [it for it in self.scene.items() if my_has_attr(it, "d")]
+        items = [it for it in self.scene.items() if isinstance(it, (CanvasItem, VideoItem))]
+        if items:
+            min_x = min((it.x() for it in items), default=0)
+            min_y = min((it.y() for it in items), default=0)
+            dx = 50 - min_x
+            dy = 50 - min_y
+            for it in items:
+                it.setPos(it.x() + dx, it.y() + dy)
+        self._apply_scene_padding()
+
+        # --- ローディング完了後、ラベル非表示 ---
+        self._show_loading(False)
+
+        # --- 完了後の処理呼び出し ---
+        if callable(getattr(self, "_on_load_finished", None)):
+            self._on_load_finished()
+            self._on_load_finished = None
+
+       
     def _apply_scene_padding(self, margin: int = 64):
         """シーン全体のバウンディングボックスを計算し中央寄せ"""
-        items = [i for i in self.scene.items() if hasattr(i, "d")]
+        #items = [i for i in self.scene.items() if my_has_attr(i, "d")]
+        items = [i for i in self.scene.items() if isinstance(i, (CanvasItem, VideoItem))]
         if not items:
             return
 
@@ -1118,34 +1230,44 @@ class MainWindow(QMainWindow):
         bounds.adjust(-margin, -margin, margin, margin)
         self.scene.setSceneRect(bounds)
 
+
     # --- JSONプロジェクト切替用 ---
     def _load_json(self, path: Path):
-        """JSONItemから呼ばれるプロジェクト切替"""
         self._ignore_window_geom = True
         self.json_path = Path(path).expanduser().resolve()
         self.setWindowTitle(f"desktopPyLauncher - {self.json_path.name}")
         self._push_history(self.json_path)
-        self._load()
-        self._ignore_window_geom = False
-        self._set_mode(edit=False)
+
+        # 明示的にモードを一時保存し、ロード後に復元
+        def after_load():
+            self._ignore_window_geom = False
+        self._load(on_finished=after_load)
+
 
     # --- セーブ処理 ---
     def _save(self, *, auto=False):
         # 位置・サイズ・Z値等をdに反映
         for it in self.scene.items():
-            if not hasattr(it, "d"): continue
-            pos = it.pos(); it.d["x"], it.d["y"] = pos.x(), pos.y()
-            if hasattr(it, "rect"):
-                r = it.rect(); it.d["width"], it.d["height"] = r.width(), r.height()
-            elif hasattr(it, "size"):
-                s = it.size(); it.d["width"], it.d["height"] = s.width(), s.height()
+            if not isinstance(it, (CanvasItem, VideoItem)):
+                continue
+            
+            pos = it.pos()
+            it.d["x"], it.d["y"] = pos.x(), pos.y()
+
+            #r = it.rect() #謎い。d[] は最新のはず
+            #it.d["width"], it.d["height"] = r.width(), r.height()
+
             it.d["z"] = it.zValue()
-            if isinstance(it, VideoItem) and hasattr(it, "audio"):
+
+            if isinstance(it, VideoItem):
                 try:
+                    if not my_has_attr(it, "audio"):
+                        pass
                     it.d["muted"] = it.audio.isMuted()
                 except Exception as e:
                     warn(f"[WARN] muted状態の取得に失敗: {e}")
 
+        # ウィンドウ位置を保存
         self.data["window_geom"] = base64.b64encode(self.saveGeometry()).decode("ascii")
         try:
             with open(self.json_path, "w", encoding="utf-8") as f:
@@ -1196,4 +1318,7 @@ def main():
     sys.exit(app.exec())
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    finally:
+        dump_missing_attrs()

@@ -2,6 +2,17 @@
 """
 DPyL_video.py  ―  VideoItem / ResizeGrip / ポイント編集ダイアログ
 ◎ Qt6 / PyQt6 専用
+
+
+VideoItem は、CanvasItem を継承していないけどメンバーはほとんど同じ。
+
+現在は、区別のため以下のように名称を変更しています。
+
+x update_layout => _update_grip_pos 移行済み
+grip => video_resize_dots
+
+デバッグ目的だけど。しばらくそのままにしておきます。
+
 """
 
 from __future__ import annotations
@@ -37,6 +48,8 @@ from functools import partial
 # ───────── internal modules ─────────────────────────────────────
 from DPyL_utils   import warn, ms_to_hms, hms_to_ms, VIDEO_EXTS
 from DPyL_classes import CanvasResizeGrip
+from DPyL_debug import my_has_attr
+
 
 # ======================================================================
 #   ResizeGripItem  (動画のリサイズ用グリップ)
@@ -97,12 +110,15 @@ class ResizeGripItem(QGraphicsRectItem):
             w = max(160, self._orig.width()  + delta.x())
             h = max(120, self._orig.height() + delta.y())
             # --- スナップ適用 ---
-            win = self.target.win if hasattr(self.target, "win") else None
-            if win and hasattr(win, "snap_size"):
+            win = getattr(self.target, "win", None)
+            if win:
                 w, h = win.snap_size(self.target, w, h)
+            else:
+                my_has_attr(self.target,"win")
+                
             self.target.setSize(QSizeF(w, h))
             self.target.d["width"], self.target.d["height"] = w, h
-            self.target.update_layout()
+            self.target._update_grip_pos()
         ev.accept()
  
     def mouseReleaseEvent(self, ev):
@@ -199,8 +215,8 @@ class VideoItem(QGraphicsVideoItem):
 
         # ---- UI生成 ---------------------------------------------
         self._build_ctrl()
-        self.resize_grip = ResizeGripItem(self)
-        self.update_layout()
+        self.video_resize_dots = ResizeGripItem(self)
+        self._update_grip_pos()
 
         # ---- シグナル接続 ---------------------------------------
         self.player.positionChanged.connect(self._on_pos)
@@ -217,9 +233,6 @@ class VideoItem(QGraphicsVideoItem):
         # アイテムフラグ（可動・ジオメトリ変更通知）
         self.setFlag(self.flags() | self.GraphicsItemFlag.ItemIsMovable)
         self.setFlag(self.flags() | self.GraphicsItemFlag.ItemSendsGeometryChanges)
-        # 初回グリップ配置
-        if hasattr(self, "_update_grip_pos"):
-            self._update_grip_pos()
             
         # ミュート状態をUIとaudio両方に反映
         muted = self.d.get("muted", False)
@@ -232,26 +245,14 @@ class VideoItem(QGraphicsVideoItem):
         self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsSelectable, True)
 
     # -------------------------------------------------------------
-    #   グリップ位置をVideoItemローカル座標で再計算
-    # -------------------------------------------------------------
-    def _update_grip_pos(self):
-        if hasattr(self, "grip"):
-            sz = self.size()  # QSizeF
-            self.grip.setPos(
-                sz.width()  - self.grip.rect().width(),
-                sz.height() - self.grip.rect().height()
-            )
-    # -------------------------------------------------------------
     #   ミュート制御
     # -------------------------------------------------------------
     def set_muted(self, on: bool):
         """
         ミュートON/OFFをUI/プレイヤー/データに反映
         """
-        if hasattr(self, "btn_mute"):
-            self.btn_mute.setChecked(on)
-        if hasattr(self, "player"):
-            self.player.setMuted(on)
+        self.btn_mute.setChecked(on)
+        self.player.setMuted(on)
         self.d["muted"] = bool(on)
 
     def on_mute_btn_clicked(self):
@@ -328,7 +329,7 @@ class VideoItem(QGraphicsVideoItem):
     # --------------------------------------------------------------
     #   VideoItem / レイアウト更新ヘルパ
     # --------------------------------------------------------------
-    def update_layout(self):
+    def _update_grip_pos(self):
         """
         コントロールとグリップの位置をVideoサイズに合わせて再配置
         """
@@ -338,10 +339,9 @@ class VideoItem(QGraphicsVideoItem):
         self.ctrl_widget.setFixedWidth(int(sz.width()))
         self.ctrl_widget.adjustSize()
         # グリップを右下へ
-        self.resize_grip.setPos(sz.width() - self.resize_grip.rect().width(),
-                                sz.height() - self.resize_grip.rect().height())
-        if hasattr(self.resize_grip, "update_zvalue"):
-            self.resize_grip.update_zvalue()
+        self.video_resize_dots.setPos(sz.width() - self.video_resize_dots.rect().width(),
+                                sz.height() - self.video_resize_dots.rect().height())
+        self.video_resize_dots.update_zvalue()
     # --------------------------------------------------------------
     #   VideoItem / プレイヤーコールバック
     # --------------------------------------------------------------
@@ -451,7 +451,7 @@ class VideoItem(QGraphicsVideoItem):
             # 編集結果を反映
             self.points = copy.deepcopy(result)
             self.d["points"] = copy.deepcopy(result)
-            self.update_layout()
+            self._update_grip_pos()
 
         except Exception as e:
             #import traceback
@@ -481,12 +481,10 @@ class VideoItem(QGraphicsVideoItem):
             self.d["x"], self.d["y"] = self.pos().x(), self.pos().y()
 
             # スナップ処理
-            if hasattr(self.scene(), "views") and self.scene().views():
-                view = self.scene().views()[0]
-                if hasattr(view, "win") and hasattr(view.win, "snap_position"):
-                    snapped = view.win.snap_position(self, self.pos())
-                    if snapped != self.pos():
-                        self.setPos(snapped)
+            view = self.scene().views()[0]
+            snapped = view.win.snap_position(self, self.pos())
+            if snapped != self.pos():
+                self.setPos(snapped)
 
         elif change == self.GraphicsItemChange.ItemTransformHasChanged:
             # リサイズ後に旧領域クリア
@@ -592,9 +590,7 @@ class VideoItem(QGraphicsVideoItem):
         self._prev_scene_rect = self.boundingRect().translated(self.pos())
 
         # ⑦ グリップとコントロールを再配置
-        if hasattr(self, "_update_grip_pos"):
-            self._update_grip_pos()
-        self.update_layout()
+        self._update_grip_pos()
 
     def get_current_time_ms(self):
         """
@@ -623,10 +619,20 @@ class VideoItem(QGraphicsVideoItem):
         if self.scene():
             self.scene().removeItem(self)
         self.deleteLater()
-
+    
+    def set_run_mode(self, edit: bool):
+        """編集モード切替：動画プレイヤーとUI更新"""
+        self.video_resize_dots.setVisible(edit)
+        self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsMovable, edit)
+        self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsSelectable, edit)
+        self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsFocusable, edit)
+    def init_caption(self):
+        pass
+        
 class VideoItemController:
     """
     VideoItemの削除を同期/非同期で実行するコントローラ
+    実装保留
     """
     def __init__(self, item: VideoItem):
         self.item = item
@@ -727,7 +733,7 @@ class VideoEditDialog(QDialog):
         """
         win = self.parent()
         pos = 0
-        if win and hasattr(win, "parent") and callable(win.parent):
+        if win and my_has_attr(win, "parent") and callable(win.parent):
             pass
         try:
             video_item = self.parent().parent().parent()

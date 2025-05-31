@@ -33,6 +33,7 @@ from DPyL_utils import (
     fetch_favicon_base64
 )
 
+from DPyL_debug import (my_has_attr,dump_missing_attrs,trace_this)
 
 # ==================================================================
 #  CanvasItem（基底クラス）
@@ -94,7 +95,7 @@ class CanvasItem(QGraphicsItemGroup):
         # 状態管理
         self.d = d or {}
         self._cb_resize = cb_resize
-        self.run_mode = False
+        self.run_mode = True
         self.text_color = text_color or QColor(Qt.GlobalColor.black)
 
         # 共通初期化
@@ -123,15 +124,15 @@ class CanvasItem(QGraphicsItemGroup):
         self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsSelectable, editable)
         self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsMovable, editable)
         # 背景は常時表示（ラベル ON/OFF は NoteEditDialog 側で制御）
-        if hasattr(self, "fill_bg"):
+        if my_has_attr(self, "fill_bg"):
             self._rect_item.setVisible(self.fill_bg or editable)
         else:
             self._rect_item.setVisible(editable)
         
         # resize grip
-        if hasattr(self, "grip"):
+        if my_has_attr(self, "grip"):
             self.grip.setVisible(editable)
-        if hasattr(self, "_update_grip_pos"):
+        if my_has_attr(self, "_update_grip_pos"):
             self._update_grip_pos()
             
     def init_caption(self):
@@ -144,7 +145,7 @@ class CanvasItem(QGraphicsItemGroup):
         text_color = app.palette().color(QPalette.ColorRole.WindowText)
 
         # cap_itemがなければ生成
-        if not hasattr(self, "cap_item"):
+        if not my_has_attr(self, "cap_item"):
             cap = QGraphicsTextItem(self.d["caption"], parent=self)
             cap.setDefaultTextColor(text_color)
             font = cap.font()
@@ -155,7 +156,7 @@ class CanvasItem(QGraphicsItemGroup):
         # 常に枠の下端に配置
         rect = self._rect_item.rect()
         pix_h = 0
-        if hasattr(self, "_pix_item") and self._pix_item.pixmap().isNull() is False:
+        if my_has_attr(self, "_pix_item") and self._pix_item.pixmap().isNull() is False:
             pix_h = self._pix_item.pixmap().height()
         self.cap_item.setPos(0, pix_h)
 
@@ -173,9 +174,9 @@ class CanvasItem(QGraphicsItemGroup):
 
         # 位置変更時はスナップ補正
         elif change == QGraphicsItem.GraphicsItemChange.ItemPositionChange:
-            if hasattr(self.scene(), "views") and self.scene().views():
+            if my_has_attr(self.scene(), "views") and self.scene().views():
                 view = self.scene().views()[0]
-                if hasattr(view, "win") and hasattr(view.win, "snap_position"):
+                if my_has_attr(view, "win") and my_has_attr(view.win, "snap_position"):
                     return view.win.snap_position(self, value)
 
         # 位置確定時はself.dへ座標保存＋グリップ位置更新
@@ -191,8 +192,7 @@ class CanvasItem(QGraphicsItemGroup):
                 w, h = int(r.width()), int(r.height())
                 self.d["width"], self.d["height"] = w, h
                 self._cb_resize(w, h)
-                if hasattr(self, "on_resized"):
-                    self.on_resized(w, h)
+                self.on_resized(w, h)
                 self.init_caption()
                 self._in_resize = False
 
@@ -228,6 +228,7 @@ class CanvasItem(QGraphicsItemGroup):
         # グループ自身は描画しない
         return None
 
+    # CanvasItem _apply_pixmap
     def _apply_pixmap(self) -> None:
         """
         ImageItem/JSONItem共通：ピクスマップ表示＋枠サイズ設定
@@ -238,9 +239,9 @@ class CanvasItem(QGraphicsItemGroup):
         """
         # 1) ピクスマップ取得
         pix = QPixmap()
-        if hasattr(self, "embed") and self.embed:
+        if my_has_attr(self, "embed") and self.embed:
             pix.loadFromData(b64decode(self.embed))
-        #elif hasattr(self, "path") and self.path:
+        #elif my_has_attr(self, "path") and self.path:
         #    pix = QPixmap(self.path)
         else:
             icon_path = getattr(self, "icon", None) or getattr(self, "path", "")
@@ -317,13 +318,16 @@ class CanvasItem(QGraphicsItemGroup):
           - 実行モード: 派生on_activate()
           - 編集モード: 派生on_edit()
         """
+        
+        #print ("run_mode",hasattr(self,"run_mode"),self.run_mode)
+
         if getattr(self, "run_mode", False):
-            if hasattr(self, "on_activate"):
+            if my_has_attr(self, "on_activate"):
                 self.on_activate()
             ev.accept()
             return
         else:
-            if hasattr(self, "on_edit"):
+            if my_has_attr(self, "on_edit"):
                 self.on_edit()
             ev.accept()
             return
@@ -351,7 +355,7 @@ class CanvasItem(QGraphicsItemGroup):
         best_w, best_h = w, h
         best_dw, best_dh = threshold, threshold
         for item in scene.items():
-            if item is self or not hasattr(item, "boundingRect"):
+            if item is self or not my_has_attr(item, "boundingRect"):
                 continue
             r2 = item.mapToScene(item.boundingRect()).boundingRect()
             # 横端吸着
@@ -373,7 +377,7 @@ class CanvasItem(QGraphicsItemGroup):
         """
         super().setZValue(z)
         # グリップの前面維持
-        if hasattr(self, "grip") and self.grip:
+        if my_has_attr(self, "grip") and self.grip:
             self.grip.update_zvalue()
             
 # ==================================================================
@@ -715,7 +719,7 @@ class LauncherItem(CanvasItem):
             self._update_grip_pos()
 
             # EDITラベル（編集モード表示）更新
-            if hasattr(self, "_edit_label"):
+            if my_has_attr(self, "_edit_label"):
                 self._update_edit_label_pos()
                 self._edit_label.setVisible(self.is_editable)
             else:
@@ -749,7 +753,7 @@ class LauncherItem(CanvasItem):
         self._rect_item.setRect(0, 0, tgt_w, tgt_h)
         self._update_grip_pos()
         # ── GIF の場合のみ、キャプションをアイコン直下に再配置 ──
-        if hasattr(self, "cap_item"):
+        if my_has_attr(self, "cap_item"):
             # フレーム高さ tgt_h を使ってキャプション位置をリセット
             self.cap_item.setPos(0, tgt_h)        
         
@@ -796,17 +800,18 @@ class LauncherItem(CanvasItem):
             self.embed   = self.d.get("icon_embed")   # 更新された可能性
             self.workdir = self.d.get("workdir", "")
             # 一時プレビューのサイズで width/height を保存
-            if hasattr(dlg, "preview") and isinstance(dlg.preview, QGraphicsPixmapItem):
+            if my_has_attr(dlg, "preview") and isinstance(dlg.preview, QGraphicsPixmapItem):
                 pix = dlg.preview.pixmap()
                 if not pix.isNull():
                     self.d["width"], self.d["height"] = pix.width(), pix.height()
 
             self._refresh_icon()
-            if hasattr(self, "cap_item"):
+            if my_has_attr(self, "cap_item"):
                 self.cap_item.setPlainText(self.d.get("caption", ""))
         self.is_editable = self.d.get("is_editable", False)
         self._edit_label.setVisible(self.is_editable)
         self._update_edit_label_pos()
+        self.set_run_mode(not win.a_edit.isChecked())
 
     def on_activate(self):
         """
@@ -1035,21 +1040,23 @@ class GifItem(CanvasItem):
             self.brightness = int(self.d.get("brightness", 50))
             self._apply_caption()
             self._update_frame_display()
+        win = self.scene().views()[0].window()
+        self.set_run_mode(not win.a_edit.isChecked())
 
     def _apply_caption(self):
         self.init_caption()
         self._rect_item.setRect(
             0, 0,
             self.d.get("width", 200),
-            self.d.get("height", 200) + (self.cap_item.boundingRect().height() if hasattr(self, "cap_item") else 0)
+            self.d.get("height", 200) + (self.cap_item.boundingRect().height() if my_has_attr(self, "cap_item") else 0)
         )
 
     def play(self):
-        if hasattr(self, "movie") and self.movie:
+        if my_has_attr(self, "movie") and self.movie:
             self.movie.start()
 
     def pause(self):
-        if hasattr(self, "movie") and self.movie:
+        if my_has_attr(self, "movie") and self.movie:
             self.movie.setPaused(True)
     def mousePressEvent(self, event):
         # 他の選択アイテムを明示的に選択解除
@@ -1122,7 +1129,9 @@ class GifItem(CanvasItem):
 
             # 3) キャプション＆フレーム再描画
             self._apply_caption()
-            self._update_frame_display()       
+            self._update_frame_display()   
+        win = self.scene().views()[0].window()
+        self.set_run_mode(not win.a_edit.isChecked())
 # ==================================================================
 #  ImageItem
 # ==================================================================
@@ -1181,7 +1190,8 @@ class ImageItem(CanvasItem):
             self.embed = self.d.get("embed")
             self.brightness = self.d.get("brightness", 50)
             self._apply_pixmap()
-
+        win = self.scene().views()[0].window()
+        self.set_run_mode(not win.a_edit.isChecked())
     def on_activate(self):
         try:
             if self.path:
@@ -1189,6 +1199,7 @@ class ImageItem(CanvasItem):
         except Exception:
             pass
 
+    # ImageItem _apply_pixmap
     def _apply_pixmap(self):
         pix = QPixmap()
         if self.embed:
@@ -1239,7 +1250,7 @@ class ImageItem(CanvasItem):
             self.init_caption()
             caption_h = self.cap_item.boundingRect().height()
         else:
-            if hasattr(self, "cap_item"):
+            if my_has_attr(self, "cap_item"):
                 self.cap_item.setPlainText("")
                 self.cap_item.setPos(0, 0)
 
@@ -1326,9 +1337,9 @@ class JSONItem(LauncherItem):
         if dlg.exec() == QDialog.DialogCode.Accepted:
             self.embed = self.d.get("icon_embed")
             self._refresh_icon()
-            if hasattr(self, "cap_item"):
+            if my_has_attr(self, "cap_item"):
                 self.cap_item.setPlainText(self.d.get("caption", ""))
-
+        self.set_run_mode(not win.a_edit.isChecked())
 
 # ==================================================================        
 #  GenericFileItem
@@ -1403,15 +1414,15 @@ class CanvasResizeGrip(QGraphicsRectItem):
         # ★スナップ呼び出し追加
         # ==========================
         parent = getattr(self, "_parent", None) or getattr(self, "target", None)
-        if parent and hasattr(parent, "snap_resize_size"):
+        if parent and my_has_attr(parent, "snap_resize_size"):
             w, h = parent.snap_resize_size(w, h)
 
         parent.prepareGeometryChange()
         parent._rect_item.setRect(0, 0, w, h)
         parent.d["width"], parent.d["height"] = int(w), int(h)
-        if hasattr(parent, "resize_content"):
+        if my_has_attr(parent, "resize_content"):
             parent.resize_content(int(w), int(h))
-        if hasattr(parent, "_update_grip_pos"):
+        if my_has_attr(parent, "_update_grip_pos"):
             parent._update_grip_pos()
         parent.init_caption()
         ev.accept()
@@ -1425,19 +1436,19 @@ class CanvasResizeGrip(QGraphicsRectItem):
 
     def resize_content(self, w: int, h: int):
         # 汎用：画像・テキスト拡大（未使用時もあり）
-        if hasattr(self, "_pix_item") and hasattr(self, "_orig_pixmap"):
+        if my_has_attr(self, "_pix_item") and my_has_attr(self, "_orig_pixmap"):
             pm = self._orig_pixmap.scaled(w, h,
                   Qt.AspectRatioMode.KeepAspectRatio,
                   Qt.TransformationMode.SmoothTransformation)
             self._pix_item.setPixmap(pm)
-        elif hasattr(self, "_txt_item"):
+        elif my_has_attr(self, "_txt_item"):
             self._txt_item.document().setTextWidth(w)
     def update_zvalue(self):
         """
         親アイテムより常に 1 上に配置して
         「最前面／最背面」操作に追従させる。
         """
-        if hasattr(self, "_parent") and self._parent:
+        if my_has_attr(self, "_parent") and self._parent:
             self.setZValue(self._parent.zValue() + 1)
 # ==================================================================
 #  dialogs（各種ダイアログ）
@@ -1479,7 +1490,7 @@ class ImageEditDialog(QDialog):
         # Brightness設定
         h3 = QHBoxLayout()
         self.spin_bri = QSpinBox(); self.spin_bri.setRange(0, 100)
-        self.spin_bri.setValue(self.item.brightness if hasattr(self.item, "brightness") else 50)        
+        self.spin_bri.setValue(self.item.brightness if my_has_attr(self.item, "brightness") else 50)        
         h3.addWidget(QLabel("Brightness:")); h3.addWidget(self.spin_bri)
         v.addLayout(h3)
 
@@ -1508,6 +1519,7 @@ class ImageEditDialog(QDialog):
         if f:
             self.ed_path.setText(f)
             
+    # ImageEditDialog accept
     def accept(self):
         cap = self.ed_caption.text()
         self.item.d["caption"] = cap
@@ -1780,7 +1792,7 @@ class LauncherEditDialog(QDialog):
         self.lbl_prev.setPixmap(pm)
 
 
-    # ---------------- accept ----------------
+    # LauncherEditDialog accept
     def accept(self):
         # -------- 基本フィールド --------
         self.data["caption"] = self.le_caption.text()
