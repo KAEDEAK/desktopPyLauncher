@@ -30,6 +30,7 @@ from PyQt6.QtWidgets import (
     QLabel,
     QLineEdit,
     QTextEdit,
+    QPlainTextEdit,
     QPushButton,
     QSpinBox,
     QCheckBox,
@@ -39,6 +40,7 @@ from PyQt6.QtWidgets import (
 )
 from PyQt6.QtGui import QColor, QBrush, QPainterPath, QPen, QFont, QTextDocument
 from PyQt6.QtCore import Qt, QPointF, QRectF, QTimer
+from PyQt6 import sip
 
 # ───────── internal modules ───────────────────────────────────────────
 from DPyL_classes import CanvasItem, CanvasResizeGrip
@@ -220,7 +222,16 @@ class NoteItem(CanvasItem):
             self.fill_bg = self.d.get("fill_background", False)
             self._apply_text()
         win = self.scene().views()[0].window()
-        self.set_run_mode(not win.a_edit.isChecked())
+        #self.set_run_mode(not win.a_edit.isChecked())
+        # ----- Scene / Win が健在か先に確認 -----
+        try:
+            scene = self.scene()
+            if scene and scene.views():
+                win = scene.views()[0].window()
+                self.set_run_mode(not win.a_edit.isChecked())
+        except RuntimeError:
+            # NoteItem が削除済みでもここに来る事がある
+            pass        
     # --------------------------------------------------------------
     # 選択ハンドル用バウンディング矩形
     # --------------------------------------------------------------
@@ -237,6 +248,24 @@ class NoteItem(CanvasItem):
 # =====================================================================
 #   NoteEditDialog
 # =====================================================================
+class ZoomableEdit(QPlainTextEdit):
+    _MIN = 6
+    _MAX = 72
+
+    def wheelEvent(self, ev):
+        if ev.modifiers() & Qt.KeyboardModifier.ControlModifier:
+            step = 1 if ev.angleDelta().y() > 0 else -1
+            f = self.font()
+            size = max(self._MIN, min(self._MAX, f.pointSize() + step))
+            if size != f.pointSize():
+                f.setPointSize(size)
+                self.setFont(f)
+                # 既に導入済みのデバウンス関数を呼ぶ
+                if hasattr(self.parent(), "_kick_preview_update"):
+                    self.parent()._kick_preview_update()
+            ev.accept()
+        else:
+            super().wheelEvent(ev)
 class NoteEditDialog(QDialog):
     def __init__(self, item: NoteItem):
         super().__init__()  # QDialog の初期化
@@ -282,8 +311,10 @@ class NoteEditDialog(QDialog):
         splitter = QSplitter(Qt.Orientation.Vertical)
 
         # 編集用テキストエリア
-        self.txt_edit = QTextEdit()
-        self.txt_edit.setAcceptRichText(False)
+        #self.txt_edit = QTextEdit()
+        #self.txt_edit.setAcceptRichText(False)
+        self.txt_edit = ZoomableEdit(self)
+        
         self.txt_edit.setPlainText(self.item.text)
         splitter.addWidget(self.txt_edit)
 
@@ -308,8 +339,16 @@ class NoteEditDialog(QDialog):
         vbox.addWidget(splitter)
 
         # --- リアルタイムプレビュー更新 ---
-        self.chk_md.stateChanged.connect(self._update_preview)
-        self.txt_edit.textChanged.connect(self._update_preview)
+        #self.chk_md.stateChanged.connect(self._update_preview)
+        #self.txt_edit.textChanged.connect(self._update_preview)
+        #self._update_preview()
+        # ── 150 ms デバウンス ─────────────────────
+        self._prev_timer = QTimer(self)
+        self._prev_timer.setSingleShot(True)
+        self._prev_timer.timeout.connect(self._update_preview)
+
+        self.chk_md.stateChanged.connect(self._kick_preview_update)
+        self.txt_edit.textChanged.connect(self._kick_preview_update)
         self._update_preview()
 
         # --- OK / Cancel ボタン ---
@@ -323,6 +362,8 @@ class NoteEditDialog(QDialog):
         btn_layout.addWidget(btn_cancel)
         vbox.addLayout(btn_layout)
 
+    def _kick_preview_update(self):
+        self._prev_timer.start(150)
     # --------------------------------------------------------------
     # プレビュー更新処理
     # --------------------------------------------------------------

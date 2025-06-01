@@ -6,10 +6,11 @@ desktopPyLauncher.py ― エントリポイント
 from __future__ import annotations
 
 # --- 標準・サードパーティライブラリ ---
-import sys, json, base64, os, inspect
+import sys, json, base64, os, inspect, traceback
 from datetime import datetime
 from pathlib import Path
 
+    
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QGraphicsView, QGraphicsScene,
     QGraphicsItem, QGraphicsItemGroup, QGraphicsPixmapItem,
@@ -1382,22 +1383,36 @@ def apply_theme(app: QApplication):
 # ==============================================================
 #  main - アプリ起動エントリポイント
 # ==============================================================
+class SafeApp(QApplication):
+    """Qt 例外を握りつぶしてログだけ残す“落下傘”ラッパー"""
+    def notify(self, obj, ev):
+        try:
+            return super().notify(obj, ev)
+        except Exception as e:
+            warn(f"[SafeApp] Uncaught: {e}")
+            traceback.print_exc()
+            return False   # Qt に「処理済みだよ」と伝えて継続
+
+def _global_excepthook(exc_type, exc, tb):
+    warn(f"[Uncaught] {exc_type.__name__}: {exc}")
+    traceback.print_exception(exc_type, exc, tb)
+
+sys.excepthook = _global_excepthook    # 最後の盾
+
 def main():
-    # コマンドライン引数 -create で空jsonテンプレ生成
     if len(sys.argv) >= 3 and sys.argv[1] == "-create":
-        tmpl = {"fileinfo": {"name": Path(__file__).name,
-                             "info": "project data file", "version": "1.0"},
+        tmpl = {"fileinfo": {"name": __file__, "info": "project data file", "version": "1.0"},
                 "items": []}
         tgt = Path(sys.argv[2]).expanduser().resolve()
         if tgt.exists():
             print("Already exists!"); sys.exit(1)
-        with open(tgt, "w", encoding="utf-8") as f:
-            json.dump(tmpl, f, ensure_ascii=False, indent=2)
+        tgt.write_text(json.dumps(tmpl, ensure_ascii=False, indent=2), encoding="utf-8")
         print(f"Created {tgt}"); sys.exit(0)
 
-    # デフォルトjson or 引数受け取り
+    # ② 通常起動
     json_path = Path(sys.argv[1]) if len(sys.argv) > 1 else Path("default.json")
-    app = QApplication(sys.argv)
+
+    app = SafeApp(sys.argv)
     apply_theme(app)
     MainWindow(json_path).show()
     sys.exit(app.exec())
