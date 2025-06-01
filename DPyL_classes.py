@@ -844,79 +844,96 @@ class LauncherItem(CanvasItem):
             return
             
         # --- 作業ディレクトリの初期化 ---
-        workdir = self.d.get("workdir", "").strip()
+        # --- 作業ディレクトリの初期化 ---
+        workdir = (self.d.get("workdir") or "").strip()
         if not workdir:
-            try:
-                workdir = str(Path(path).parent)
-            except Exception:
-                workdir = ""
+            workdir = str(Path(path).parent)
+        workdir = os.path.abspath(workdir)
 
-        is_edit = self.d.get("is_editable", False)
+        # --------------------------------------------------------------
+        #   CWD を workdir にスワップ（os.startfile 用）
+        # --------------------------------------------------------------
+        orig_cwd    = os.getcwd()
+        cwd_changed = False
+        if workdir and os.path.isdir(workdir):
+            try:
+                os.chdir(workdir)
+                cwd_changed = True
+            except Exception as e:
+                warn(f"[LauncherItem] chdir failed: {e}")
 
-        # --- Pythonスクリプト ---
-        if ext == ".py" and not is_edit:
-            try:
-                py_exec = sys.executable
-                ok = QProcess.startDetached(py_exec, [path], workdir)
-                if not ok:
-                    warn(f"QProcess 起動失敗: {py_exec} {path}")
-                return
-            except Exception as e:
-                warn(f"[LauncherItem.on_activate] .py 起動エラー: {e}")
-                return
+        try:
+            is_edit = self.d.get("is_editable", False)
 
-        # --- Node.js スクリプト ---
-        if ext == ".js" and not is_edit:
-            try:
-                ok = QProcess.startDetached("node", [path], workdir)
-                if not ok:
-                    warn(f"QProcess 起動失敗: node {path}")
-                return
-            except Exception as e:
-                warn(f"[LauncherItem.on_activate] .js 起動エラー: {e}")
-                return
-        # --- .vbs スクリプト ---
-        if ext in (".vbs", ".wsf"):
-            try:
-                # 明示的に workdir を設定して wscript 起動！
-                ok = QProcess.startDetached("wscript", [path], workdir)
-                if not ok:
-                    warn(f"QProcess 起動失敗: wscript {path}")
-                return
-            except Exception as e:
-                warn(f"[LauncherItem.on_activate] .vbs 起動エラー: {e}")
-            return
-        # --- 実行ファイル系 (.exe, .com, .jar, .msi) ---
-        if ext in self.EXE_LIKE:
-            try:
-                args = shlex_split(quote_if_needed(path), posix=False)
-                if not args:
-                    warn(f"引数分解に失敗: {path}")
+            # --- Pythonスクリプト ---
+            if ext == ".py" and not is_edit:
+                try:
+                    py_exec = sys.executable
+                    ok = QProcess.startDetached(py_exec, [path], workdir)
+                    if not ok:
+                        warn(f"QProcess 起動失敗: {py_exec} {path}")
+                    return
+                except Exception as e:
+                    warn(f"[LauncherItem.on_activate] .py 起動エラー: {e}")
                     return
 
-                exe = args[0]
-                exe_args = [a[1:-1] if a.startswith('"') and a.endswith('"') else a for a in args[1:]]
-
-                if self.d.get("runas", False):
-                    exe = os.path.abspath(exe)
-                    quoted_args = " ".join(f'"{a}"' for a in exe_args)
-                    full_cmd = f'cd /d "{workdir}" && "{exe}" {quoted_args}'
-                    ps_script = f'Start-Process cmd.exe -ArgumentList \'/c {full_cmd}\' -Verb RunAs'
-                    ps_cmd = ["powershell", "-NoProfile", "-Command", ps_script]
-                    subprocess.run(ps_cmd, shell=False)
-                else:
-                    ok = QProcess.startDetached(exe, exe_args, workdir)
+            # --- Node.js スクリプト ---
+            if ext == ".js" and not is_edit:
+                try:
+                    ok = QProcess.startDetached("node", [path], workdir)
                     if not ok:
-                        warn(f"QProcess 起動失敗: {exe} {exe_args}")
-            except Exception as e:
-                warn(f"[LauncherItem.on_activate] 起動エラー: {e}")
-            return
+                        warn(f"QProcess 起動失敗: node {path}")
+                    return
+                except Exception as e:
+                    warn(f"[LauncherItem.on_activate] .js 起動エラー: {e}")
+                    return
+            # --- .vbs スクリプト ---
+            if ext in (".vbs", ".wsf"):
+                try:
+                    # 明示的に workdir を設定して wscript 起動！
+                    ok = QProcess.startDetached("wscript", [path], workdir)
+                    if not ok:
+                        warn(f"QProcess 起動失敗: wscript {path}")
+                    return
+                except Exception as e:
+                    warn(f"[LauncherItem.on_activate] .vbs 起動エラー: {e}")
+                return
+            # --- 実行ファイル系 (.exe, .com, .jar, .msi) ---
+            if ext in self.EXE_LIKE:
+                try:
+                    args = shlex_split(quote_if_needed(path), posix=False)
+                    if not args:
+                        warn(f"引数分解に失敗: {path}")
+                        return
 
-        # --- その他（is_editableなファイル等） ---
-        try:
-            os.startfile(path)
-        except Exception as e:
-            warn(f"[LauncherItem.on_activate] startfile 失敗: {e}")
+                    exe = args[0]
+                    exe_args = [a[1:-1] if a.startswith('"') and a.endswith('"') else a for a in args[1:]]
+
+                    if self.d.get("runas", False):
+                        exe = os.path.abspath(exe)
+                        quoted_args = " ".join(f'"{a}"' for a in exe_args)
+                        full_cmd = f'cd /d "{workdir}" && "{exe}" {quoted_args}'
+                        ps_script = f'Start-Process cmd.exe -ArgumentList \'/c {full_cmd}\' -Verb RunAs'
+                        ps_cmd = ["powershell", "-NoProfile", "-Command", ps_script]
+                        subprocess.run(ps_cmd, shell=False)
+                    else:
+                        ok = QProcess.startDetached(exe, exe_args, workdir)
+                        if not ok:
+                            warn(f"QProcess 起動失敗: {exe} {exe_args}")
+                except Exception as e:
+                    warn(f"[LauncherItem.on_activate] 起動エラー: {e}")
+                return
+
+
+            # --- その他（is_editableなファイル等） ---
+            try:
+                os.startfile(path)
+            except Exception as e:
+                warn(f"[LauncherItem.on_activate] startfile 失敗: {e}")
+        finally:
+            # ここで必ず元の CWD へ戻す（プロジェクト保存に影響させない）
+            if cwd_changed:
+                os.chdir(orig_cwd)
 
 
 
