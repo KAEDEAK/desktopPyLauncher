@@ -54,6 +54,147 @@ from DPyL_debug import (my_has_attr,dump_missing_attrs,trace_this)
 EXPAND_STEP = 500  # 端に到達したときに拡張する幅・高さ（px）
 
 # ==============================================================
+# ミニマップ
+# ==============================================================
+class MiniMapWidget(QWidget):
+    """
+    ミニマップを表示するためのカスタムウィジェット。
+    - 親として MainWindow インスタンスを受け取り、その scene や view の情報を参照して描画を行う。
+    - 表示されたあと、一定時間（ここでは3秒）経過すると自動的に非表示になるタイマーを持つ。
+    """
+    def __init__(self, win: "MainWindow", parent=None):
+        super().__init__(parent)
+        self.win = win
+        # ミニマップ自体の固定サイズ（お好みで変更可）
+        self.setFixedSize(200, 200)
+        # 背景を半透明の黒（やや暗め）、境界線を黒 1px で設定
+        #self.setStyleSheet("background-color: rgba(0, 0, 0, 150); border: 1px solid black;")
+        # 境界線だけはスタイルシートで指定（背景は paintEvent で自力塗りつぶす）
+        self.setStyleSheet("border: 1px solid black;")
+
+        # --- 3秒後に自動的に hide() するためのタイマーを用意 ---
+        self._hide_timer = QTimer(self)
+        self._hide_timer.setSingleShot(True)
+        # タイマーが期限切れになったら this.hide() を呼ぶ
+        self._hide_timer.timeout.connect(self.hide)
+
+    def updateVisibility(self):
+        """
+        現在のビューポートがシーン全体をほぼ覆っているかを判定し、
+        『ほぼ全体（90%以上）をカバー＋位置的に10%マージン内』の場合は非表示にし、
+        それ以外の場合は表示して「3秒後に自動非表示タイマー」をスタートする。
+        """
+        # -- scene が既に破棄されている場合に備えて例外キャッチする --
+        try:
+            scene = self.win.scene
+            scene_rect: QRectF = scene.sceneRect()
+        except Exception:
+            # QGraphicsScene が削除済みなどでアクセスできない場合は何もしない
+            return
+        view = self.win.view
+        if scene_rect.isEmpty():
+            # シーンサイズが空ならミニマップ自体を非表示
+            self._hide_timer.stop()
+            self.hide()
+            return
+
+        # ビューポート内の矩形領域（シーン座標）を取得
+        visible_scene_rect: QRectF = view.mapToScene(view.viewport().rect()).boundingRect()
+
+        # 「表示範囲がシーン全体の90%以上をカバーしていれば非表示」とするマージン付き判定
+        #   動作イメージ：幅・高さそれぞれについて 0.9（＝90%） のしきい値を設ける
+        threshold = 0.5
+        w_scene = scene_rect.width()
+        h_scene = scene_rect.height()
+        w_vis   = visible_scene_rect.width()
+        h_vis   = visible_scene_rect.height()
+
+        # ① 幅・高さとも「ビューポートのサイズがしきい値×シーンサイズ以上」であれば大きさ的にはOK
+        cond_size = (w_vis >= w_scene * threshold) and (h_vis >= h_scene * threshold)
+        # ② 位置的にも「ビューポートの左端／上端がシーンの左端／上端よりはみ出していない」
+        #    かつ「ビューポートの右端／下端がシーンの右端／下端よりはみ出していない」かどうかをチェック
+        #    ここでは、許容マージンを幅・高さ各 10% として算出する
+        margin_w = w_scene * (1 - threshold)  # 例：幅の10%分
+        margin_h = h_scene * (1 - threshold)  # 例：高さの10%分
+        cond_pos = (
+            (visible_scene_rect.left()   <= scene_rect.left() + margin_w) and
+            (visible_scene_rect.top()    <= scene_rect.top()  + margin_h) and
+            (visible_scene_rect.right()  >= scene_rect.right()  - margin_w) and
+            (visible_scene_rect.bottom() >= scene_rect.bottom() - margin_h)
+        )
+
+        # -------------- 判定結果に応じて表示／タイマー制御 --------------
+        if cond_size and cond_pos:
+            # 「ほぼ全体をカバーしている」と判断 → 非表示
+            self._hide_timer.stop()
+            self.hide()
+        else:
+            # それ以外 → 表示し、3秒後に自動非表示タイマーをスタート
+            # （既にタイマーが動いている場合はリスタート）
+            self.show()
+            self.update()
+            self._hide_timer.start(3000)
+
+    def paintEvent(self, event):
+        #painter = QPainter(self)
+        #painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        # ① 背景を自力で半透明黒に塗りつぶす
+        painter.fillRect(self.rect(), QColor(0, 0, 0, 150))        
+
+        scene = self.win.scene
+        view = self.win.view
+
+        # シーン全体の矩形を取得
+        scene_rect: QRectF = scene.sceneRect()
+        if scene_rect.isEmpty():
+            painter.end()
+            return
+
+        # ミニマップ描画領域の大きさ
+        w_map = self.width()
+        h_map = self.height()
+
+        # シーン全体を縮小してミニマップ内に収めるためのスケールを算出
+        scale_x = w_map / scene_rect.width()
+        scale_y = h_map / scene_rect.height()
+        scale = min(scale_x, scale_y)
+
+        # 縮小後、ミニマップ中央に余白をつくるためのオフセット
+        offset_x = (w_map - scene_rect.width() * scale) / 2
+        offset_y = (h_map - scene_rect.height() * scale) / 2
+
+        # 1) シーン内のオブジェクトを青の半透過矩形で描画
+        pen_item = QPen(QColor(0, 0, 255))
+        brush_item = QBrush(QColor(0, 0, 255, 100))
+        for item in scene.items():
+            try:
+                rect: QRectF = item.sceneBoundingRect()
+            except Exception:
+                continue
+            x = (rect.x() - scene_rect.x()) * scale + offset_x
+            y = (rect.y() - scene_rect.y()) * scale + offset_y
+            w = rect.width() * scale
+            h = rect.height() * scale
+            painter.setPen(pen_item)
+            painter.setBrush(brush_item)
+            painter.drawRect(QRectF(x, y, w, h))
+
+        # 2) 現在のビューポート範囲を赤い枠で描画
+        visible_scene_rect: QRectF = view.mapToScene(view.viewport().rect()).boundingRect()
+        vx = (visible_scene_rect.x() - scene_rect.x()) * scale + offset_x
+        vy = (visible_scene_rect.y() - scene_rect.y()) * scale + offset_y
+        vw = visible_scene_rect.width() * scale
+        vh = visible_scene_rect.height() * scale
+        pen_view = QPen(QColor(255, 0, 0), 2)
+        painter.setPen(pen_view)
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        painter.drawRect(QRectF(vx, vy, vw, vh))
+
+        painter.end()
+        
+# ==============================================================
 #  CanvasView - キャンバス表示・ドラッグ&ドロップ対応
 # ==============================================================
 class CanvasView(QGraphicsView):
@@ -260,6 +401,14 @@ class MainWindow(QMainWindow):
         self._toolbar()
         self.setWindowTitle(f"desktopPyLauncher - {self.json_path.name}")
         self.resize(900, 650)
+        
+        # --- ミニマップを生成して右上に配置 ---
+        self.minimap = MiniMapWidget(self)
+        self.minimap.setParent(self)          # MainWindow 上に重ねる
+        self.minimap.show()
+        # 初回配置：ウィンドウ幅・高さが確定してから move したいので、
+        # 少し遅延させるか、resizeEvent 内で配置し直すのが確実
+        self._position_minimap()        
 
         # --- 履歴エントリ追加 ---
         self._push_history(self.json_path)
@@ -270,7 +419,39 @@ class MainWindow(QMainWindow):
         
         #self.view.installEventFilter(self)
         
+        # --- スクロールやシーン変更時にミニマップを再描画 / スクロールやシーン変更時に「表示／非表示判定」を行う ---
+        self.view.horizontalScrollBar().valueChanged.connect(self.minimap.updateVisibility)
+        self.view.verticalScrollBar().valueChanged.connect(self.minimap.updateVisibility)
+        self.scene.sceneRectChanged.connect(self.minimap.updateVisibility)
 
+        # ウィンドウサイズ変更時にも「表示／非表示判定」を行う
+        self.resizeEvent  # ← resizeEvent の中で _position_minimap() と一緒に判定されるので不要な場合もある
+
+        # --- アプリ起動直後に一度、ミニマップの表示判定を実行 ---
+        QTimer.singleShot(0, self.minimap.updateVisibility)
+
+    def _position_minimap(self):
+        """
+        ミニマップを常にウィンドウの右上に配置する。
+        余白（マージン）を 10px 程度にして配置。
+        """
+        margin = 10
+        # フレーム幅などを考慮して、QMainWindow のクライアント領域の右上に合わせる
+        # self.width(), self.height() はウィンドウ全体サイズなので、
+        # 必要に応じてフレーム幅を差し引くか、中央ウィジェットの座標系で計算してもよい。
+        x = self.width() - self.minimap.width() - margin
+        y = margin
+        self.minimap.move(x, y)
+
+    def resizeEvent(self, event):
+        """
+        ウィンドウやビューのリサイズ時に背景を再適用
+        """
+        super().resizeEvent(event)
+        self._position_minimap()
+        self._resize_timer.start(100)
+                
+        
     def mouseReleaseEvent(self, ev):
         """
         5ボタンマウス（XButton1/XButton2）に対応して、
@@ -1017,13 +1198,6 @@ class MainWindow(QMainWindow):
         #if added_any:
         #    self._set_mode(edit=True)
 
-
-    def resizeEvent(self, event):
-        """
-        ウィンドウやビューのリサイズ時に背景を再適用
-        """
-        super().resizeEvent(event)
-        self._resize_timer.start(100)
 
     # --- スナップヘルパー ---
     def snap_position(self, item, new_pos: QPointF) -> QPointF:
