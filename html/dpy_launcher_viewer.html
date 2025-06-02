@@ -1,0 +1,178 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<title>desktopPyLauncher JSON Viewer</title>
+<style>
+    html,body{margin:0;padding:0;height:100%;overflow:hidden;font-family:-apple-system,BlinkMacSystemFont,"Helvetica Neue",YuGothic,"Hiragino Kaku Gothic ProN",Meiryo,sans-serif;background:#1e1e1e;color:#eee;}
+    #canvasWrapper{position:relative;width:100%;height:100%;overflow:scroll;background:#2b2b2b;cursor:grab;}
+    #canvas{position:relative;min-width:2000px;min-height:2000px;}
+    .item{position:absolute;box-sizing:border-box;border:1px solid #555;border-radius:4px;overflow:hidden;}
+    .launcher img{width:100%;height:100%;object-fit:contain;display:block;}
+    .note{padding:6px;overflow:auto;white-space:pre-wrap;}
+    .note table{border-collapse:collapse;width:100%;}
+    .note table, .note th, .note td{border:1px solid #666;}
+    .note th,.note td{padding:4px;}
+    .caption{position:absolute;text-align:center;color:#ccc;font-size:12px;pointer-events:none;}
+    .videoPlaceholder{display:flex;align-items:center;justify-content:center;width:100%;height:100%;background:#000;color:#888;font-size:14px;font-family:monospace;}
+    #minimapCanvas{position:fixed;right:16px;bottom:16px;width:180px;height:180px;background:rgba(0,0,0,0.6);border:1px solid #aaa;z-index:1000;}
+</style>
+</head>
+<body>
+<div id="canvasWrapper"><div id="canvas"></div></div>
+<canvas id="minimapCanvas" width="180" height="180"></canvas>
+<script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+<script>
+const definedIcons = {
+  ".bat":"res/batch-file.png",".cmd":"res/batch-file.png",".py":"res/python-file.png",
+  ".exe":"res/exe-file.png",".url":"res/url-file.png",".lnk":"res/shortcut-file.png",
+  ".txt":"res/text-file.png",".md":"res/markdown-file.png",".json":"res/json-file.png"
+};
+const canvas  = document.getElementById("canvas");
+const wrapper = document.getElementById("canvasWrapper");
+const mini    = document.getElementById("minimapCanvas");
+const mCtx    = mini.getContext("2d");
+let miniScale = 1;
+
+// ---------------- Drag Scroll ----------------
+let isDrag=false,startX=0,startY=0,scrollL=0,scrollT=0;
+wrapper.addEventListener("mousedown",e=>{
+    if(e.button!==0)return;
+    isDrag=true;wrapper.style.cursor="grabbing";
+    startX=e.clientX;startY=e.clientY;
+    scrollL=wrapper.scrollLeft;scrollT=wrapper.scrollTop;
+    e.preventDefault();
+});
+wrapper.addEventListener("mousemove",e=>{
+    if(!isDrag)return;
+    wrapper.scrollLeft=scrollL-(e.clientX-startX);
+    wrapper.scrollTop =scrollT-(e.clientY-startY);
+    drawMini();
+});
+const endDrag=()=>{isDrag=false;wrapper.style.cursor="grab";};
+wrapper.addEventListener("mouseup",endDrag);
+wrapper.addEventListener("mouseleave",endDrag);
+// ------------------------------------------------
+
+// ---------- ビュー生成 -----------
+function buildUI(data){
+    if(!data||!Array.isArray(data.items))return;
+    let maxX=0,maxY=0;
+    data.items.forEach(it=>{maxX=Math.max(maxX,it.x+(it.width||48));maxY=Math.max(maxY,it.y+(it.height||48));});
+    canvas.style.minWidth=(maxX+400)+'px';
+    canvas.style.minHeight=(maxY+400)+'px';
+    miniScale=Math.min(mini.width/maxX,mini.height/maxY);
+
+    data.items.forEach(it=>{
+        switch(it.type){
+          case "launcher": addLauncher(it); break;
+          case "image":    addImage(it); break;
+          case "note":     addNote(it); break;
+          case "video":    addVideo(it); break;
+          default: console.warn("unsupported type",it.type);
+        }
+    });
+    drawMini();
+}
+
+function addCaption(d, text){
+    if(!text) return;
+    const cap=document.createElement("div");
+    cap.className="caption";
+    cap.textContent=text;
+    cap.style.left = d.x + "px";
+    cap.style.top  = (d.y + d.height + 2) + "px";
+    cap.style.width = d.width + "px";
+    canvas.appendChild(cap);
+}
+
+function attachOpenUrl(el, url){
+    if(!url || !(url.startsWith("http://")||url.startsWith("https://"))) return;
+    el.style.cursor="pointer";
+    el.addEventListener("dblclick", e=>{
+        window.open(url, "_blank");
+        e.stopPropagation();
+    });
+}
+
+function addLauncher(d){
+    const el=document.createElement("div");el.className="item launcher";
+    Object.assign(el.style,{left:d.x+"px",top:d.y+"px",width:d.width+"px",height:d.height+"px"});
+    let imgSrc="";
+    if(d.icon_embed){imgSrc="data:image/png;base64,"+d.icon_embed;}
+    else if(d.embed){imgSrc="data:image/png;base64,"+d.embed;}
+    else{const ext=d.path?d.path.substring(d.path.lastIndexOf('.')).toLowerCase():"";imgSrc=definedIcons[ext]||"res/default.png";}
+    const img=new Image();img.src=imgSrc;img.onload=drawMini;
+    el.appendChild(img);
+    canvas.appendChild(el);
+    addCaption(d, d.caption);
+    attachOpenUrl(el, d.path);
+}
+
+function addImage(d){
+    const box=document.createElement("div");box.className="item";
+    Object.assign(box.style,{left:d.x+"px",top:d.y+"px",width:d.width+"px",height:d.height+"px"});
+    const img=new Image();
+    img.style.width="100%";img.style.height="100%";img.style.objectFit="contain";
+    if((d.store==="embed"||!d.path) && (d.embed||d.data)){
+        img.src="data:image/*;base64,"+(d.embed||d.data);
+    }else{
+        img.src=d.path;
+    }
+    img.onload=drawMini;
+    box.appendChild(img);
+    canvas.appendChild(box);
+    addCaption(d, d.caption);
+    attachOpenUrl(box, d.path);
+}
+
+function addVideo(d){
+    const box=document.createElement("div");box.className="item";
+    Object.assign(box.style,{left:d.x+"px",top:d.y+"px",width:d.width+"px",height:d.height+"px"});
+    const ph=document.createElement("div");
+    ph.className="videoPlaceholder";
+    ph.textContent="Not Supported";
+    box.appendChild(ph);
+    canvas.appendChild(box);
+    addCaption(d, d.caption||"Video");
+}
+
+function addNote(d){
+    const el=document.createElement("div");el.className="item note";
+    Object.assign(el.style,{left:d.x+"px",top:d.y+"px",width:d.width+"px",height:d.height+"px"});
+    el.style.background=d.fill_background?(d.bgcolor||"#222"):"transparent";
+    if(d.color) el.style.color=d.color;
+    if(d.fontsize) el.style.fontSize=d.fontsize+"px";
+    const content=d.text||"";
+    el.innerHTML=d.format==="markdown"?marked.parse(content):content;
+    canvas.appendChild(el);
+}
+
+// ---------- ミニマップ描画 ---------
+function drawMini(){
+    mCtx.clearRect(0,0,mini.width,mini.height);
+    mCtx.fillStyle="#444";mCtx.fillRect(0,0,mini.width,mini.height);
+    const rect=canvas.getBoundingClientRect();
+    Array.from(canvas.querySelectorAll(".item")).forEach(el=>{
+        const r=el.getBoundingClientRect();
+        const x=(r.left-rect.left)*miniScale;
+        const y=(r.top-rect.top)*miniScale;
+        const w=r.width*miniScale,h=r.height*miniScale;
+        mCtx.fillStyle="rgba(0,200,255,0.5)";mCtx.fillRect(x,y,w,h);
+    });
+    const vx=wrapper.scrollLeft*miniScale,vy=wrapper.scrollTop*miniScale;
+    const vw=wrapper.clientWidth*miniScale,vh=wrapper.clientHeight*miniScale;
+    mCtx.strokeStyle="#ff0";mCtx.lineWidth=1;mCtx.strokeRect(vx,vy,vw,vh);
+}
+
+// ----------- JSON 読み込み -----------
+document.addEventListener("DOMContentLoaded",()=>{
+    fetch("data/default.json")
+        .then(res=>res.json())
+        .then(buildUI)
+        .catch(err=>console.error("JSON 読み込み失敗:",err));
+    window.addEventListener("load",drawMini);
+});
+</script>
+</body>
+</html>
