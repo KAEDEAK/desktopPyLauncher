@@ -17,7 +17,7 @@ from PyQt6.QtWidgets import (
     QGraphicsTextItem, QGraphicsRectItem, QToolBar, QMessageBox,
     QFileDialog, QFileIconProvider, QStyleFactory, QDialog,
     QLabel, QLineEdit, QTextEdit, QPushButton, QVBoxLayout, QHBoxLayout,
-    QMenu, QComboBox, QSpinBox, QCheckBox, QSizePolicy,
+    QToolButton, QMenu, QComboBox, QSpinBox, QCheckBox, QSizePolicy,
     QWidget, QSlider, QGraphicsProxyWidget
 )
 from PyQt6.QtMultimedia import QMediaPlayer, QAudioOutput
@@ -46,6 +46,7 @@ from DPyL_classes import (
 
 from DPyL_note    import NoteItem
 from DPyL_video   import VideoItem
+from DPyL_marker import MarkerItem
 from configparser import ConfigParser
 from urllib.parse import urlparse
 
@@ -580,7 +581,19 @@ class MainWindow(QMainWindow):
         
         self.add_toolbar_spacer(tb, width=24)
 
-        act("NOTE追加", self._add_note)
+        # 「オブジェクト追加」ボタン
+        menu_obj = QMenu(self)
+        act_marker = menu_obj.addAction("マーカー追加")
+        act_note   = menu_obj.addAction("NOTE追加")
+        act_marker.triggered.connect(self._add_marker)
+        act_note.triggered.connect(self._add_note)
+
+        btn_obj  = QToolButton(self)
+        btn_obj.setText("オブジェクト追加")
+        btn_obj.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        btn_obj.setMenu(menu_obj)
+        tb.addWidget(btn_obj)
+
         act("背景", self._background_dialog)
         
         self.add_toolbar_spacer(tb, width=24)
@@ -1272,6 +1285,56 @@ class MainWindow(QMainWindow):
         #self._set_mode(edit=True)
         it.set_run_mode(False)
 
+    # --- マーカー追加 ---
+    def _add_marker(self):
+        """
+        シーンの中央付近に、新規 MarkerItem を追加する。
+        - 既存のマーカーIDを調べ、最大ID + 100 を新規IDとする
+        - デフォルトで幅・高さ 32×32、キャプション「MARKER-<ID>」、ジャンプ先なし、開始地点 False、align="左上"
+        """
+        # 画面中心位置を取得
+        sp = self.view.mapToScene(self.view.viewport().rect().center())
+
+        # 既存マーカーの ID をすべて収集
+        existing_ids = []
+        for it in self.scene.items():
+            if isinstance(it, MarkerItem):
+                try:
+                    existing_ids.append(int(it.d.get("id", 0)))
+                except (TypeError, ValueError):
+                    continue
+        if existing_ids:
+            new_id = max(existing_ids) + 100
+        else:
+            new_id = 10000
+
+        # デフォルトの辞書を構築
+        d = {
+            "type": "marker",
+            "id": new_id,
+            "caption": f"MARKER-{new_id}",
+            "jump_id": None,
+            "is_start": False,
+            "align": "左上",
+            "x": sp.x(),
+            "y": sp.y(),
+            "width": 32,
+            "height": 32,
+            # z は後で必要なら指定。ここでは 0 にしておく
+            "z": 0,
+        }
+
+        # MarkerItem インスタンスを生成してシーンに追加
+        item = MarkerItem(d, text_color=self.text_color)
+        self.scene.addItem(item)
+        item.setZValue(d["z"])
+        self.data.setdefault("items", []).append(d)
+
+        # 追加直後は編集モードでプロパティを設定できるようにする
+        item.set_run_mode(False)
+        item.setFlag(item.GraphicsItemFlag.ItemIsSelectable, True)
+        item.setFlag(item.GraphicsItemFlag.ItemIsMovable, True)
+
     # --- 履歴管理 ---
     def _push_history(self, p: Path):
         # 履歴を現在位置で切り詰めて追加
@@ -1430,7 +1493,12 @@ class MainWindow(QMainWindow):
                 kwargs["text_color"] = self.text_color
 
             try:
-                it = cls(d, **kwargs)  # ← これで GifItem も OK！
+                # it = cls(d, **kwargs)  # ← これで GifItem も OK！
+                # MarkerItem は win を受け取らないため、text_color のみ指定する
+                if cls is MarkerItem:
+                    it = cls(d, text_color=self.text_color)
+                else:
+                    it = cls(d, **kwargs)                
             except Exception as e:
                 warn(f"[LOAD] {cls.__name__} create failed: {e}")
                 continue
@@ -1439,6 +1507,10 @@ class MainWindow(QMainWindow):
             it.setZValue(d.get("z", 0))
             self.scene.addItem(it)
             it.setPos(d.get("x", 0), d.get("y", 0))
+            
+            # MarkerItem は初期配置時にグリップをシーンに追加する必要があるため
+            if isinstance(it, MarkerItem) and it.grip.scene() is None:
+                self.scene.addItem(it.grip)            
 
             # VideoItem はリサイズグリップをシーンに載せる
             from DPyL_video import VideoItem
