@@ -255,8 +255,10 @@ class VideoItem(QGraphicsVideoItem):
         """
         ミュートON/OFFをUI/プレイヤー/データに反映
         """
-        self.btn_mute.setChecked(on)
-        self.player.setMuted(on)
+        if my_has_attr(self,"btn_mute"):
+            self.btn_mute.setChecked(on)
+        if my_has_attr(self,"player"):
+            self.player.setMuted(on)
         self.d["muted"] = bool(on)
 
     def on_mute_btn_clicked(self):
@@ -536,15 +538,25 @@ class VideoItem(QGraphicsVideoItem):
         # 3. メディアソース解放
         self.player.setSource(QUrl())
 
-        # 4. プレイヤー/オーディオの破棄
+        # 4. 出力のデタッチ
+        #    VideoItem の削除中に QMediaPlayer がフレームを
+        #    送出しようとするとクラッシュすることがあるため、
+        #    明示的に出力を解除してから破棄する
+        self.player.setVideoOutput(None)
+        try:
+            self.player.setAudioOutput(None)
+        except Exception:
+            pass
+
+        # 5. プレイヤー/オーディオの破棄
         self.player.deleteLater()
         self.audio.deleteLater()
-
-        # 5. シーンから自身を削除
+        
+        # 6. シーンから自身を削除
         if self.scene():
             self.scene().removeItem(self)
 
-        # 6. 最後に自身もdeleteLaterで非同期削除
+        # 7. 最後に自身もdeleteLaterで非同期削除
         self.deleteLater()
         
     # --------------------------------------------------------------
