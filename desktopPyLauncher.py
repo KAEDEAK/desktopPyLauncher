@@ -1459,7 +1459,6 @@ class MainWindow(QMainWindow):
     # --- データ読み込み ---
     # ---------- 
     def _load(self, on_finished=None):
-        
         self._show_loading(True)
         self._on_load_finished = on_finished  # ← 後で呼ぶ
         QTimer.singleShot(50, self._do_load_actual)
