@@ -1544,6 +1544,10 @@ class MainWindow(QMainWindow):
             for it in items:
                 it.setPos(it.x() + dx, it.y() + dy)
         self._apply_scene_padding()
+        
+        #  開始地点へスクロール
+        self._scroll_to_start_marker()        
+
 
         # --- ローディング完了後、ラベル非表示 ---
         self._show_loading(False)
@@ -1614,6 +1618,40 @@ class MainWindow(QMainWindow):
                 QMessageBox.information(self, "SAVE", "保存しました！")
         except Exception as e:
             QMessageBox.critical(self, "SAVE", str(e))
+# ==============================================================
+#  private helpers
+# ==============================================================
+    def _scroll_to_start_marker(self):
+        """
+        is_start==True の Marker があれば align に従ってビューをジャンプ
+        """
+        try:
+            start_markers = sorted(
+                (it for it in self.scene.items()
+                 if isinstance(it, MarkerItem) and it.d.get("is_start")),
+                key=lambda m: int(m.d.get("id", 0))
+            )
+            if not start_markers:
+                return
+
+            m   = start_markers[0]
+            sp  = m.scenePos()
+            w   = int(m.d.get("width",  32))
+            h   = int(m.d.get("height", 32))
+            aln = m.d.get("align", "左上")
+
+            if aln == "中央":
+                # ── ビューポート中央寄せ ───────────────────
+                self.view.centerOn(sp.x() + w/2, sp.y() + h/2)
+            else:
+                # ── 左上寄せ ─────────────────────────────
+                # ビューポート寸法をシーン座標へ変換（ズーム倍率対応）
+                vp_w = self.view.viewport().width()  / self.view.transform().m11()
+                vp_h = self.view.viewport().height() / self.view.transform().m22()
+                # 対象点を (vp_w/2 , vp_h/2) だけ手前にずらして centerOn
+                self.view.centerOn(sp.x() + vp_w/2, sp.y() + vp_h/2)
+        except Exception as e:
+            warn(f"[SCROLL] start-marker failed: {e}")
 
 # ==============================================================
 #  App helper - 補助関数
