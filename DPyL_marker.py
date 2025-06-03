@@ -22,9 +22,6 @@ from DPyL_classes import CanvasItem
 from DPyL_utils import warn
 from PyQt6.QtWidgets import QGraphicsTextItem, QGraphicsRectItem, QGraphicsItem
 
-# ==============================================================
-#   MarkerItem
-# ==============================================================
 
 # ==============================================================
 #   MarkerItem

@@ -372,7 +372,20 @@ def _icon_pixmap_full(path: str, idx: int = 0, size: int = ICON_SIZE) -> QPixmap
 
     # ── ⑥ 最終手段 “?” ──
     return _default_icon(size)
-
+    
+def _load_pix_or_icon(src: str, idx: int = 0, icon_sz: int = ICON_SIZE) -> QPixmap:
+    """
+    * 画像ファイル (.png .jpg .jpeg .bmp .gif …) が存在する → **リサイズせず原寸で返す**
+    * それ以外 / 読み込み失敗                     → 既存 _icon_pixmap() にフォールバック
+    """
+    if not src:
+        return _icon_pixmap("", idx, icon_sz)  # “?” フォールバック
+    p = Path(src)
+    if p.suffix.lower() in IMAGE_EXTS and p.exists():
+        pm = QPixmap(str(p))
+        if not pm.isNull():
+            return pm          # ★ここで縦横比・解像度そのまま
+    return _icon_pixmap(src, idx, icon_sz)
 # ────────────────────────────── __all__ ──────────────────────────────
 __all__ = [
     # 基本ユーティリティ
@@ -380,7 +393,7 @@ __all__ = [
     "ms_to_hms_ms", "hms_to_ms", "ms_to_hms",
     "is_network_drive", "fetch_favicon_base64",
     # アイコン関連
-    "get_fixed_local_icon", "_default_icon", "_icon_pixmap",
+    "get_fixed_local_icon", "_default_icon", "_icon_pixmap","_load_pix_or_icon",
     # 定数群（利便用）
     "ICON_SIZE", "IMAGE_EXTS", "VIDEO_EXTS",
     "EXECUTE_EXTS", "PYTHON_SCRIPT_EXT",

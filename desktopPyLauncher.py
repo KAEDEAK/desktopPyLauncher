@@ -35,7 +35,7 @@ from PyQt6.QtCore import (
 from DPyL_utils   import (
     warn, b64e, fetch_favicon_base64,
     compose_url_icon, b64encode_pixmap, normalize_unc_path, 
-    is_network_drive, _icon_pixmap, _default_icon, ICON_SIZE
+    is_network_drive, _icon_pixmap, _default_icon, _load_pix_or_icon, ICON_SIZE
 )
 from DPyL_classes import (
     LauncherItem, JSONItem, ImageItem, GifItem,
@@ -651,11 +651,11 @@ class MainWindow(QMainWindow):
         act_back  = menu.addAction("最背面へ")
         menu.addSeparator()
 
-        act_fit_orig = act_fit_inside = None
+        act_fit_orig = act_fit_inside_v = act_fit_inside_h = None
         if is_pix or is_vid:
             act_fit_orig   = menu.addAction("元のサイズに合わせる")
-            label_in = "現在の{}サイズに合わせる（内側にフィット）"
-            act_fit_inside = menu.addAction(label_in.format("画像" if is_pix else "動画"))
+            act_fit_inside_v = menu.addAction("内側（上下）にフィット")
+            act_fit_inside_h = menu.addAction("内側（左右）にフィット")
             menu.addSeparator()
 
         act_del = menu.addAction("Delete")
@@ -737,7 +737,7 @@ class MainWindow(QMainWindow):
                         src = item.d.get("icon") or item.d.get("path") or ""
                         idx = item.d.get("icon_index", 0)
                         if src:
-                            pix = _icon_pixmap(src, idx, ICON_SIZE)
+                            pix = _load_pix_or_icon(src, idx, ICON_SIZE)
 
                     # 3) 最終手段: _default_icon
                     if not pix or pix.isNull():
@@ -773,8 +773,10 @@ class MainWindow(QMainWindow):
                 item.init_caption()
 
 
-        # --- 内側にフィット ---
-        elif sel == act_fit_inside:
+
+        # --- 内側フィット（上下／左右） --------------------------
+        elif sel in (act_fit_inside_v, act_fit_inside_h):
+            fit_axis = "v" if sel == act_fit_inside_v else "h"
             # 1) 現在の表示領域サイズを取得
             cur_w = int(item.boundingRect().width())
             cur_h = int(item.boundingRect().height())
@@ -815,7 +817,7 @@ class MainWindow(QMainWindow):
                     src = item.d.get("icon") or item.d.get("path") or ""
                     idx = item.d.get("icon_index", 0)
                     if src:
-                        pix = _icon_pixmap(src, idx, ICON_SIZE)
+                        pix = _load_pix_or_icon(src, idx, ICON_SIZE)
 
                 if not pix or pix.isNull():
                     warn("画像取得失敗: embed/icon/path 無効")
@@ -828,13 +830,17 @@ class MainWindow(QMainWindow):
                 warn("未対応のアイテムタイプ")
                 return
 
-            # 3) アスペクト比を保って縮小（内側にフィット）
+            # 3) アスペクト比を保って縮小（軸別フィット）
             if orig_w <= 0 or orig_h <= 0:
                 warn("元サイズが無効")
                 return
 
-            scale = min(cur_w / orig_w, cur_h / orig_h)
-            w, h = int(orig_w * scale), int(orig_h * scale)
+            if fit_axis == "v":            # ★ 高さ基準
+                scale = cur_h / orig_h
+                w, h = int(orig_w * scale), int(cur_h)
+            else:                          # ★ 幅基準
+                scale = cur_w / orig_w
+                w, h = int(cur_w), int(orig_h * scale)
 
             # 4) 描画とリサイズ（静止画と動画で処理分岐）
             item.prepareGeometryChange()
