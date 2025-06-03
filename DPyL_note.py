@@ -62,6 +62,21 @@ class NoteItem(CanvasItem):
 
     def __init__(self, d: dict[str, Any] | None = None, cb_resize=None):
         super().__init__(d, cb_resize)
+        # ── 追加: スクロール動作のモード管理 ───────────────
+        # 「最初のクリックで武装 → 次のドラッグでスクロール」
+        self._scroll_ready: bool  = False   # クリック済みフラグ
+        self._dragging: bool      = False   # 実際にドラッグ中か
+        # 「クリック」とみなす距離判定用
+        self._press_scene_pos = None        # 押下座標
+        self._CLICK_THRESH    = 4           # px 未満ならクリック        
+        
+        #
+        # ★好みに応じて True にするとドラッグスクロールを完全に無効化し
+        #   “ホイールのみスクロール” になります。
+        self.DISABLE_DRAG_SCROLL: bool = False
+
+        # hoverLeaveEvent で _scroll_ready をクリアするため
+        self.setAcceptHoverEvents(True)
 
         # JSON → インスタンス変数
         self.format: str = self.d.get("format", "text")
@@ -100,6 +115,42 @@ class NoteItem(CanvasItem):
         self._resize_timer = QTimer()
         self._resize_timer.setSingleShot(True)
         self._resize_timer.timeout.connect(self._apply_text)
+        
+        try:
+            # ── 追加: トグルインジケーター ───────────────────
+            self._IND_SIZE = 8   # px
+            self._indicator = QGraphicsRectItem(
+                0, 0, self._IND_SIZE, self._IND_SIZE, self
+            )
+            #以下コメントアウトしないとノートが消えます
+            #self._indicator.setPen(Qt.PenStyle.NoPen)
+            #self._indicator.setBrush(QColor("#000080"))  # 初期 = OFF
+            #self._indicator.setZValue(9999)              # 最前面
+
+            self._update_indicator_position()
+        except RuntimeError as e:
+            # オブジェクト削除時の例外をキャッチ
+            warn(f"[NoteItem] __init__: {e}")
+           
+
+
+    # --------------------------------------------------------------
+    #   インジケーターの描画更新
+    # --------------------------------------------------------------
+    def _update_indicator_position(self):
+        """右上に 2px マージンで配置（_indicator 未生成なら無視）"""
+        if not hasattr(self, "_indicator"):
+            return
+        r = self.boundingRect()
+        # 右上に 2 px マージン
+        self._indicator.setPos(r.width() - self._IND_SIZE - 2, 2)
+
+    def _update_indicator_color(self):
+        """ON/OFF に合わせて塗り替え"""
+        col = QColor("#008000") if self._scroll_ready else QColor("#000080")
+        if hasattr(self,"_indicator"):
+            self._indicator.setBrush(col)
+
 
     # --------------------------------------------------------------
     # public helper: サイズ変更通知
@@ -109,6 +160,7 @@ class NoteItem(CanvasItem):
         # クリップ／背景を更新
         self.clip_item.setRect(0, 0, w, h)
         self._rect_item.setRect(0, 0, w, h)
+        self._update_indicator_position() 
         
         self._update_grip_pos()
 
@@ -183,15 +235,42 @@ class NoteItem(CanvasItem):
         self.scroll_offset = offset
         self.txt_item.setY(-offset)
 
+    # --------------------------------------------------------------
+    #   実行モード : マウスハンドリング
+    # --------------------------------------------------------------
     def mousePressEvent(self, ev: QGraphicsSceneMouseEvent):
-        if getattr(self, "run_mode", False) and ev.button() == Qt.MouseButton.LeftButton:
-            # スクロール開始位置を記録
-            self._drag_start_y = ev.scenePos().y()
-            self._start_offset = self.scroll_offset
-            self._dragging = True
-            ev.accept()
+        if not getattr(self, "run_mode", False):
+            return super().mousePressEvent(ev)
+
+        if ev.button() == Qt.MouseButton.LeftButton:
+            # ---- ドラッグスクロール完全禁止モード -------------
+            if self.DISABLE_DRAG_SCROLL:
+                return super().mousePressEvent(ev)   # 上位へ任せる
+
+            # ↓ 押下位置だけ記録。Release 時の移動量で
+            #    “クリック or ドラッグ” を判定する
+            self._press_scene_pos = ev.scenePos()
+
+            # 既に _scroll_ready が ON なら「内部スクロール用ドラッグ」
+            if self._scroll_ready:
+                self._drag_start_y = ev.scenePos().y()
+                self._start_offset = self.scroll_offset
+                self._dragging     = True
+                ev.accept()
+            else:
+                # まだ武装していない → 通常のクリック扱い
+                super().mousePressEvent(ev)
             return
+
         super().mousePressEvent(ev)
+        
+    # --------------------------------------------------------------
+    #   Note からカーソルが離れたら武装解除
+    # --------------------------------------------------------------
+    def hoverLeaveEvent(self, ev):
+        self._scroll_ready = False
+        self._update_indicator_color()
+        return super().hoverLeaveEvent(ev)
 
     def mouseMoveEvent(self, ev: QGraphicsSceneMouseEvent):
         if getattr(self, "_dragging", False) and getattr(self, "run_mode", False):
@@ -203,11 +282,25 @@ class NoteItem(CanvasItem):
         super().mouseMoveEvent(ev)
 
     def mouseReleaseEvent(self, ev: QGraphicsSceneMouseEvent):
-        if getattr(self, "_dragging", False):
-            # ドラッグ終了
+        # ---- Note 内スクロール終了 ----------------------------
+        if self._dragging:
             self._dragging = False
             ev.accept()
             return
+
+        # ---- クリック判定 --------------------------------------
+        if (
+            self._press_scene_pos is not None
+            and ev.button() == Qt.MouseButton.LeftButton
+        ):
+            moved = (ev.scenePos() - self._press_scene_pos).manhattanLength()
+            self._press_scene_pos = None
+
+            if moved < self._CLICK_THRESH:
+                # 「クリック」と認定
+                self._scroll_ready = not self._scroll_ready
+                self._update_indicator_color()
+
         super().mouseReleaseEvent(ev)
 
     # --------------------------------------------------------------
@@ -244,6 +337,41 @@ class NoteItem(CanvasItem):
         p = QPainterPath()
         p.addRect(self.boundingRect())
         return p
+    # --------------------------------------------------------------
+    #   位置やサイズが変わったらインジケーターを再配置
+    # --------------------------------------------------------------
+    def itemChange(self, change, value):
+        if change in (
+            QGraphicsItem.GraphicsItemChange.ItemPositionHasChanged,
+            QGraphicsItem.GraphicsItemChange.ItemTransformHasChanged,
+            QGraphicsItem.GraphicsItemChange.ItemScaleHasChanged,
+            QGraphicsItem.GraphicsItemChange.ItemSceneHasChanged,
+        ):
+            # _indicator が出来ていない早期段階もあるのでガード
+            if hasattr(self, "_indicator"):
+                self._update_indicator_position()
+        return super().itemChange(change, value)
+
+    # --------------------------------------------------------------
+    #   実行モード : ホイールスクロール
+    # --------------------------------------------------------------
+    def wheelEvent(self, ev: QGraphicsSceneWheelEvent):
+        # --- 編集モードは素通り ---
+        if not getattr(self, "run_mode", False):
+            return super().wheelEvent(ev)
+
+        # --- Shift+ホイール＝横スクロールは親へ ---
+        if ev.modifiers() & Qt.KeyboardModifier.ShiftModifier:
+            return super().wheelEvent(ev)
+
+        # Qt6 の QGraphicsSceneWheelEvent は delta() だけ
+        delta = ev.delta()          # ±120 が 1 ステップ
+        if delta == 0:
+            return
+
+        step_px = 40                # 1 ステップあたりの移動量
+        self.set_scroll(self.scroll_offset - int(delta / 120 * step_px))
+        ev.accept()
 
 # =====================================================================
 #   NoteEditDialog
