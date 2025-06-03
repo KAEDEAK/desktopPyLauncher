@@ -1,17 +1,18 @@
-# -*- coding: utf-8 -*-
 """
 DPyL_video.py  ―  VideoItem / ResizeGrip / ポイント編集ダイアログ
 ◎ Qt6 / PyQt6 専用
 
 
-VideoItem は、CanvasItem を継承していないけどメンバーはほとんど同じ。
+留意事項
+・ VideoItem は、CanvasItem を継承してません。
+・ メンバーはほとんど同じ。
 
-現在は、区別のため以下のように名称を変更しています。
+一部メソッド・プロパティ等は、呼び出しの際の区別のために、以下のように名称を変更しています。
 
-x update_layout => _update_grip_pos 移行済み
-grip => video_resize_dots
+-CamvasItem-   | -VideoItem-         | Note
+ grip          |  video_resize_dots  | 変更中
+ update_layout | _update_grip_pos    | _update_grip_pos に 戻した
 
-デバッグ目的だけど。しばらくそのままにしておきます。
 
 """
 
@@ -21,7 +22,6 @@ import os, copy
 from pathlib import Path
 from typing import Any
 
-# ...（インポート部分はコメント最適化不要なのでそのまま）
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QGraphicsView, QGraphicsScene,
     QGraphicsItem, QGraphicsItemGroup, QGraphicsPixmapItem,
@@ -538,15 +538,16 @@ class VideoItem(QGraphicsVideoItem):
         # 3. メディアソース解放
         self.player.setSource(QUrl())
 
+        # TODO: 画面戦のクラッシュの原因は、ほかにあったあ後で調べる
         # 4. 出力のデタッチ
         #    VideoItem の削除中に QMediaPlayer がフレームを
-        #    送出しようとするとクラッシュすることがあるため、
-        #    明示的に出力を解除してから破棄する
-        self.player.setVideoOutput(None)
-        try:
-            self.player.setAudioOutput(None)
-        except Exception:
-            pass
+        #    送出しようとするとクラッシュすることがあるため
+        #    明示的に出力を解除してから破棄する (AI判断)
+        #self.player.setVideoOutput(None)
+        #try:
+        #    self.player.setAudioOutput(None)
+        #except Exception:
+        #    pass
 
         # 5. プレイヤー/オーディオの破棄
         self.player.deleteLater()
@@ -558,7 +559,7 @@ class VideoItem(QGraphicsVideoItem):
 
         # 7. 最後に自身もdeleteLaterで非同期削除
         self.deleteLater()
-        
+
     # --------------------------------------------------------------
     #   右クリックでメニューをMainWindowに委譲
     # --------------------------------------------------------------

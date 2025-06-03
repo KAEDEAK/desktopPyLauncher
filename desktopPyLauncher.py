@@ -992,7 +992,6 @@ class MainWindow(QMainWindow):
         if item.scene():
             item.scene().removeItem(item)
             
-        #TODO: 何で消してるのかわからない
         # JSONから辞書データ削除
         if my_has_attr(item, "d") and item.d in self.data.get("items", []):
             self.data["items"].remove(item.d)
@@ -1460,6 +1459,7 @@ class MainWindow(QMainWindow):
     # --- データ読み込み ---
     # ---------- 
     def _load(self, on_finished=None):
+        
         self._show_loading(True)
         self._on_load_finished = on_finished  # ← 後で呼ぶ
         QTimer.singleShot(50, self._do_load_actual)
@@ -1674,21 +1674,27 @@ def apply_theme(app: QApplication):
 #  main - アプリ起動エントリポイント
 # ==============================================================
 class SafeApp(QApplication):
-    """Qt 例外を握りつぶしてログだけ残す“落下傘”ラッパー"""
+    """例外をログに残しても、イベント自体は処理済みにする"""
     def notify(self, obj, ev):
         try:
             return super().notify(obj, ev)
         except Exception as e:
-            warn(f"[SafeApp] Uncaught: {e}")
-            traceback.print_exc()
-            return False   # Qt に「処理済みだよ」と伝えて継続
+            warn(f"[SafeApp] {type(e).__name__}: {e}")
+            # 例外を握りつぶした後、もう一度デフォルトハンドラに委譲
+            try:
+                return super().notify(obj, ev)
+            except Exception:
+                return True
 
 def _global_excepthook(exc_type, exc, tb):
     warn(f"[Uncaught] {exc_type.__name__}: {exc}")
     traceback.print_exception(exc_type, exc, tb)
+    
 
 sys.excepthook = _global_excepthook    # 最後の盾
-
+r"""
+# VideoItemが一度でも再生されると停止していても画面遷移でハングアップするので、以下通常のmainに戻します
+# SafeApp版
 def main():
     if len(sys.argv) >= 3 and sys.argv[1] == "-create":
         tmpl = {"fileinfo": {"name": __file__, "info": "project data file", "version": "1.0"},
@@ -1712,3 +1718,31 @@ if __name__ == "__main__":
         main()
     finally:
         dump_missing_attrs()
+"""
+        
+# ==============================================================
+#  main - アプリ起動エントリポイント
+# ==============================================================
+# 通常
+def main():
+    # コマンドライン引数 -create で空jsonテンプレ生成
+    if len(sys.argv) >= 3 and sys.argv[1] == "-create":
+        tmpl = {"fileinfo": {"name": Path(__file__).name,
+                             "info": "project data file", "version": "1.0"},
+                "items": []}
+        tgt = Path(sys.argv[2]).expanduser().resolve()
+        if tgt.exists():
+            print("Already exists!"); sys.exit(1)
+        with open(tgt, "w", encoding="utf-8") as f:
+            json.dump(tmpl, f, ensure_ascii=False, indent=2)
+        print(f"Created {tgt}"); sys.exit(0)
+
+    # デフォルトjson or 引数受け取り
+    json_path = Path(sys.argv[1]) if len(sys.argv) > 1 else Path("default.json")
+    app = QApplication(sys.argv)
+    apply_theme(app)
+    MainWindow(json_path).show()
+    sys.exit(app.exec())
+
+if __name__ == "__main__":
+    main()
