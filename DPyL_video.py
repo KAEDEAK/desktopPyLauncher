@@ -529,6 +529,7 @@ class VideoItem(QGraphicsVideoItem):
         4) コントロール UI（ctrl_proxy / ctrl_widget）を完全破棄
         5) メディアソース解放 → プレイヤ／オーディオを deleteLater
         6) 最後に self を deleteLater
+        
         """
         print("STEP-A  remove from scene")
         if self.scene():                             # ① Scene から外す

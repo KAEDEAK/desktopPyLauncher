@@ -201,6 +201,10 @@ class CanvasView(QGraphicsView):
     def __init__(self, scene, win):
         super().__init__(scene, win)
         self.win = win
+        self._zoom      = 1.0   # 現在の拡大率
+        self._MIN_ZOOM  = 0.2   # 最小 20 %
+        self._MAX_ZOOM  = 5.0   # 最大 500 %
+        
         self.setAcceptDrops(True)
         self.viewport().setAcceptDrops(True)
         self.setRenderHint(self.renderHints() | self.renderHints().Antialiasing)
@@ -361,6 +365,48 @@ class CanvasView(QGraphicsView):
             # 左方向に広げたぶん、スクロール位置をシフトさせる
             hbar.setRange(int(new_rect.x()), int(new_rect.x() + new_rect.width() - self.viewport().width()))
             hbar.setValue(hbar.minimum() + EXPAND_STEP)
+    # ──────────────────────────────────────────────
+    #   Ctrl + ホイール でビューをズーム
+    # ──────────────────────────────────────────────
+    def wheelEvent(self, event):
+        if event.modifiers() & Qt.KeyboardModifier.ControlModifier:
+            delta = event.angleDelta().y()
+            if delta == 0:
+                return
+
+            # 拡大／縮小倍率を決定
+            step_factor = 1.25 if delta > 0 else 0.8
+            new_zoom = self._zoom * step_factor
+            if not (self._MIN_ZOOM <= new_zoom <= self._MAX_ZOOM):
+                return  # 制限外は無視
+
+            # ズーム中心をマウス位置に合わせる
+            old_pos = self.mapToScene(event.position().toPoint())
+            self._zoom = new_zoom
+            self.scale(step_factor, step_factor)
+            new_pos = self.mapToScene(event.position().toPoint())
+            diff = new_pos - old_pos
+            self.translate(diff.x(), diff.y())
+
+            event.accept()
+        else:
+            super().wheelEvent(event)
+            
+    # ──────────────────────────────────────────────
+    #   何もない所をダブルクリック → ズーム 100 % に戻す
+    # ──────────────────────────────────────────────
+    def mouseDoubleClickEvent(self, event):
+        # クリック位置にアイテムが無い＝「空白」とみなす
+        if not self.items(event.position().toPoint()):
+            # 現在ズームが 1.0 以外ならリセット
+            if self._zoom != 1.0:
+                factor = 1.0 / self._zoom        # 元倍率へ戻す係数
+                self.scale(factor, factor)       # 行列を一気にリセット
+                self._zoom = 1.0
+            event.accept()
+        else:
+            # アイテムの上なら既存挙動（選択など）を維持
+            super().mouseDoubleClickEvent(event)
 
 # ==============================================================
 #  MainWindow - メインウィンドウ
