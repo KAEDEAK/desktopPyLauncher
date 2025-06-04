@@ -1020,30 +1020,24 @@ class MainWindow(QMainWindow):
         
     def _remove_item(self, item: QGraphicsItem):
         # VideoItemなら後始末
-        print("_remove_item - 1")
         if isinstance(item, VideoItem):
-            print("_remove_item - 2")
             item.delete_self()
-            print("_remove_item - 3")
             if item.video_resize_dots.scene():
                 item.video_resize_dots.scene().removeItem(item.video_resize_dots)
             item.video_resize_dots = None
 
-        print("_remove_item - 4")
         # 関連Gripを削除
         if isinstance(item, CanvasItem):
             if item.grip.scene():
                 item.grip.scene().removeItem(item.grip)
             item.grip = None
             
-        print("_remove_item - 5")
         # シーンから本体除去
         # VideoItem は delete_self() 内で自分を removeItem 済み。
         # CanvasItem だけ個別に除去する。
         if not isinstance(item, VideoItem) and item.scene():
             item.scene().removeItem(item)
             
-        print("_remove_item - 6")
         # JSONから辞書データ削除
         if my_has_attr(item, "d") and item.d in self.data.get("items", []):
             self.data["items"].remove(item.d)
