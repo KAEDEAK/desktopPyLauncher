@@ -27,9 +27,9 @@ from PyQt6.QtGui import (
     QIcon, QImage, QPen, QTransform, QFont
 )
 from PyQt6.QtCore import (
-    Qt, QRectF, QSizeF, QPointF, QFileInfo, QProcess,
-    QBuffer, QIODevice, QTimer, 
-    QUrl
+    Qt, QRectF, QSizeF, QPointF, QFileInfo, QProcess, 
+    QCoreApplication, QEvent,
+    QBuffer, QIODevice, QTimer, QUrl, QObject
 )
 # --- プロジェクト内モジュール ---
 from DPyL_utils   import (
@@ -42,7 +42,6 @@ from DPyL_classes import (
     CanvasItem, CanvasResizeGrip,
     BackgroundDialog
 )
-
 
 from DPyL_note    import NoteItem
 from DPyL_video   import VideoItem
@@ -455,9 +454,8 @@ class MainWindow(QMainWindow):
         
     def mouseReleaseEvent(self, ev):
         """
-        5ボタンマウス（XButton1/XButton2）に対応して、
-        戻る／進むを実行する。
-        PyQt6 は mousePressEvent より、こっちのほうが安定するらしい 。
+        5ボタンマウス（XButton1/XButton2）対応( 戻る／進む )
+        PyQt6 は mousePressEvent より、こっちのほうが安定するらしい。
         """
         # XButton1 → 戻る（_go_prev）、XButton2 → 進む（_go_next）
         if ev.button() == Qt.MouseButton.XButton1:
@@ -480,7 +478,7 @@ class MainWindow(QMainWindow):
     def _create_item_from_path(self, path, sp):
         """
         ドロップされたファイルから対応するアイテムを生成する。
-        VideoItem は CanvasItem に含まれないので、特別扱いする。
+        VideoItem は CanvasItem から派生していないので、特化した処理を行います。
         """
         ext = Path(path).suffix.lower()
 
@@ -976,22 +974,30 @@ class MainWindow(QMainWindow):
         
     def _remove_item(self, item: QGraphicsItem):
         # VideoItemなら後始末
+        print("_remove_item - 1")
         if isinstance(item, VideoItem):
+            print("_remove_item - 2")
             item.delete_self()
+            print("_remove_item - 3")
             if item.video_resize_dots.scene():
                 item.video_resize_dots.scene().removeItem(item.video_resize_dots)
             item.video_resize_dots = None
 
+        print("_remove_item - 4")
         # 関連Gripを削除
         if isinstance(item, CanvasItem):
             if item.grip.scene():
                 item.grip.scene().removeItem(item.grip)
             item.grip = None
             
+        print("_remove_item - 5")
         # シーンから本体除去
-        if item.scene():
+        # VideoItem は delete_self() 内で自分を removeItem 済み。
+        # CanvasItem だけ個別に除去する。
+        if not isinstance(item, VideoItem) and item.scene():
             item.scene().removeItem(item)
             
+        print("_remove_item - 6")
         # JSONから辞書データ削除
         if my_has_attr(item, "d") and item.d in self.data.get("items", []):
             self.data["items"].remove(item.d)
@@ -1474,7 +1480,12 @@ class MainWindow(QMainWindow):
         for it in list(self.scene.items()):
             self._remove_item(it)
 
-        self.scene.clear()
+        # deleteLater キューを即座に実行してゴミを残さない
+        from PyQt6.QtCore import QCoreApplication, QEvent
+        QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+
+        # scene.clear() は二重 free を招きやすいので呼ばない
+        
         try:
             with open(self.json_path, "r", encoding="utf-8") as f:
                 self.data = json.load(f)
@@ -1673,27 +1684,40 @@ def apply_theme(app: QApplication):
 #  main - アプリ起動エントリポイント
 # ==============================================================
 class SafeApp(QApplication):
-    """例外をログに残しても、イベント自体は処理済みにする"""
+    """
+    例外をログに残してイベントを 1 回だけ処理する
+    """
+
+    DEBUG_NOTIFY = False
+
     def notify(self, obj, ev):
+        if self.DEBUG_NOTIFY:
+            cls_name = "<none>"
+            try:
+                if obj is None:
+                    cls_name = "<None>"
+                elif isinstance(obj, QObject):
+                    cls_name = obj.metaObject().className()
+                else:
+                    cls_name = obj.__class__.__name__
+            except Exception as e:
+                cls_name = f"<unresolved:{e.__class__.__name__}>"
+
+            print(f"[notify] obj={cls_name:<28} ev={ev.__class__.__name__}")
+
         try:
             return super().notify(obj, ev)
         except Exception as e:
             warn(f"[SafeApp] {type(e).__name__}: {e}")
-            # 例外を握りつぶした後、もう一度デフォルトハンドラに委譲
-            try:
-                return super().notify(obj, ev)
-            except Exception:
-                return True
+            return True   # 再ディスパッチは禁止
 
 def _global_excepthook(exc_type, exc, tb):
     warn(f"[Uncaught] {exc_type.__name__}: {exc}")
     traceback.print_exception(exc_type, exc, tb)
-    
 
 sys.excepthook = _global_excepthook    # 最後の盾
-r"""
-# VideoItemが一度でも再生されると停止していても画面遷移でハングアップするので、以下通常のmainに戻します
-# SafeApp版
+
+# エラーがあっても続行します
 def main():
     if len(sys.argv) >= 3 and sys.argv[1] == "-create":
         tmpl = {"fileinfo": {"name": __file__, "info": "project data file", "version": "1.0"},
@@ -1717,12 +1741,13 @@ if __name__ == "__main__":
         main()
     finally:
         dump_missing_attrs()
-"""
-        
+
 # ==============================================================
 #  main - アプリ起動エントリポイント
 # ==============================================================
 # 通常
+r"""
+# エラーで落としたいときはこっち使います
 def main():
     # コマンドライン引数 -create で空jsonテンプレ生成
     if len(sys.argv) >= 3 and sys.argv[1] == "-create":
@@ -1745,3 +1770,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+"""

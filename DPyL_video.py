@@ -522,43 +522,54 @@ class VideoItem(QGraphicsVideoItem):
     def delete_self(self):
         """
         VideoItemの安全な削除処理
-        ・停止、シグナル切断、メディア解放、deleteLater
-        ・Sceneからもremove
-        """
-        # 1. 再生停止
-        self.player.stop()
 
-        # 2. シグナル切断
+        1) 先にシーンから自分を外して描画ロックを解除
+        2) 映像・音声出力をデタッチしてから stop()   ← WMFデッドロック回避 ← MainをSafeApp化した状態だとかえってハングアップする
+        3) シグナル切断
+        4) コントロール UI（ctrl_proxy / ctrl_widget）を完全破棄
+        5) メディアソース解放 → プレイヤ／オーディオを deleteLater
+        6) 最後に self を deleteLater
+        """
+        print("STEP-A  remove from scene")
+        if self.scene():                             # ① Scene から外す
+            self.scene().removeItem(self)
+
+        print("STEP-B  detach outputs")              # ② 出力デタッチ
+        #self.player.setVideoOutput(None)            # MainをSafeApp化した状態だとハングアップする
+        #self.player.setAudioOutput(None)            # MainをSafeApp化した状態だとハングアップする
+
+        print("STEP-C  stop player")                 # ③ stop()
+        #self.player.stop()                          # MainをSafeApp化した状態だとハングアップする
+
+        print("STEP-D  disconnect signals")          # ④ シグナル切断
         try:
             self.player.positionChanged.disconnect()
             self.player.durationChanged.disconnect()
         except TypeError:
-            pass  # すでに切断済み
+            pass
 
-        # 3. メディアソース解放
+        print("STEP-E  destroy control UI")          # ⑤ UI の後始末
+        if getattr(self, "ctrl_proxy", None):
+            self.ctrl_proxy.setWidget(None)
+            if self.ctrl_proxy.scene():
+                self.ctrl_proxy.scene().removeItem(self.ctrl_proxy)
+            self.ctrl_proxy.deleteLater()
+            self.ctrl_proxy = None
+
+        if getattr(self, "ctrl_widget", None):
+            self.ctrl_widget.deleteLater()
+            self.ctrl_widget = None
+
+        print("STEP-F  clear source")                # ⑥ メディアソース解放
         self.player.setSource(QUrl())
 
-        # TODO: 画面戦のクラッシュの原因は、ほかにあったあ後で調べる
-        # 4. 出力のデタッチ
-        #    VideoItem の削除中に QMediaPlayer がフレームを
-        #    送出しようとするとクラッシュすることがあるため
-        #    明示的に出力を解除してから破棄する (AI判断)
-        #self.player.setVideoOutput(None)
-        #try:
-        #    self.player.setAudioOutput(None)
-        #except Exception:
-        #    pass
-
-        # 5. プレイヤー/オーディオの破棄
+        print("STEP-G  delete player/audio")         # ⑦ プレイヤ／オーディオ破棄
         self.player.deleteLater()
         self.audio.deleteLater()
-        
-        # 6. シーンから自身を削除
-        if self.scene():
-            self.scene().removeItem(self)
 
-        # 7. 最後に自身もdeleteLaterで非同期削除
+        print("STEP-H  delete self")                 # ⑧ 自身を非同期削除
         self.deleteLater()
+
 
     # --------------------------------------------------------------
     #   右クリックでメニューをMainWindowに委譲
@@ -651,7 +662,8 @@ class VideoItem(QGraphicsVideoItem):
         
     def init_caption(self):
         pass
-        
+            
+
 class VideoItemController:
     """
     VideoItemの削除を同期/非同期で実行するコントローラ
