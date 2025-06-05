@@ -9,7 +9,8 @@ from __future__ import annotations
 import sys, json, base64, os, inspect, traceback
 from datetime import datetime
 from pathlib import Path
-
+import math
+import time
     
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QGraphicsView, QGraphicsScene,
@@ -24,7 +25,7 @@ from PyQt6.QtMultimedia import QMediaPlayer, QAudioOutput
 from PyQt6.QtMultimediaWidgets import QVideoWidget, QGraphicsVideoItem
 from PyQt6.QtGui import (
     QPixmap, QPainter, QBrush, QColor, QPalette, QAction,
-    QIcon, QImage, QPen, QTransform, QFont
+    QIcon, QImage, QPen, QTransform, QFont, QRadialGradient
 )
 from PyQt6.QtCore import (
     Qt, QRectF, QSizeF, QPointF, QFileInfo, QProcess, 
@@ -33,7 +34,7 @@ from PyQt6.QtCore import (
 )
 # --- プロジェクト内モジュール ---
 from DPyL_utils   import (
-    warn, b64e, fetch_favicon_base64,
+    warn, debug_print, b64e, fetch_favicon_base64,
     compose_url_icon, b64encode_pixmap, normalize_unc_path, 
     is_network_drive, _icon_pixmap, _default_icon, _load_pix_or_icon, ICON_SIZE
 )
@@ -52,6 +53,135 @@ from urllib.parse import urlparse
 from DPyL_debug import (my_has_attr,dump_missing_attrs,trace_this)
 
 EXPAND_STEP = 500  # 端に到達したときに拡張する幅・高さ（px）
+
+SHOW_MINIMAP = True
+
+# ==============================================================
+# Water Effect Classes（既存のクラス定義の前に追加）
+# ==============================================================
+
+class WaterRipple:
+    """個々の波紋を表現するクラス"""
+    def __init__(self, x, y, start_time):
+        self.x = x
+        self.y = y
+        self.start_time = start_time
+        self.max_radius = 200  # 最大半径
+        self.speed = 80  # 波の伝播速度 (pixels/second)
+        self.decay_time = 3.0  # 減衰時間（秒）
+        
+    def get_radius(self, current_time):
+        """現在時刻での波紋の半径を取得"""
+        elapsed = current_time - self.start_time
+        if elapsed < 0:
+            return 0
+        return min(elapsed * self.speed, self.max_radius)
+    
+    def get_amplitude(self, current_time):
+        """現在時刻での波の振幅を取得（減衰を考慮）"""
+        elapsed = current_time - self.start_time
+        if elapsed < 0 or elapsed > self.decay_time:
+            return 0
+        return math.exp(-elapsed / self.decay_time * 3)
+    
+    def is_alive(self, current_time):
+        """波紋がまだ有効かどうか"""
+        elapsed = current_time - self.start_time
+        return elapsed < self.decay_time and self.get_radius(current_time) < self.max_radius
+
+
+class WaterEffectItem(QGraphicsItem):
+    """水面エフェクトを描画するQGraphicsItem"""
+    def __init__(self, scene_rect):
+        super().__init__()
+        self.scene_rect = scene_rect
+        self.ripples = []
+        self.setZValue(10000)  # 最前面に表示
+        
+        # アニメーション用タイマー
+        self.timer = QTimer()
+        self.timer.timeout.connect(self.update_animation)
+        self.timer.start(16)  # 約60FPS
+        
+        self.enabled = False
+        
+    def boundingRect(self):
+        return self.scene_rect
+    
+    def add_ripple(self, x, y):
+        """指定座標に新しい波紋を追加"""
+        if not self.enabled:
+            return
+        current_time = time.time()
+        self.ripples.append(WaterRipple(x, y, current_time))
+        self.update()
+    
+    def set_enabled(self, enabled):
+        """エフェクトの有効/無効を切り替え"""
+        self.enabled = enabled
+        if not enabled:
+            self.ripples.clear()
+        self.setVisible(enabled)
+        self.update()
+    
+    def update_animation(self):
+        """アニメーションフレームの更新"""
+        if not self.enabled:
+            return
+            
+        current_time = time.time()
+        self.ripples = [r for r in self.ripples if r.is_alive(current_time)]
+        
+        if self.ripples:
+            self.update()
+    
+    def paint(self, painter, option, widget):
+        if not self.enabled or not self.ripples:
+            return
+            
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        current_time = time.time()
+        
+        for ripple in self.ripples:
+            radius = ripple.get_radius(current_time)
+            amplitude = ripple.get_amplitude(current_time)
+            
+            if radius <= 0 or amplitude <= 0:
+                continue
+            
+            center = QPointF(ripple.x, ripple.y)
+            
+            # 複数の波の輪を描画
+            for i in range(3):
+                wave_radius = radius - i * 15
+                if wave_radius <= 0:
+                    continue
+                    
+                alpha = int(amplitude * 100 * (1 - i * 0.3))
+                if alpha <= 0:
+                    continue
+                
+                # 波の位相を考慮した色の変化
+                phase = (current_time - ripple.start_time) * 8 + i * math.pi / 2
+                color_intensity = int(abs(math.sin(phase)) * alpha)
+                
+                # 波紋の色（青っぽい水の色）
+                color = QColor(100, 150, 255, color_intensity)
+                pen = QPen(color, 2)
+                painter.setPen(pen)
+                
+                # 円形の波紋を描画
+                painter.drawEllipse(center, wave_radius, wave_radius)
+                
+                # 内側のグラデーション効果
+                if i == 0:
+                    gradient = QRadialGradient(center, wave_radius * 0.8)
+                    gradient.setColorAt(0, QColor(150, 200, 255, alpha // 3))
+                    gradient.setColorAt(1, QColor(100, 150, 255, 0))
+                    brush = QBrush(gradient)
+                    painter.setBrush(brush)
+                    painter.setPen(Qt.PenStyle.NoPen)
+                    painter.drawEllipse(center, wave_radius * 0.8, wave_radius * 0.8)
 
 # ==============================================================
 # ミニマップ
@@ -90,6 +220,7 @@ class MiniMapWidget(QWidget):
             scene_rect: QRectF = scene.sceneRect()
         except Exception:
             # QGraphicsScene が削除済みなどでアクセスできない場合は何もしない
+            warn("Exception at updateVisibility")
             return
         view = self.win.view
         if scene_rect.isEmpty():
@@ -136,63 +267,65 @@ class MiniMapWidget(QWidget):
             self._hide_timer.start(3000)
 
     def paintEvent(self, event):
-        #painter = QPainter(self)
-        #painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        painter = QPainter(self)
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        # ① 背景を自力で半透明黒に塗りつぶす
-        painter.fillRect(self.rect(), QColor(0, 0, 0, 150))        
+        try:
+            painter = QPainter(self)
+            painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+            # ① 背景を自力で半透明黒に塗りつぶす
+            painter.fillRect(self.rect(), QColor(0, 0, 0, 150))        
 
-        scene = self.win.scene
-        view = self.win.view
+            scene = self.win.scene
+            view = self.win.view
 
-        # シーン全体の矩形を取得
-        scene_rect: QRectF = scene.sceneRect()
-        if scene_rect.isEmpty():
+            # シーン全体の矩形を取得
+            scene_rect: QRectF = scene.sceneRect()
+            if scene_rect.isEmpty():
+                painter.end()
+                return
+
+            # ミニマップ描画領域の大きさ
+            w_map = self.width()
+            h_map = self.height()
+
+            # シーン全体を縮小してミニマップ内に収めるためのスケールを算出
+            scale_x = w_map / scene_rect.width()
+            scale_y = h_map / scene_rect.height()
+            scale = min(scale_x, scale_y)
+
+            # 縮小後、ミニマップ中央に余白をつくるためのオフセット
+            offset_x = (w_map - scene_rect.width() * scale) / 2
+            offset_y = (h_map - scene_rect.height() * scale) / 2
+
+            # 1) シーン内のオブジェクトを青の半透過矩形で描画
+            pen_item = QPen(QColor(0, 0, 255))
+            brush_item = QBrush(QColor(0, 0, 255, 100))
+            for item in scene.items():
+                try:
+                    rect: QRectF = item.sceneBoundingRect()
+                except Exception:
+                    warn("Exception at paintEvent")
+                    continue
+                x = (rect.x() - scene_rect.x()) * scale + offset_x
+                y = (rect.y() - scene_rect.y()) * scale + offset_y
+                w = rect.width() * scale
+                h = rect.height() * scale
+                painter.setPen(pen_item)
+                painter.setBrush(brush_item)
+                painter.drawRect(QRectF(x, y, w, h))
+
+            # 2) 現在のビューポート範囲を赤い枠で描画
+            visible_scene_rect: QRectF = view.mapToScene(view.viewport().rect()).boundingRect()
+            vx = (visible_scene_rect.x() - scene_rect.x()) * scale + offset_x
+            vy = (visible_scene_rect.y() - scene_rect.y()) * scale + offset_y
+            vw = visible_scene_rect.width() * scale
+            vh = visible_scene_rect.height() * scale
+            pen_view = QPen(QColor(255, 0, 0), 2)
+            painter.setPen(pen_view)
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.drawRect(QRectF(vx, vy, vw, vh))
+
             painter.end()
-            return
-
-        # ミニマップ描画領域の大きさ
-        w_map = self.width()
-        h_map = self.height()
-
-        # シーン全体を縮小してミニマップ内に収めるためのスケールを算出
-        scale_x = w_map / scene_rect.width()
-        scale_y = h_map / scene_rect.height()
-        scale = min(scale_x, scale_y)
-
-        # 縮小後、ミニマップ中央に余白をつくるためのオフセット
-        offset_x = (w_map - scene_rect.width() * scale) / 2
-        offset_y = (h_map - scene_rect.height() * scale) / 2
-
-        # 1) シーン内のオブジェクトを青の半透過矩形で描画
-        pen_item = QPen(QColor(0, 0, 255))
-        brush_item = QBrush(QColor(0, 0, 255, 100))
-        for item in scene.items():
-            try:
-                rect: QRectF = item.sceneBoundingRect()
-            except Exception:
-                continue
-            x = (rect.x() - scene_rect.x()) * scale + offset_x
-            y = (rect.y() - scene_rect.y()) * scale + offset_y
-            w = rect.width() * scale
-            h = rect.height() * scale
-            painter.setPen(pen_item)
-            painter.setBrush(brush_item)
-            painter.drawRect(QRectF(x, y, w, h))
-
-        # 2) 現在のビューポート範囲を赤い枠で描画
-        visible_scene_rect: QRectF = view.mapToScene(view.viewport().rect()).boundingRect()
-        vx = (visible_scene_rect.x() - scene_rect.x()) * scale + offset_x
-        vy = (visible_scene_rect.y() - scene_rect.y()) * scale + offset_y
-        vw = visible_scene_rect.width() * scale
-        vh = visible_scene_rect.height() * scale
-        pen_view = QPen(QColor(255, 0, 0), 2)
-        painter.setPen(pen_view)
-        painter.setBrush(Qt.BrushStyle.NoBrush)
-        painter.drawRect(QRectF(vx, vy, vw, vh))
-
-        painter.end()
+        except Exception as e:
+            warn(f"{e}")
         
 # ==============================================================
 #  CanvasView - キャンバス表示・ドラッグ&ドロップ対応
@@ -205,6 +338,11 @@ class CanvasView(QGraphicsView):
         self._MIN_ZOOM  = 0.2   # 最小 20 %
         self._MAX_ZOOM  = 5.0   # 最大 500 %
         
+        # Water Effect の初期化
+        self.water_effect = None
+        self.water_enabled = False
+        
+        
         self.setAcceptDrops(True)
         self.viewport().setAcceptDrops(True)
         self.setRenderHint(self.renderHints() | self.renderHints().Antialiasing)
@@ -213,6 +351,37 @@ class CanvasView(QGraphicsView):
         self.horizontalScrollBar().valueChanged.connect(self._on_hscroll)
         self.verticalScrollBar().valueChanged.connect(self._on_vscroll)
         
+    def toggle_water_effect(self, enabled):
+        '''Water エフェクトのオン/オフ切り替え'''
+        self.water_enabled = enabled
+        
+        if enabled:
+            if not self.water_effect:
+                # エフェクトアイテムを作成してシーンに追加
+                scene_rect = self.scene().sceneRect()
+                self.water_effect = WaterEffectItem(scene_rect)
+                self.scene().addItem(self.water_effect)
+            self.water_effect.set_enabled(True)
+        else:
+            if self.water_effect:
+                self.water_effect.set_enabled(False)
+             
+    def clear_water_effect(self):
+        """
+        WaterEffectItem をタイマー停止＆シーンから削除して破棄する
+        """
+        if self.water_effect:
+            # タイマーを止める
+            try:
+                self.water_effect.timer.stop()
+            except Exception:
+                warn("Exception at clear_water_effect")
+                pass
+            # シーンから外す
+            if self.water_effect.scene():
+                self.scene().removeItem(self.water_effect)
+            # 参照をクリア
+            self.water_effect = None
     def dragEnterEvent(self, e): 
         # ファイルやURLドロップの受付
         e.acceptProposedAction() if e.mimeData().hasUrls() else super().dragEnterEvent(e)
@@ -238,6 +407,14 @@ class CanvasView(QGraphicsView):
                 scene.setSceneRect(new_rect)
 
     def mousePressEvent(self, ev):
+
+        if self.water_enabled and ev.button() == Qt.MouseButton.LeftButton and self.water_effect:
+            scene_pos = self.mapToScene(ev.position().toPoint())
+            self.water_effect.add_ripple(scene_pos.x(), scene_pos.y())
+            # ※ここで return はしない → 以下で super を呼ぶので、
+            #   アイテム操作やドラッグ（＝スクロール）などはそのまま行われるっす
+
+            
         # 右クリック時、空白エリアならペーストメニュー表示
         if ev.button() == Qt.MouseButton.RightButton:
             pos = ev.position().toPoint()
@@ -258,6 +435,7 @@ class CanvasView(QGraphicsView):
                     elif isinstance(js, list):
                         can_paste = all(isinstance(d, dict) for d in js)
                 except Exception:
+                    warn("Exception at mousePressEvent")
                     pass
 
                 # 静止画 or GIFファイルURL を貼れるように判定
@@ -397,6 +575,12 @@ class CanvasView(QGraphicsView):
     # ──────────────────────────────────────────────
     def mouseDoubleClickEvent(self, event):
         # クリック位置にアイテムが無い＝「空白」とみなす
+        # 現状、直下に何か あっても通ります
+       
+        if not self.scene() or self.scene().sceneRect().isEmpty():
+            warn("⚠️ Scene is not ready, skipping double-click handling")
+            return
+        
         if not self.items(event.position().toPoint()):
             # 現在ズームが 1.0 以外ならリセット
             if self._zoom != 1.0:
@@ -449,9 +633,13 @@ class MainWindow(QMainWindow):
         self.resize(900, 650)
         
         # --- ミニマップを生成して右上に配置 ---
-        self.minimap = MiniMapWidget(self)
-        self.minimap.setParent(self)          # MainWindow 上に重ねる
-        self.minimap.show()
+        if not SHOW_MINIMAP:
+            self.minimap=None
+        else:
+            self.minimap = MiniMapWidget(self)
+            self.minimap.setParent(self)          # MainWindow 上に重ねる
+            self.minimap.show()
+            
         # 初回配置：ウィンドウ幅・高さが確定してから move したいので、
         # 少し遅延させるか、resizeEvent 内で配置し直すのが確実
         self._position_minimap()        
@@ -466,21 +654,24 @@ class MainWindow(QMainWindow):
         #self.view.installEventFilter(self)
         
         # --- スクロールやシーン変更時にミニマップを再描画 / スクロールやシーン変更時に「表示／非表示判定」を行う ---
-        self.view.horizontalScrollBar().valueChanged.connect(self.minimap.updateVisibility)
-        self.view.verticalScrollBar().valueChanged.connect(self.minimap.updateVisibility)
-        self.scene.sceneRectChanged.connect(self.minimap.updateVisibility)
+        if SHOW_MINIMAP:
+            self.view.horizontalScrollBar().valueChanged.connect(self.minimap.updateVisibility)
+            self.view.verticalScrollBar().valueChanged.connect(self.minimap.updateVisibility)
+            self.scene.sceneRectChanged.connect(self.minimap.updateVisibility)
 
-        # ウィンドウサイズ変更時にも「表示／非表示判定」を行う
-        self.resizeEvent  # ← resizeEvent の中で _position_minimap() と一緒に判定されるので不要な場合もある
+            # ウィンドウサイズ変更時にも「表示／非表示判定」を行う
+            self.resizeEvent  # ← resizeEvent の中で _position_minimap() と一緒に判定されるので不要な場合もある
 
-        # --- アプリ起動直後に一度、ミニマップの表示判定を実行 ---
-        QTimer.singleShot(0, self.minimap.updateVisibility)
+            # --- アプリ起動直後に一度、ミニマップの表示判定を実行 ---
+            QTimer.singleShot(0, self.minimap.updateVisibility)
 
     def _position_minimap(self):
         """
         ミニマップを常にウィンドウの右上に配置する。
         余白（マージン）を 10px 程度にして配置。
         """
+        if not SHOW_MINIMAP:
+           return
         margin = 10
         # フレーム幅などを考慮して、QMainWindow のクライアント領域の右上に合わせる
         # self.width(), self.height() はウィンドウ全体サイズなので、
@@ -628,7 +819,7 @@ class MainWindow(QMainWindow):
         # 「オブジェクト追加」ボタン
         menu_obj = QMenu(self)
         act_marker = menu_obj.addAction("マーカー追加")
-        act_note   = menu_obj.addAction("NOTE追加")
+        act_note   = menu_obj.addAction("ノート追加")
         act_marker.triggered.connect(self._add_marker)
         act_note.triggered.connect(self._add_note)
 
@@ -639,6 +830,7 @@ class MainWindow(QMainWindow):
         tb.addWidget(btn_obj)
 
         act("背景", self._background_dialog)
+        self.a_water = act("🌊Water", self._toggle_water_effect, chk=True)        
         
         self.add_toolbar_spacer(tb, width=24)
 
@@ -657,7 +849,9 @@ class MainWindow(QMainWindow):
         act("Exit", self.close)
         
         self._update_nav()
-        
+    def _toggle_water_effect(self, checked):
+        '''Water エフェクトのオン/オフ切り替え'''
+        self.view.toggle_water_effect(checked)
     r"""
     def _on_edit_mode_toggled(self, checked: bool):
         print(f"[DEBUG] 編集モード toggled: {checked}")
@@ -1516,15 +1710,39 @@ class MainWindow(QMainWindow):
         self.loading_label.raise_()
 
     def _do_load_actual(self):
+        # ウォーターモードのcleanupと維持
+        was_water_enabled = False
+        try:
+            # 現在ツールバーのチェックが入っていれば「オン中」
+            was_water_enabled = self.a_water.isChecked()
+        except Exception:
+            was_water_enabled = False
+
+        try:
+            self.view.clear_water_effect()
+        except Exception as e:
+            warn(f"[WATER] clear_water_effect failed: {e}")
+        
         # 既存アイテムを全削除
         for it in list(self.scene.items()):
             self._remove_item(it)
 
+        # ---------------------------
+        # 背景画像付きの空のプロジェクトを読み込むとクラッシュする件の仮の対策
+        # setSceneRect()をするだけだが、現状これが一番安定する
+        self.scene.setSceneRect(QRectF(0, 0, 1,1)) 
+        
+        # 背景削除
+        self.data.pop("background", None)
+        self.bg_pixmap = None
+        self.scene.setBackgroundBrush(QBrush())
+        
+        # ---------------------------        
+        
         # deleteLater キューを即座に実行してゴミを残さない
-        from PyQt6.QtCore import QCoreApplication, QEvent
         QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
 
-        # scene.clear() は二重 free を招きやすいので呼ばない
+        self.scene.clear()
         
         try:
             with open(self.json_path, "r", encoding="utf-8") as f:
@@ -1533,6 +1751,26 @@ class MainWindow(QMainWindow):
             warn(f"LOAD failed: {e}")
             QMessageBox.critical(self, "Error", str(e))
             return
+            
+        # --- items が空、または配列ではない場合は画面遷移だけ行い、以降のアイテム処理をスキップ ---
+        items = self.data.get("items", [])
+        if not isinstance(items, list):
+            warn(f"[LOAD] 'items' が配列ではありません: {type(items).__name__}")
+            return
+
+        if len(items) == 0:
+            self._show_loading(False)
+
+            # ✨ 仮のシーン矩形（Qtの描画クラッシュ回避）
+            if self.scene.sceneRect().isEmpty():
+                warn("_do_load_actual reset setSceneRect")
+                self.scene.setSceneRect(QRectF(0, 0, 1, 1))
+
+            if callable(getattr(self, "_on_load_finished", None)):
+                self._on_load_finished()
+                self._on_load_finished = None
+            return
+           
         # アイテム復元
         for d in self.data.get("items", []):
             cls = self._get_item_class_by_type(d.get("type", ""))
@@ -1606,6 +1844,16 @@ class MainWindow(QMainWindow):
         if callable(getattr(self, "_on_load_finished", None)):
             self._on_load_finished()
             self._on_load_finished = None
+            
+        # ウォーターモードのcleanupと維持    
+        try:
+            if was_water_enabled:
+                # ツールバーのチェックが外れてしまっていたら再チェック
+                self.a_water.setChecked(True)
+                # CanvasView 側にも再度オンを通知して WaterEffectItem を復活
+                self.view.toggle_water_effect(True)
+        except Exception as e:
+            warn(f"[WATER] reload toggle failed: {e}")            
 
        
     def _apply_scene_padding(self, margin: int = 64):
@@ -1781,12 +2029,12 @@ if __name__ == "__main__":
         main()
     finally:
         dump_missing_attrs()
-
+r"""
 # ==============================================================
 #  main - アプリ起動エントリポイント
 # ==============================================================
 # 通常
-r"""
+
 # エラーで落としたいときはこっち使います
 def main():
     # コマンドライン引数 -create で空jsonテンプレ生成

@@ -412,6 +412,7 @@ class LauncherItem(CanvasItem):
                     if fi.get("name") == "desktopPyLauncher.py":
                         return False  # 🏳 JSONItem の担当
             except Exception:
+                warn("Exception at supports_path")
                 pass  # 読めない→普通の JSON とみなす
 
         return ext in (
@@ -557,10 +558,12 @@ class LauncherItem(CanvasItem):
                             try:
                                 icon_index = int(line[10:])
                             except Exception:
+                                warn("Exception at parse_url_shortcut")
                                 pass
                 if url:
                     break
             except Exception as e:
+                warn(f"Exception at parse_url_shortcut.{e}")
                 continue
         return url, icon_file, icon_index
 
@@ -1146,6 +1149,7 @@ class GifItem(CanvasItem):
                     self.movie.frameChanged.disconnect(self._on_frame_changed)
                     self.movie.stop()
                 except Exception:
+                    warn("Exception at on_edit")
                     pass
                 # 新しい QMovie をセットアップ
                 self.path = new_path
@@ -1223,6 +1227,7 @@ class ImageItem(CanvasItem):
             if self.path:
                 os.startfile(self.path)
         except Exception:
+            warn("Exception at on_activate")
             pass
 
     # ImageItem _apply_pixmap
@@ -1353,6 +1358,7 @@ class JSONItem(LauncherItem):
         try:
             os.startfile(str(p))
         except Exception:
+            warn("Exception at on_activate")
             pass
 
 

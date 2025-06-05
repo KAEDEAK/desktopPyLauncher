@@ -46,7 +46,7 @@ from PyQt6.QtCore import (
 from functools import partial
 
 # ───────── internal modules ─────────────────────────────────────
-from DPyL_utils   import warn, ms_to_hms, hms_to_ms, VIDEO_EXTS
+from DPyL_utils   import warn, debug_print, ms_to_hms, hms_to_ms, VIDEO_EXTS
 from DPyL_classes import CanvasResizeGrip
 from DPyL_debug import my_has_attr
 
@@ -531,25 +531,25 @@ class VideoItem(QGraphicsVideoItem):
         6) 最後に self を deleteLater
         
         """
-        print("STEP-A  remove from scene")
+        debug_print("STEP-A  remove from scene")
         if self.scene():                             # ① Scene から外す
             self.scene().removeItem(self)
 
-        print("STEP-B  detach outputs")              # ② 出力デタッチ
+        debug_print("STEP-B  detach outputs")              # ② 出力デタッチ
         #self.player.setVideoOutput(None)            # MainをSafeApp化した状態だとハングアップする
         #self.player.setAudioOutput(None)            # MainをSafeApp化した状態だとハングアップする
 
-        print("STEP-C  stop player")                 # ③ stop()
+        debug_print("STEP-C  stop player")                 # ③ stop()
         #self.player.stop()                          # MainをSafeApp化した状態だとハングアップする
 
-        print("STEP-D  disconnect signals")          # ④ シグナル切断
+        debug_print("STEP-D  disconnect signals")          # ④ シグナル切断
         try:
             self.player.positionChanged.disconnect()
             self.player.durationChanged.disconnect()
         except TypeError:
             pass
 
-        print("STEP-E  destroy control UI")          # ⑤ UI の後始末
+        debug_print("STEP-E  destroy control UI")          # ⑤ UI の後始末
         if getattr(self, "ctrl_proxy", None):
             self.ctrl_proxy.setWidget(None)
             if self.ctrl_proxy.scene():
@@ -561,14 +561,14 @@ class VideoItem(QGraphicsVideoItem):
             self.ctrl_widget.deleteLater()
             self.ctrl_widget = None
 
-        print("STEP-F  clear source")                # ⑥ メディアソース解放
+        debug_print("STEP-F  clear source")                # ⑥ メディアソース解放
         self.player.setSource(QUrl())
 
-        print("STEP-G  delete player/audio")         # ⑦ プレイヤ／オーディオ破棄
+        debug_print("STEP-G  delete player/audio")         # ⑦ プレイヤ／オーディオ破棄
         self.player.deleteLater()
         self.audio.deleteLater()
 
-        print("STEP-H  delete self")                 # ⑧ 自身を非同期削除
+        debug_print("STEP-H  delete self")                 # ⑧ 自身を非同期削除
         self.deleteLater()
 
 

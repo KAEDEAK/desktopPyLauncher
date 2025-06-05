@@ -23,6 +23,8 @@ from DPyL_debug import my_has_attr
 
 # ────────────────────────────── 定数 ──────────────────────────────
 DEBUG_MODE = any(arg == "-debug" for arg in sys.argv)
+if DEBUG_MODE:
+    print("DEBUG_MODE")
 
 ICON_SIZE          = 48
 IMAGE_EXTS         = (".png", ".jpg", ".jpeg", ".bmp", ".gif")
@@ -37,6 +39,11 @@ def warn(msg: str) -> None:
     """-debug指定時のみstderrへ警告出力"""
     if DEBUG_MODE:
         print(f"[WARN] {msg}", file=sys.stderr)
+        
+def debug_print(msg: str) -> None:
+    """-debug指定時のみstderrへ警告出力"""
+    if DEBUG_MODE:
+        print(f"[DEBUG] {msg}", file=sys.stderr)
 
 b64e = lambda s: base64.b64encode(s.encode("utf-8")).decode("ascii")
 
@@ -389,7 +396,7 @@ def _load_pix_or_icon(src: str, idx: int = 0, icon_sz: int = ICON_SIZE) -> QPixm
 # ────────────────────────────── __all__ ──────────────────────────────
 __all__ = [
     # 基本ユーティリティ
-    "warn", "b64e", "b64d",
+    "warn", "debug_print", "b64e", "b64d",
     "ms_to_hms_ms", "hms_to_ms", "ms_to_hms",
     "is_network_drive", "fetch_favicon_base64",
     # アイコン関連
