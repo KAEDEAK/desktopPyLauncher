@@ -44,7 +44,7 @@ from DPyL_classes import (
     BackgroundDialog
 )
 
-from DPyL_note    import NoteItem
+from DPyL_note    import (NoteItem,NOTE_BG_COLOR,NOTE_FG_COLOR)
 from DPyL_video   import VideoItem
 from DPyL_marker import MarkerItem
 from configparser import ConfigParser
@@ -543,9 +543,12 @@ class CanvasView(QGraphicsView):
             # 左方向に広げたぶん、スクロール位置をシフトさせる
             hbar.setRange(int(new_rect.x()), int(new_rect.x() + new_rect.width() - self.viewport().width()))
             hbar.setValue(hbar.minimum() + EXPAND_STEP)
-    # ──────────────────────────────────────────────
+    # --------------------------------------------------------------
     #   Ctrl + ホイール でビューをズーム
-    # ──────────────────────────────────────────────
+    # --------------------------------------------------------------
+    r"""
+    # 2025-06-07 以前の挙動
+    # config とか 実行時引数で選べるようにするかも
     def wheelEvent(self, event):
         if event.modifiers() & Qt.KeyboardModifier.ControlModifier:
             delta = event.angleDelta().y()
@@ -569,10 +572,58 @@ class CanvasView(QGraphicsView):
             event.accept()
         else:
             super().wheelEvent(event)
-            
-    # ──────────────────────────────────────────────
+    """
+    # --------------------------------------------------------------
+    #   ホイール でビューをズーム（NoteItemスクロールモード考慮）
+    # --------------------------------------------------------------
+    def wheelEvent(self, event):
+        # NoteItemのスクロールモードチェック
+        pos = event.position().toPoint()
+        scene_pos = self.mapToScene(pos)
+        items = self.scene().items(scene_pos)
+        
+        # マウス位置にあるNoteItemで_scroll_ready=Trueのものがあれば直接スクロール処理
+        for item in items:
+            if hasattr(item, 'TYPE_NAME') and item.TYPE_NAME == "note":
+                if getattr(item, '_scroll_ready', False):
+                    debug_print(f"CanvasView: Found _scroll_ready=True NoteItem, processing scroll")
+                    # NoteItemのスクロール処理を直接実行
+                    delta = event.angleDelta().y()
+                    if delta != 0:
+                        step_px = 40  # 1 ステップあたりの移動量
+                        old_offset = item.scroll_offset
+                        new_offset = old_offset - int(delta / 120 * step_px)
+                        item.set_scroll(new_offset)
+                        debug_print(f"CanvasView: Scrolled from {old_offset} to {new_offset}")
+                    event.accept()
+                    return
+                else:
+                    debug_print(f"CanvasView: Found NoteItem but _scroll_ready=False")
+        
+        debug_print("CanvasView: No scroll-ready NoteItem, doing zoom")
+        # 通常の拡大縮小処理
+        delta = event.angleDelta().y()
+        if delta == 0:
+            return
+
+        # 拡大／縮小倍率を決定
+        step_factor = 1.25 if delta > 0 else 0.8
+        new_zoom = self._zoom * step_factor
+        if not (self._MIN_ZOOM <= new_zoom <= self._MAX_ZOOM):
+            return  # 制限外は無視
+
+        # ズーム中心をマウス位置に合わせる
+        old_pos = self.mapToScene(event.position().toPoint())
+        self._zoom = new_zoom
+        self.scale(step_factor, step_factor)
+        new_pos = self.mapToScene(event.position().toPoint())
+        diff = new_pos - old_pos
+        self.translate(diff.x(), diff.y())
+
+        event.accept()
+    # ----------------------------------------------
     #   何もない所をダブルクリック → ズーム 100 % に戻す
-    # ──────────────────────────────────────────────
+    # ----------------------------------------------
     def mouseDoubleClickEvent(self, event):
         # クリック位置にアイテムが無い＝「空白」とみなす
         # 現状、直下に何か あっても通ります
@@ -1522,7 +1573,7 @@ class MainWindow(QMainWindow):
         sp = self.view.mapToScene(self.view.viewport().rect().center())
         d = {"type": "note", "x": sp.x(), "y": sp.y(),
              "width": 200, "height": 120, "note": b64e("New note"),
-             "isLabel": False, "color": "#000000", "fontsize": 14,
+             "isLabel": False, "color": NOTE_FG_COLOR, "fontsize": 14,
              "noteType": "text"}
         it = NoteItem(d, self.text_color)
         self.scene.addItem(it)

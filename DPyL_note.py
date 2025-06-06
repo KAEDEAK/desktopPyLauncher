@@ -54,6 +54,8 @@ MD_EXT: List[str] = [
     "tables",
 ]
 
+NOTE_BG_COLOR = "#323334"
+NOTE_FG_COLOR = "#CCCACD"
 # =====================================================================
 #   NoteItem
 # =====================================================================
@@ -206,7 +208,7 @@ class NoteItem(CanvasItem):
 
             # 背景色と枠線設定
             if self.fill_bg:
-                bgcol = QColor(self.d.get("bgcolor", "#777777"))
+                bgcol = QColor(self.d.get("bgcolor", NOTE_BG_COLOR))
                 self._rect_item.setBrush(QBrush(bgcol))
                 self._rect_item.setPen(QPen(Qt.GlobalColor.black))
                 self._rect_item.setZValue(-1)
@@ -355,6 +357,7 @@ class NoteItem(CanvasItem):
     # --------------------------------------------------------------
     #   実行モード : ホイールスクロール
     # --------------------------------------------------------------
+    r"""
     def wheelEvent(self, ev: QGraphicsSceneWheelEvent):
         # --- 編集モードは素通り ---
         if not getattr(self, "run_mode", False):
@@ -372,7 +375,33 @@ class NoteItem(CanvasItem):
         step_px = 40                # 1 ステップあたりの移動量
         self.set_scroll(self.scroll_offset - int(delta / 120 * step_px))
         ev.accept()
+    """
 
+    def wheelEvent(self, ev: QGraphicsSceneWheelEvent):
+        debug_print(f"NoteItem.wheelEvent called: run_mode={getattr(self, 'run_mode', False)}, _scroll_ready={getattr(self, '_scroll_ready', False)}")
+        
+        # --- 編集モードは素通り ---
+        if not getattr(self, "run_mode", False):
+            return super().wheelEvent(ev)
+
+        # --- _scroll_ready の状態で分岐（ドラッグと同じロジック） ---
+        if self._scroll_ready:
+            debug_print("NoteItem: Processing scroll")
+            # ノート内容のスクロール
+            delta = ev.delta()          # ±120 が 1 ステップ
+            if delta == 0:
+                return
+
+            step_px = 40                # 1 ステップあたりの移動量
+            old_offset = self.scroll_offset
+            new_offset = old_offset - int(delta / 120 * step_px)
+            self.set_scroll(new_offset)
+            debug_print(f"NoteItem: Scrolled from {old_offset} to {new_offset}")
+            ev.accept()
+        else:
+            debug_print("NoteItem: _scroll_ready=False, doing nothing")
+            # _scroll_ready=Falseの時は何もしない（CanvasViewの拡大縮小に任せる）
+            return
 # =====================================================================
 #   NoteEditDialog
 # =====================================================================
@@ -424,7 +453,7 @@ class NoteEditDialog(QDialog):
             h.addWidget(widget, 1)
             return h
 
-        self.ed_bg = QLineEdit(self.d.get("bgcolor", "#777777"))
+        self.ed_bg = QLineEdit(self.d.get("bgcolor", NOTE_BG_COLOR))
         vbox.addLayout(_hl("背景色 (#RRGGBB)", self.ed_bg))
 
         self.ed_color = QLineEdit(self.d.get("color", "#ffffff"))
@@ -511,7 +540,7 @@ class NoteEditDialog(QDialog):
             wrapped = f'<div style="color:{color_hex};">{html}</div>'
             self.lbl_prev.setText(wrapped)
             # 背景色はスタイルシートで指定
-            bg = self.ed_bg.text().strip() or "#777777"
+            bg = self.ed_bg.text().strip() or NOTE_BG_COLOR
             self.lbl_prev.setStyleSheet(f"background:{bg}; padding:6px;")
         else:
             # プレーンテキストの場合はエスケープして表示
@@ -529,7 +558,7 @@ class NoteEditDialog(QDialog):
         self.d["format"] = "markdown" if self.chk_md.isChecked() else "text"
         self.d["text"] = self.txt_edit.toPlainText()
         self.d["fill_background"] = self.chk_bg.isChecked()
-        self.d["bgcolor"] = self.ed_bg.text().strip() or "#777777"
+        self.d["bgcolor"] = self.ed_bg.text().strip() or NOTE_BG_COLOR
         self.d["fontsize"] = self.spin_font.value()
         self.d["color"] = self.ed_color.text().strip() or "#ffffff"
 
