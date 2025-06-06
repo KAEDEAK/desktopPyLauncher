@@ -174,14 +174,18 @@ class CanvasItem(QGraphicsItemGroup):
 
         # 位置変更時はスナップ補正
         elif change == QGraphicsItem.GraphicsItemChange.ItemPositionChange:
-            if my_has_attr(self.scene(), "views") and self.scene().views():
+            # ロード中のスナップを無効化
+            if (my_has_attr(self.scene(), "views") and self.scene().views() and
+                not getattr(self.scene().views()[0].window(), "_loading_in_progress", False)):
                 view = self.scene().views()[0]
                 if my_has_attr(view, "win") and my_has_attr(view.win, "snap_position"):
                     return view.win.snap_position(self, value)
 
         # 位置確定時はself.dへ座標保存＋グリップ位置更新
         elif change == QGraphicsItem.GraphicsItemChange.ItemPositionHasChanged:
-            self.d["x"], self.d["y"] = self.pos().x(), self.pos().y()
+            # 浮動小数点のまま保存
+            pos = self.pos()
+            self.d["x"], self.d["y"] = pos.x(), pos.y()
             self._update_grip_pos()
 
         # 変形（リサイズ）時のコールバック処理
@@ -202,6 +206,7 @@ class CanvasItem(QGraphicsItemGroup):
                 value.addItem(self.grip)
 
         return super().itemChange(change, value)
+
 
     def _update_grip_pos(self):
         # グリップを矩形右下へ配置

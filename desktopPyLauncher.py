@@ -1710,10 +1710,12 @@ class MainWindow(QMainWindow):
         self.loading_label.raise_()
 
     def _do_load_actual(self):
+        # ロード中フラグを設定してスナップを無効化
+        self._loading_in_progress = True
+        
         # ウォーターモードのcleanupと維持
         was_water_enabled = False
         try:
-            # 現在ツールバーのチェックが入っていれば「オン中」
             was_water_enabled = self.a_water.isChecked()
         except Exception:
             was_water_enabled = False
@@ -1727,7 +1729,6 @@ class MainWindow(QMainWindow):
         for it in list(self.scene.items()):
             self._remove_item(it)
 
-        # ---------------------------
         # 背景画像付きの空のプロジェクトを読み込むとクラッシュする件の仮の対策
         # setSceneRect()をするだけだが、現状これが一番安定する
         self.scene.setSceneRect(QRectF(0, 0, 1,1)) 
@@ -1737,11 +1738,7 @@ class MainWindow(QMainWindow):
         self.bg_pixmap = None
         self.scene.setBackgroundBrush(QBrush())
         
-        # ---------------------------        
-        
-        # deleteLater キューを即座に実行してゴミを残さない
         QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
-
         self.scene.clear()
         
         try:
@@ -1750,22 +1747,22 @@ class MainWindow(QMainWindow):
         except Exception as e:
             warn(f"LOAD failed: {e}")
             QMessageBox.critical(self, "Error", str(e))
+            self._loading_in_progress = False
             return
             
-        # --- items が空、または配列ではない場合は画面遷移だけ行い、以降のアイテム処理をスキップ ---
         items = self.data.get("items", [])
         if not isinstance(items, list):
             warn(f"[LOAD] 'items' が配列ではありません: {type(items).__name__}")
+            self._loading_in_progress = False
             return
 
         if len(items) == 0:
             self._show_loading(False)
-
-            # ✨ 仮のシーン矩形（Qtの描画クラッシュ回避）
+            # 仮のシーン矩形（Qtの描画クラッシュ回避）
             if self.scene.sceneRect().isEmpty():
                 warn("_do_load_actual reset setSceneRect")
                 self.scene.setSceneRect(QRectF(0, 0, 1, 1))
-
+            self._loading_in_progress = False
             if callable(getattr(self, "_on_load_finished", None)):
                 self._on_load_finished()
                 self._on_load_finished = None
@@ -1797,10 +1794,13 @@ class MainWindow(QMainWindow):
                 warn(f"[LOAD] {cls.__name__} create failed: {e}")
                 continue
 
-            # ---- 共通後処理 ----
             it.setZValue(d.get("z", 0))
             self.scene.addItem(it)
-            it.setPos(d.get("x", 0), d.get("y", 0))
+            
+            # ★ 修正: JSONの座標をそのまま使用（シフト処理なし）
+            x, y = d.get("x", 0), d.get("y", 0)
+            it.setPos(x, y)
+            warn(f"[LOAD] Restored {it.__class__.__name__} at ({x}, {y})")
             
             # MarkerItem は初期配置時にグリップをシーンに追加する必要があるため
             if isinstance(it, MarkerItem) and it.grip.scene() is None:
@@ -1811,6 +1811,9 @@ class MainWindow(QMainWindow):
             if isinstance(it, VideoItem) and it.video_resize_dots.scene() is None:
                 self.scene.addItem(it.video_resize_dots)
 
+        # ロードフラグをクリア
+        self._loading_in_progress = False
+
         # ウィンドウジオメトリ復元
         if not self._ignore_window_geom and (geo := self.data.get("window_geom")):
             try:
@@ -1819,42 +1822,26 @@ class MainWindow(QMainWindow):
                 warn(f"Geometry restore failed: {e}")
 
         self._apply_background()
-        # _set_modeは呼び出し元で維持
 
-        # --- アイテム群を左上へシフト ---
-        #items = [it for it in self.scene.items() if my_has_attr(it, "d")]
-        items = [it for it in self.scene.items() if isinstance(it, (CanvasItem, VideoItem))]
-        if items:
-            min_x = min((it.x() for it in items), default=0)
-            min_y = min((it.y() for it in items), default=0)
-            dx = 50 - min_x
-            dy = 50 - min_y
-            for it in items:
-                it.setPos(it.x() + dx, it.y() + dy)
-        self._apply_scene_padding()
+        # ★ 修正: 「左上シフト」処理を完全に削除
+        # 保存時に座標正規化されているので、ロード時は何もしない
         
-        #  開始地点へスクロール
+        self._apply_scene_padding()
         self._scroll_to_start_marker()        
 
-
-        # --- ローディング完了後、ラベル非表示 ---
         self._show_loading(False)
 
-        # --- 完了後の処理呼び出し ---
         if callable(getattr(self, "_on_load_finished", None)):
             self._on_load_finished()
             self._on_load_finished = None
             
-        # ウォーターモードのcleanupと維持    
+        # ウォーターモード復元    
         try:
             if was_water_enabled:
-                # ツールバーのチェックが外れてしまっていたら再チェック
                 self.a_water.setChecked(True)
-                # CanvasView 側にも再度オンを通知して WaterEffectItem を復活
                 self.view.toggle_water_effect(True)
         except Exception as e:
-            warn(f"[WATER] reload toggle failed: {e}")            
-
+            warn(f"[WATER] reload toggle failed: {e}")
        
     def _apply_scene_padding(self, margin: int = 64):
         """シーン全体のバウンディングボックスを計算し中央寄せ"""
@@ -1886,7 +1873,36 @@ class MainWindow(QMainWindow):
 
     # --- セーブ処理 ---
     def _save(self, *, auto=False):
-        # 位置・サイズ・Z値等をdに反映
+        # ★ 修正: 保存時に座標系を正規化
+        items_list = [it for it in self.scene.items() if isinstance(it, (CanvasItem, VideoItem))]
+        
+        if items_list:
+            # 1. 現在の全アイテムの座標を取得
+            current_positions = []
+            for it in items_list:
+                pos = it.pos()
+                current_positions.append((it, pos.x(), pos.y()))
+            
+            # 2. 最小のx, yを求める
+            min_x = min((x for _, x, y in current_positions), default=0)
+            min_y = min((y for _, x, y in current_positions), default=0)
+            
+            # 3. 負の座標がある場合、全アイテムを正の座標系にシフト
+            if min_x < 0 or min_y < 0:
+                dx = 50 - min_x if min_x < 0 else 0
+                dy = 50 - min_y if min_y < 0 else 0
+                
+                warn(f"[SAVE] Normalizing coordinates: shifting by dx={dx}, dy={dy}")
+                
+                # 4. 全アイテムを一律にシフト
+                for it, old_x, old_y in current_positions:
+                    new_x = old_x + dx
+                    new_y = old_y + dy
+                    it.setPos(new_x, new_y)
+            else:
+                warn(f"[SAVE] No coordinate normalization needed (min_x={min_x}, min_y={min_y})")
+        
+        # 5. シフト後の座標をJSONに保存
         for it in self.scene.items():
             if not isinstance(it, (CanvasItem, VideoItem)):
                 continue
@@ -1896,7 +1912,6 @@ class MainWindow(QMainWindow):
 
             #r = it.rect() #謎い。d[] は最新のはず
             #it.d["width"], it.d["height"] = r.width(), r.height()
-
             it.d["z"] = it.zValue()
 
             if isinstance(it, VideoItem):
