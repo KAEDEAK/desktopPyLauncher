@@ -1124,10 +1124,10 @@ class MainWindow(QMainWindow):
                 warn("元サイズが無効")
                 return
 
-            if fit_axis == "v":            # ★ 高さ基準
+            if fit_axis == "v":            # 高さ基準
                 scale = cur_h / orig_h
                 w, h = int(orig_w * scale), int(cur_h)
-            else:                          # ★ 幅基準
+            else:                          # 幅基準
                 scale = cur_w / orig_w
                 w, h = int(cur_w), int(orig_h * scale)
 
@@ -1438,7 +1438,7 @@ class MainWindow(QMainWindow):
     def handle_drop(self, e):
         """
         URL / ファイルドロップ共通ハンドラ
-        * http(s) URL           → favicon 付き LauncherItem   ←★ NEW: 最優先
+        * http(s) URL           → favicon 付き LauncherItem   ←最優先
         * ネットワークドライブ   → 専用 LauncherItem
         * CanvasItem レジストリ → 自動判定で生成
         ドロップ後は全体を編集モードへ強制切替！
@@ -1456,7 +1456,7 @@ class MainWindow(QMainWindow):
                     self.scene.addItem(it); self.data["items"].append(d)
                     added_any = True
                     added_items.append(it)
-                continue          # ★ GenericFileItem へフォールバックさせない
+                continue          # GenericFileItem へフォールバックさせない
 
             # ② ローカルパス判定 ------------------------------------
             raw_path = url.toLocalFile().strip()
@@ -1848,7 +1848,7 @@ class MainWindow(QMainWindow):
             it.setZValue(d.get("z", 0))
             self.scene.addItem(it)
             
-            # ★ 修正: JSONの座標をそのまま使用（シフト処理なし）
+            # JSONの座標をそのまま使用（シフト処理なし）
             x, y = d.get("x", 0), d.get("y", 0)
             it.setPos(x, y)
             warn(f"[LOAD] Restored {it.__class__.__name__} at ({x}, {y})")
@@ -1873,12 +1873,10 @@ class MainWindow(QMainWindow):
                 warn(f"Geometry restore failed: {e}")
 
         self._apply_background()
-
-        # ★ 修正: 「左上シフト」処理を完全に削除
-        # 保存時に座標正規化されているので、ロード時は何もしない
-        
         self._apply_scene_padding()
-        self._scroll_to_start_marker()        
+        
+        self._scroll_to_start_marker()
+        #QTimer.singleShot(100, self._scroll_to_start_marker) #遅延処理 (今は必要ない)
 
         self._show_loading(False)
 
@@ -1924,7 +1922,7 @@ class MainWindow(QMainWindow):
 
     # --- セーブ処理 ---
     def _save(self, *, auto=False):
-        # ★ 修正: 保存時に座標系を正規化
+        # 保存時に座標系を正規化
         items_list = [it for it in self.scene.items() if isinstance(it, (CanvasItem, VideoItem))]
         
         if items_list:
@@ -1982,6 +1980,7 @@ class MainWindow(QMainWindow):
                 QMessageBox.information(self, "SAVE", "保存しました！")
         except Exception as e:
             QMessageBox.critical(self, "SAVE", str(e))
+
 # ==============================================================
 #  private helpers
 # ==============================================================
@@ -1996,26 +1995,52 @@ class MainWindow(QMainWindow):
                 key=lambda m: int(m.d.get("id", 0))
             )
             if not start_markers:
+                warn("[SCROLL] 開始地点のマーカーが見つかりません")
                 return
 
             m   = start_markers[0]
             sp  = m.scenePos()
-            w   = int(m.d.get("width",  32))
-            h   = int(m.d.get("height", 32))
+            
+            # 画面上での実際の描画領域を取得（キャプション分も含む）
+            bounding_rect = m.boundingRect()
+            w = bounding_rect.width()
+            h = bounding_rect.height()
             aln = m.d.get("align", "左上")
+            
+            warn(f"[SCROLL] マーカーID {m.d.get('id')}: 位置({sp.x()}, {sp.y()}), 実際のサイズ{w}x{h}, 配置: {aln}")
 
             if aln == "中央":
                 # ── ビューポート中央寄せ ───────────────────
-                self.view.centerOn(sp.x() + w/2, sp.y() + h/2)
+                # マーカーの中心座標を計算（実際の描画領域の中心）
+                marker_center_x = sp.x() + w/2
+                marker_center_y = sp.y() + h/2
+                warn(f"[SCROLL] 中央配置: マーカー中心座標 ({marker_center_x}, {marker_center_y})")
+                
+                # centerOnを実行
+                self.view.centerOn(marker_center_x, marker_center_y)
+                
+                # 少し遅延させてもう一度確実に実行 (今は必要ない)
+                #QTimer.singleShot(50, lambda: self.view.centerOn(marker_center_x, marker_center_y))
+                
             else:
                 # ── 左上寄せ ─────────────────────────────
                 # ビューポート寸法をシーン座標へ変換（ズーム倍率対応）
-                vp_w = self.view.viewport().width()  / self.view.transform().m11()
-                vp_h = self.view.viewport().height() / self.view.transform().m22()
-                # 対象点を (vp_w/2 , vp_h/2) だけ手前にずらして centerOn
-                self.view.centerOn(sp.x() + vp_w/2, sp.y() + vp_h/2)
+                transform = self.view.transform()
+                vp_w = self.view.viewport().width()  / transform.m11()
+                vp_h = self.view.viewport().height() / transform.m22()
+                
+                # マーカーの左上をビューポートの左上に配置するため、
+                # ビューポートの中央座標をマーカーの左上からオフセット
+                target_x = sp.x() + vp_w/2
+                target_y = sp.y() + vp_h/2
+                
+                warn(f"[SCROLL] 左上配置: 目標座標 ({target_x}, {target_y}), ビューポート {vp_w}x{vp_h}")
+                self.view.centerOn(target_x, target_y)
+                
         except Exception as e:
-            warn(f"[SCROLL] start-marker failed: {e}")
+            warn(f"[SCROLL] 開始地点へのスクロールに失敗: {e}")
+            import traceback
+            traceback.print_exc()
 
 # ==============================================================
 #  App helper - 補助関数

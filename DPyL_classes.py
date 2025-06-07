@@ -683,7 +683,7 @@ class LauncherItem(CanvasItem):
                 pix.loadFromData(b64decode(self.embed))
             else:
                 src = self.d.get("icon") or self.path
-                # ★ 画像ファイルなら QPixmap で直接読み込む
+                # 画像ファイルなら QPixmap で直接読み込む
                 if src and Path(src).suffix.lower() in IMAGE_EXTS:
                     pix = QPixmap(src)
                 else:
@@ -1013,7 +1013,7 @@ class GifItem(CanvasItem):
 
         self._pix_item.setPixmap(cropped)
         self._rect_item.setRect(0, 0, target_w, target_h)
-        # --- ★ 明るさ補正ここから -------------------------------
+        # --- 明るさ補正ここから -------------------------------
         bri = getattr(self, "brightness", 50)
         if bri != 50:
             level = bri - 50
@@ -1033,7 +1033,7 @@ class GifItem(CanvasItem):
             p2.end()
 
             self._pix_item.setPixmap(result)
-        # --- ★ 明るさ補正ここまで -------------------------------
+        # --- 明るさ補正ここまで -------------------------------
         # --- 明るさ補正を適用 -----------------
         pm_final = self._apply_bri_to_pixmap(cropped, self.brightness)
         self._pix_item.setPixmap(pm_final)
@@ -1813,7 +1813,7 @@ class LauncherEditDialog(QDialog):
                     or "")
             idx = self.spin_index.value()
 
-            # ★ 画像ファイルならダイレクトに読む！
+            # 画像ファイルならダイレクトに読む！
             if path and Path(path).suffix.lower() in (".png", ".jpg", ".jpeg", ".bmp", ".gif"):
                 pm = QPixmap(path)
             else:
@@ -1916,7 +1916,7 @@ class LauncherEditDialog(QDialog):
                     self.le_icon.clear()
                     self.spin_index.setValue(0)
 
-                    # ★ここ重要！ 表示はクロップ＆縦横比維持で
+                    # 表示はクロップ＆縦横比維持で
                     self._update_preview()
                     return
 
