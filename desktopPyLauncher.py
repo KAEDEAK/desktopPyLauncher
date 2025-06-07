@@ -1213,7 +1213,26 @@ class MainWindow(QMainWindow):
             #return
         # --- 削除 ---
         elif sel == act_del:
-            self._remove_item(item)
+            # 複数選択対応：選択されているすべてのアイテムを削除
+            selected_items = [it for it in self.scene.selectedItems() 
+                             if isinstance(it, (CanvasItem, VideoItem))]
+            
+            if len(selected_items) > 1:
+                # 複数選択の場合は確認ダイアログを表示
+                reply = QMessageBox.question(
+                    self, 
+                    "複数削除の確認", 
+                    f"{len(selected_items)}個のアイテムを削除しますか？",
+                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                    QMessageBox.StandardButton.No
+                )
+                if reply != QMessageBox.StandardButton.Yes:
+                    ev.accept()
+                    return
+            
+            # 選択されているアイテムをすべて削除
+            for selected_item in selected_items:
+                self._remove_item(selected_item)
 
         ev.accept()
 
