@@ -14,7 +14,8 @@ from __future__ import annotations
 from typing import Any, Optional, Dict, List
 from PyQt6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit,
-    QPushButton, QCheckBox, QComboBox, QMessageBox
+    QPushButton, QCheckBox, QListWidget, QListWidgetItem,
+    QTextEdit, QMessageBox, QSpinBox
 )
 from PyQt6.QtGui import QColor, QBrush
 from PyQt6.QtCore import Qt, QPointF, QRectF
@@ -97,7 +98,7 @@ class GroupItem(MarkerItem):
             self._last_group_pos = self.pos()
             
     def _update_bounds(self):
-        """内包するアイテムに基づいてバウンディングボックスを更新"""
+        """GroupItem / 内包するアイテムに基づいてバウンディングボックスを更新"""
         if not self.child_items:
             # 子アイテムがない場合はデフォルトサイズ
             self.resize_content(100, 100)
@@ -143,19 +144,23 @@ class GroupItem(MarkerItem):
         self._updating_bounds = False
         
     def restore_child_items(self, scene):
-        """シーンからIDに基づいて子アイテムを復元"""
-        self.child_items.clear()
-        
-        for item_id in self.child_item_ids:
-            for scene_item in scene.items():
-                if (hasattr(scene_item, 'd') and 
-                    scene_item.d.get('id') == item_id and
-                    scene_item != self):
-                    self.child_items.append(scene_item)
-                    break
-                    
-        # 現在位置を記録（ロード時の初期化）
-        self._last_pos = self.pos()
+            """
+            ロード時に子アイテムの関係を復元
+            """
+            self.child_items = []
+            
+            for item_id in self.child_item_ids:
+                # シーン内のアイテムを検索
+                for scene_item in scene.items():
+                    if (isinstance(scene_item, (CanvasItem, VideoItem)) and 
+                        hasattr(scene_item, 'd') and 
+                        scene_item.d.get('id') == item_id):
+                        
+                        self.child_items.append(scene_item)
+                        break
+            
+            # 復元時も_last_group_posを初期化
+            self._last_group_pos = self.pos()
                     
     def mousePressEvent(self, event):
         """マウス押下時の処理"""
@@ -300,87 +305,228 @@ class GroupItem(MarkerItem):
 # ==============================================================
 #   GroupEditDialog
 # ==============================================================
+
 class GroupEditDialog(QDialog):
-    """
-    グループの各プロパティを編集するダイアログ
-    """
-    def __init__(self, item: GroupItem):
-        super().__init__(item.scene().views()[0])
+    def __init__(self, group_item, parent=None):
+        super().__init__(parent)
+        # ★重要：self.item を設定★
+        self.item = group_item
+        self.d = group_item.d
+        
         self.setWindowTitle("グループ設定")
-        self.item = item
-        self.d = item.d
+        self.setModal(True)
+        self.resize(400, 500)
         self._build_ui()
 
     def _build_ui(self):
+        """GroupEditDialogのUI構築"""
         vbox = QVBoxLayout(self)
-
-        # グループID
-        h_id = QHBoxLayout()
-        h_id.addWidget(QLabel("グループID"))
-        self.ed_id = QLineEdit(str(self.d.get("id", "")))
-        h_id.addWidget(self.ed_id, 1)
-        vbox.addLayout(h_id)
-
-        # キャプション
-        h_cap = QHBoxLayout()
-        h_cap.addWidget(QLabel("キャプション"))
-        self.ed_cap = QLineEdit(self.d.get("caption", ""))
-        h_cap.addWidget(self.ed_cap, 1)
-        vbox.addLayout(h_cap)
-
-        # キャプション表示・非表示設定
+        
+        # キャプション設定
+        h_caption = QHBoxLayout()
+        h_caption.addWidget(QLabel("キャプション:"))
+        self.edit_caption = QLineEdit(self.d.get("caption", ""))
+        h_caption.addWidget(self.edit_caption, 1)
+        vbox.addLayout(h_caption)
+        
+        # キャプション表示設定
         self.chk_show_caption = QCheckBox("キャプションを表示")
-        self.chk_show_caption.setChecked(bool(self.d.get("show_caption", True)))
-        # ★修正：addLayout → addWidget★
-        vbox.addWidget(self.chk_show_caption)
+        self.chk_show_caption.setChecked(self.d.get("show_caption", True))
+        vbox.addWidget(self.chk_show_caption)  # addWidget を使用
+        
+        # Z値（レイヤー順序）設定
+        h_z_value = QHBoxLayout()
+        h_z_value.addWidget(QLabel("レイヤー順序:"))
+        self.spin_z_value = QSpinBox()
+        self.spin_z_value.setRange(-10000, 10000)
+        self.spin_z_value.setValue(int(self.d.get("z", -1000)))
+        h_z_value.addWidget(self.spin_z_value)
+        h_z_value.addStretch(1)
+        vbox.addLayout(h_z_value)
+        
+        # グループの説明
+        vbox.addWidget(QLabel("説明:"))
+        self.edit_description = QTextEdit()
+        self.edit_description.setMaximumHeight(80)
+        self.edit_description.setPlaceholderText("グループの説明...")
+        self.edit_description.setPlainText(self.d.get("description", ""))
+        vbox.addWidget(self.edit_description)
+        
+        # 子アイテム一覧
+        vbox.addWidget(QLabel("含まれるアイテム:"))
+        self.list_children = QListWidget()
+        self.list_children.setMaximumHeight(120)
+        vbox.addWidget(self.list_children)
+        
+        # 子アイテム管理ボタン
+        h_children = QHBoxLayout()
+        self.btn_remove_child = QPushButton("選択アイテムを除外")
+        self.btn_remove_child.clicked.connect(self._remove_selected_child)
+        self.btn_refresh = QPushButton("リスト更新")
+        self.btn_refresh.clicked.connect(self._refresh_child_list)
+        h_children.addWidget(self.btn_remove_child)
+        h_children.addWidget(self.btn_refresh)
+        vbox.addLayout(h_children)
+        
+        # 統計情報
+        self.lbl_stats = QLabel()
+        vbox.addWidget(self.lbl_stats)
+        
+        vbox.addStretch(1)
+        
+        # OK/Cancelボタン
+        h_buttons = QHBoxLayout()
+        h_buttons.addStretch(1)
+        ok_btn = QPushButton("OK")
+        ok_btn.clicked.connect(self.accept)
+        cancel_btn = QPushButton("Cancel")
+        cancel_btn.clicked.connect(self.reject)
+        h_buttons.addWidget(ok_btn)
+        h_buttons.addWidget(cancel_btn)
+        vbox.addLayout(h_buttons)
+        
+        # 初期データロード
+        self._refresh_child_list()
 
-        # 含まれるアイテム数の表示
-        item_count = len(self.item.child_items)
-        info_label = QLabel(f"含まれるアイテム数: {item_count}")
-        vbox.addWidget(info_label)
+    def _refresh_child_list(self):
+        """子アイテムリストを更新"""
+        self.list_children.clear()
+        
+        if not hasattr(self.item, 'child_items'):
+            self.lbl_stats.setText("子アイテム: 0個")
+            self.btn_remove_child.setEnabled(False)
+            return
+        
+        child_count = len(self.item.child_items)
+        
+        for i, child_item in enumerate(self.item.child_items):
+            try:
+                # アイテムの基本情報を取得
+                item_type = getattr(child_item, 'TYPE_NAME', 'unknown')
+                item_caption = child_item.d.get("caption", "")
+                item_path = child_item.d.get("path", "")
+                
+                # 表示名を構築
+                if item_caption:
+                    display_name = f"{item_caption} ({item_type})"
+                elif item_path:
+                    filename = Path(item_path).name
+                    display_name = f"{filename} ({item_type})"
+                else:
+                    display_name = f"アイテム{i+1} ({item_type})"
+                
+                # リストアイテムを作成
+                list_item = QListWidgetItem(display_name)
+                list_item.setData(Qt.ItemDataRole.UserRole, child_item)
+                self.list_children.addItem(list_item)
+                
+            except Exception as e:
+                # エラーがあっても続行
+                error_item = QListWidgetItem(f"エラー: {str(e)[:30]}...")
+                self.list_children.addItem(error_item)
+        
+        # 統計情報を更新
+        self.lbl_stats.setText(f"子アイテム: {child_count}個")
+        self.btn_remove_child.setEnabled(child_count > 0)
 
-        # バウンディングボックス更新ボタン
-        btn_update = QPushButton("バウンディングボックスを更新")
-        btn_update.clicked.connect(self._update_bounds)
-        vbox.addWidget(btn_update)
-
-        # OK / Cancel ボタン
-        h_btn = QHBoxLayout()
-        h_btn.addStretch(1)
-        ok = QPushButton("OK")
-        ok.clicked.connect(self.accept)
-        ng = QPushButton("Cancel")
-        ng.clicked.connect(self.reject)
-        h_btn.addWidget(ok)
-        h_btn.addWidget(ng)
-        vbox.addLayout(h_btn)
-
-        self.resize(380, 250)
-
-    def _update_bounds(self):
-        """バウンディングボックス更新ボタンの処理"""
-        self.item._update_bounds()
-        QMessageBox.information(self, "更新完了", "バウンディングボックスを更新しました。")
+    def _remove_selected_child(self):
+        """選択されたアイテムをグループから除外"""
+        current_item = self.list_children.currentItem()
+        if not current_item:
+            QMessageBox.information(self, "選択エラー", "除外するアイテムを選択してください。")
+            return
+        
+        child_item = current_item.data(Qt.ItemDataRole.UserRole)
+        if not child_item:
+            return
+        
+        # 確認ダイアログ
+        reply = QMessageBox.question(
+            self, "確認",
+            "選択されたアイテムをグループから除外しますか？\n"
+            "（アイテム自体は削除されません）",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+        )
+        
+        if reply == QMessageBox.StandardButton.Yes:
+            try:
+                # グループから除外
+                if hasattr(self.item, 'remove_item'):
+                    self.item.remove_item(child_item)
+                
+                # リストを更新
+                self._refresh_child_list()
+                
+                QMessageBox.information(self, "完了", "アイテムをグループから除外しました。")
+                
+            except Exception as e:
+                QMessageBox.critical(self, "エラー", f"除外に失敗しました: {str(e)}")
 
     def accept(self):
-        """
-        OK ボタン押下で入力値をセルフ更新
-        """
-        # ID
+        """OKボタンが押されたときの処理"""
         try:
-            new_id = int(self.ed_id.text().strip())
-        except ValueError:
-            QMessageBox.warning(self, "入力エラー", "ID は整数で入力してください。")
-            return
-        self.d["id"] = new_id
+            # 基本設定を保存
+            self.d["caption"] = self.edit_caption.text().strip()
+            self.d["show_caption"] = self.chk_show_caption.isChecked()
+            self.d["description"] = self.edit_description.toPlainText().strip()
+            
+            # Z値を保存して実際に適用
+            z_value = self.spin_z_value.value()
+            self.d["z"] = z_value
+            self.item.setZValue(z_value)
+            
+            # グリップのZ値も更新（グリップは常に親より前面）
+            if hasattr(self.item, 'grip') and self.item.grip:
+                self.item.grip.update_zvalue()
+            
+            # GroupItemに変更を反映
+            if hasattr(self.item, '_update_caption_visibility'):
+                self.item._update_caption_visibility()
+            
+            # キャプション更新
+            if hasattr(self.item, 'cap_item') and self.item.cap_item:
+                self.item.cap_item.setPlainText(self.d.get("caption", ""))
+            
+            super().accept()
+            
+        except Exception as e:
+            QMessageBox.critical(self, "エラー", f"設定の保存に失敗しました: {str(e)}")
 
-        # キャプション
-        self.d["caption"] = self.ed_cap.text().strip() or f"GROUP-{new_id}"
+# ========================================
+# 3. GroupItem.restore_child_items メソッドの修正
+# ========================================
 
-        # キャプション表示・非表示設定
-        self.d["show_caption"] = self.chk_show_caption.isChecked()
-
-        super().accept()
+def restore_child_items(self, scene):
+    """
+    ロード時に子アイテムの関係を復元
+    """
+    child_ids = self.d.get("child_item_ids", [])
+    if not child_ids:
+        return
+    
+    self.child_items = []
+    self.child_item_ids = []
+    
+    for item in scene.items():
+        # CanvasItem、VideoItem、または TYPE_NAME を持つアイテムをチェック
+        if not hasattr(item, 'd') or not hasattr(item, 'TYPE_NAME'):
+            continue
+            
+        # CanvasItemまたはVideoItemかどうかをチェック
+        is_canvas_item = isinstance(item, CanvasItem)
+        is_video_item = hasattr(item, 'TYPE_NAME') and item.TYPE_NAME == "video"
+        
+        if not (is_canvas_item or is_video_item):
+            continue
+            
+        item_id = item.d.get("id")
+        if item_id in child_ids:
+            self.child_items.append(item)
+            self.child_item_ids.append(item_id)
+            # グループフラグを設定
+            setattr(item, '_in_group', True)
+    
+    warn(f"[GROUP] Restored {len(self.child_items)} child items")
 
 # ==============================================================
 #   exports

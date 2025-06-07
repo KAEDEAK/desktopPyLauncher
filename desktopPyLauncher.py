@@ -449,6 +449,10 @@ class CanvasView(QGraphicsView):
                         can_paste = True                    
                 act_paste.setEnabled(can_paste)
 
+                # === プロジェクト読み込みメニューを追加 ===
+                menu.addSeparator()
+                act_load_project = menu.addAction("ここにプロジェクトを読み込む")
+                
                 # === グループ化メニューを追加 ===
                 menu.addSeparator()
                 
@@ -494,6 +498,10 @@ class CanvasView(QGraphicsView):
                             item.set_editable(True)
                             item.set_run_mode(False)
                             
+                elif sel == act_load_project:
+                    # 新機能：プロジェクト読み込み
+                    self.win._load_project_at_position(scene_pos)
+                    
                 elif sel == act_group:
                     # グループ化処理を呼び出し
                     self.win._group_selected_items()
@@ -2209,6 +2217,168 @@ class MainWindow(QMainWindow):
             
         print(f"グループ化解除完了: {ungroup_count}個のグループを解除しました")
 
+    def _load_project_at_position(self, scene_pos):
+        """
+        指定した位置にプロジェクトを読み込む
+        - 現在のビューポートの左上を基準として相対配置
+        - 読み込んだアイテムをグループ化
+        - グループのキャプションをファイル名にする
+        """
+        # ファイル選択ダイアログ
+        path, _ = QFileDialog.getOpenFileName(
+            self, "読み込むプロジェクトを選択", "", "JSONファイル (*.json)"
+        )
+        if not path:
+            return
+        
+        try:
+            # JSONファイルを読み込み
+            with open(path, "r", encoding="utf-8") as f:
+                project_data = json.load(f)
+            
+            items_data = project_data.get("items", [])
+            if not items_data:
+                QMessageBox.information(self, "読み込み", "プロジェクトにアイテムがありません。")
+                return
+            
+            # 読み込んだアイテムの最小座標を計算
+            min_x = min((item.get("x", 0) for item in items_data), default=0)
+            min_y = min((item.get("y", 0) for item in items_data), default=0)
+            
+            # 現在のビューポートの左上座標を取得
+            viewport_rect = self.view.mapToScene(self.view.viewport().rect()).boundingRect()
+            target_x = viewport_rect.left()
+            target_y = viewport_rect.top()
+            
+            # オフセットを計算（ビューポートの左上を基準とする）
+            offset_x = target_x - min_x
+            offset_y = target_y - min_y
+            
+            warn(f"[LOAD_AT_POS] 基準座標: ({target_x}, {target_y}), オフセット: ({offset_x}, {offset_y})")
+            
+            # アイテムを作成し、相対配置
+            loaded_items = []
+            for item_data in items_data:
+                # データをコピーして座標を調整
+                d = item_data.copy()
+                d["x"] = item_data.get("x", 0) + offset_x
+                d["y"] = item_data.get("y", 0) + offset_y
+                
+                # アイテムクラスを取得
+                cls = self._get_item_class_by_type(d.get("type", ""))
+                if not cls:
+                    warn(f"[LOAD_AT_POS] Unknown item type: {d.get('type')}")
+                    continue
+                
+                # アイテムを作成
+                kwargs = {}
+                sig = inspect.signature(cls.__init__).parameters
+                if "win" in sig:
+                    kwargs["win"] = self
+                if "text_color" in sig:
+                    kwargs["text_color"] = self.text_color
+                
+                try:
+                    if cls is MarkerItem:
+                        item = cls(d, text_color=self.text_color)
+                    elif cls.__name__ == 'GroupItem':
+                        from DPyL_group import GroupItem
+                        item = GroupItem(d, text_color=self.text_color)
+                    else:
+                        item = cls(d, **kwargs)
+                    
+                    # シーンに追加
+                    item.setZValue(d.get("z", 0))
+                    self.scene.addItem(item)
+                    self.data["items"].append(d)
+                    loaded_items.append(item)
+                    
+                    # グリップの追加処理（必要に応じて）
+                    if isinstance(item, MarkerItem) and item.grip.scene() is None:
+                        self.scene.addItem(item.grip)
+                    elif hasattr(item, '__class__') and item.__class__.__name__ == 'GroupItem' and item.grip.scene() is None:
+                        self.scene.addItem(item.grip)
+                    elif isinstance(item, VideoItem) and item.video_resize_dots.scene() is None:
+                        self.scene.addItem(item.video_resize_dots)
+                        
+                except Exception as e:
+                    warn(f"[LOAD_AT_POS] {cls.__name__} create failed: {e}")
+                    continue
+            
+            # 読み込んだアイテムをグループ化（複数の場合）
+            if len(loaded_items) > 1:
+                # グループ作成
+                group_id = self._get_next_group_id()
+                project_name = Path(path).stem  # ファイル名（拡張子なし）
+                
+                # グループの初期位置・サイズを計算
+                if loaded_items:
+                    # 読み込んだアイテムのバウンディングボックスを計算
+                    all_rects = [item.sceneBoundingRect() for item in loaded_items]
+                    union_rect = all_rects[0]
+                    for rect in all_rects[1:]:
+                        union_rect = union_rect.united(rect)
+                    
+                    group_x = union_rect.left()
+                    group_y = union_rect.top()
+                    group_w = max(200, union_rect.width())
+                    group_h = max(100, union_rect.height())
+                else:
+                    group_x = target_x
+                    group_y = target_y
+                    group_w = 200
+                    group_h = 100
+                
+                group_data = {
+                    "type": "group",
+                    "id": group_id,
+                    "caption": project_name,  # ファイル名をキャプションに設定
+                    "show_caption": True,
+                    "x": group_x, "y": group_y, 
+                    "width": group_w, "height": group_h,
+                    "z": -1000,  # 最背面
+                    "child_item_ids": []
+                }
+                
+                from DPyL_group import GroupItem
+                group_item = GroupItem(group_data, text_color=self.text_color)
+                
+                # 読み込んだアイテムをグループに追加
+                for item in loaded_items:
+                    group_item.add_item(item)
+                
+                # シーンに追加
+                self.scene.addItem(group_item)
+                self.data["items"].append(group_data)
+                group_item.setZValue(-1000)
+                
+                # グループを選択状態にする
+                for item in self.scene.selectedItems():
+                    item.setSelected(False)
+                group_item.setSelected(True)
+                
+                # 編集モードに切り替え
+                self._set_mode(edit=True)
+                
+                QMessageBox.information(self, "読み込み完了", 
+                                      f"プロジェクト '{project_name}' を読み込み、{len(loaded_items)}個のアイテムをグループ化しました。")
+            elif len(loaded_items) == 1:
+                # 単一アイテムの場合はそのまま選択
+                for item in self.scene.selectedItems():
+                    item.setSelected(False)
+                loaded_items[0].setSelected(True)
+                self._set_mode(edit=True)
+                
+                QMessageBox.information(self, "読み込み完了", 
+                                      f"プロジェクトからアイテムを1個読み込みました。")
+            else:
+                QMessageBox.information(self, "読み込み完了", 
+                                      "アイテムが読み込まれませんでした。")
+            
+        except Exception as e:
+            QMessageBox.critical(self, "エラー", f"プロジェクトの読み込みに失敗しました：{str(e)}")
+            import traceback
+            traceback.print_exc()
 # ==============================================================
 #  App helper - 補助関数
 # ==============================================================
