@@ -47,6 +47,7 @@ from DPyL_classes import (
 from DPyL_note    import (NoteItem,NOTE_BG_COLOR,NOTE_FG_COLOR)
 from DPyL_video   import VideoItem
 from DPyL_marker import MarkerItem
+from DPyL_group import GroupItem
 from configparser import ConfigParser
 from urllib.parse import urlparse
 
@@ -411,9 +412,6 @@ class CanvasView(QGraphicsView):
         if self.water_enabled and ev.button() == Qt.MouseButton.LeftButton and self.water_effect:
             scene_pos = self.mapToScene(ev.position().toPoint())
             self.water_effect.add_ripple(scene_pos.x(), scene_pos.y())
-            # ※ここで return はしない → 以下で super を呼ぶので、
-            #   アイテム操作やドラッグ（＝スクロール）などはそのまま行われるっす
-
             
         # 右クリック時、空白エリアならペーストメニュー表示
         if ev.button() == Qt.MouseButton.RightButton:
@@ -422,6 +420,8 @@ class CanvasView(QGraphicsView):
             items = self.items(pos)
             if not items:
                 menu = QMenu(self)
+                
+                # === ペーストメニュー ===
                 act_paste = menu.addAction("ペースト")
 
                 # --- クリップボードの内容を判定して有効/無効を切替 ---
@@ -435,7 +435,6 @@ class CanvasView(QGraphicsView):
                     elif isinstance(js, list):
                         can_paste = all(isinstance(d, dict) for d in js)
                 except Exception:
-                    warn("Exception at mousePressEvent")
                     pass
 
                 # 静止画 or GIFファイルURL を貼れるように判定
@@ -450,7 +449,27 @@ class CanvasView(QGraphicsView):
                         can_paste = True                    
                 act_paste.setEnabled(can_paste)
 
+                # === グループ化メニューを追加 ===
+                menu.addSeparator()
+                
+                # 現在選択されているアイテムを取得
+                selected_items = [item for item in self.scene().selectedItems() 
+                                 if isinstance(item, (CanvasItem, VideoItem))]
+                
+                # グループ化（複数選択時のみ有効、GroupItem自体は除外）
+                from DPyL_group import GroupItem  # インポート
+                non_group_selected = [item for item in selected_items if not isinstance(item, GroupItem)]
+                act_group = menu.addAction("グループ化")
+                act_group.setEnabled(len(non_group_selected) > 1)
+                
+                # グループ化の解除（GroupItemが選択されている時のみ有効）
+                selected_groups = [item for item in selected_items if isinstance(item, GroupItem)]
+                act_ungroup = menu.addAction("グループ化の解除")
+                act_ungroup.setEnabled(len(selected_groups) > 0)
+
+                # === メニュー実行 ===
                 sel = menu.exec(ev.globalPosition().toPoint())
+                
                 if sel == act_paste:
                     pasted_items = []
                     mime = cb.mimeData()
@@ -474,6 +493,15 @@ class CanvasView(QGraphicsView):
                         for item in pasted_items:
                             item.set_editable(True)
                             item.set_run_mode(False)
+                            
+                elif sel == act_group:
+                    # グループ化処理を呼び出し
+                    self.win._group_selected_items()
+                    
+                elif sel == act_ungroup:
+                    # グループ化解除処理を呼び出し
+                    self.win._ungroup_selected_items()
+                            
                 ev.accept()
                 return
         super().mousePressEvent(ev)
@@ -927,8 +955,11 @@ class MainWindow(QMainWindow):
     def show_context_menu(self, item: QGraphicsItem, ev):
         if not self.a_edit.isChecked():
             return
+            
         is_vid = isinstance(item, VideoItem)
         is_pix = isinstance(item, (ImageItem, GifItem, JSONItem, LauncherItem))
+        is_group = isinstance(item, GroupItem)
+        
         menu = QMenu(self)
         
         act_copy = menu.addAction("コピー")
@@ -940,6 +971,23 @@ class MainWindow(QMainWindow):
         act_back  = menu.addAction("最背面へ")
         menu.addSeparator()
 
+        # === グループ化メニューを追加 ===
+        selected_items = [item for item in self.scene.selectedItems() 
+                         if isinstance(item, (CanvasItem, VideoItem))]
+        
+        # グループ化（複数選択時のみ有効、GroupItem自体は除外）
+        non_group_selected = [item for item in selected_items if not isinstance(item, GroupItem)]
+        act_group = menu.addAction("グループ化")
+        act_group.setEnabled(len(non_group_selected) > 1)
+        
+        # グループ化の解除（GroupItemが選択されている時のみ有効）
+        selected_groups = [item for item in selected_items if isinstance(item, GroupItem)]
+        act_ungroup = menu.addAction("グループ化の解除")
+        act_ungroup.setEnabled(len(selected_groups) > 0)
+        
+        menu.addSeparator()
+        # ==========================================
+
         act_fit_orig = act_fit_inside_v = act_fit_inside_h = None
         if is_pix or is_vid:
             act_fit_orig   = menu.addAction("元のサイズに合わせる")
@@ -949,6 +997,17 @@ class MainWindow(QMainWindow):
 
         act_del = menu.addAction("Delete")
         sel = menu.exec(ev.screenPos())
+
+        # === グループ化メニューの処理を追加 ===
+        if sel == act_group:
+            self._group_selected_items()
+            ev.accept()
+            return
+        elif sel == act_ungroup:
+            self._ungroup_selected_items()
+            ev.accept()
+            return
+        # =====================================
 
         # --- コピー（複数選択対応） ---
         if sel == act_copy:
@@ -978,13 +1037,6 @@ class MainWindow(QMainWindow):
                 }
                 QApplication.clipboard().setText(json.dumps(clipboard_data, ensure_ascii=False, indent=2))
                 for it in items:
-                    # 型ごとに削除方法を切り替える場合の例
-                    r"""
-                    if isinstance(it, VideoItem):
-                        it.delete_self()
-                    else:
-                        self._remove_item(it)
-                    """
                     self._remove_item(it)
             ev.accept()
             return
@@ -1508,8 +1560,13 @@ class MainWindow(QMainWindow):
         #    self._set_mode(edit=True)
 
 
-    # --- スナップヘルパー ---
+    # --- スナップ ---
     def snap_position(self, item, new_pos: QPointF) -> QPointF:
+        # === グループ移動中の子アイテムはスナップしない ===
+        if getattr(item, '_group_moving', False):
+            return new_pos
+        # ====================================================
+        
         # 他アイテムに吸着する座標補正
         SNAP_THRESHOLD = 10
         best_dx = None
@@ -1542,6 +1599,11 @@ class MainWindow(QMainWindow):
         return QPointF(best_x, best_y)
         
     def snap_size(self, target_item, new_w, new_h):
+        # === グループ移動中の子アイテムはスナップしない ===
+        if getattr(target_item, '_group_moving', False):
+            return new_w, new_h
+        # ====================================================
+        
         SNAP_THRESHOLD = 10
         best_dw, best_dh = None, None
         best_w, best_h = new_w, new_h
@@ -1836,9 +1898,12 @@ class MainWindow(QMainWindow):
 
             try:
                 # it = cls(d, **kwargs)  # ← これで GifItem も OK！
-                # MarkerItem は win を受け取らないため、text_color のみ指定する
+                # MarkerItem と GroupItem は win を受け取らないため、text_color のみ指定する
                 if cls is MarkerItem:
                     it = cls(d, text_color=self.text_color)
+                elif cls.__name__ == 'GroupItem':  # GroupItem対応
+                    from DPyL_group import GroupItem
+                    it = GroupItem(d, text_color=self.text_color)
                 else:
                     it = cls(d, **kwargs)                
             except Exception as e:
@@ -1855,7 +1920,11 @@ class MainWindow(QMainWindow):
             
             # MarkerItem は初期配置時にグリップをシーンに追加する必要があるため
             if isinstance(it, MarkerItem) and it.grip.scene() is None:
-                self.scene.addItem(it.grip)            
+                self.scene.addItem(it.grip)
+                
+            # GroupItem も同様にグリップをシーンに追加
+            if hasattr(it, '__class__') and it.__class__.__name__ == 'GroupItem' and it.grip.scene() is None:
+                self.scene.addItem(it.grip)
 
             # VideoItem はリサイズグリップをシーンに載せる
             from DPyL_video import VideoItem
@@ -1875,6 +1944,9 @@ class MainWindow(QMainWindow):
         self._apply_background()
         self._apply_scene_padding()
         
+        # GroupItem の子アイテム関係を復元（少し遅延させて確実に）
+        QTimer.singleShot(100, self._restore_group_relationships)
+        
         self._scroll_to_start_marker()
         #QTimer.singleShot(100, self._scroll_to_start_marker) #遅延処理 (今は必要ない)
 
@@ -1891,6 +1963,22 @@ class MainWindow(QMainWindow):
                 self.view.toggle_water_effect(True)
         except Exception as e:
             warn(f"[WATER] reload toggle failed: {e}")
+
+    def _restore_group_relationships(self):
+        """
+        ロード完了後にGroupItemの子アイテム関係を復元
+        """
+        try:
+            from DPyL_group import GroupItem
+            
+            for it in self.scene.items():
+                if hasattr(it, '__class__') and it.__class__.__name__ == 'GroupItem':
+                    it.restore_child_items(self.scene)
+                    warn(f"[LOAD] Restored group relationships for {it.d.get('caption', 'unnamed group')}")
+                    # バウンディングボックスは通常更新不要（ロード時は既存の位置・サイズを保持）
+                    # 必要に応じて有効化: it._update_bounds()
+        except Exception as e:
+            warn(f"[LOAD] Group relationship restoration failed: {e}")
        
     def _apply_scene_padding(self, margin: int = 64):
         """シーン全体のバウンディングボックスを計算し中央寄せ"""
@@ -1958,16 +2046,18 @@ class MainWindow(QMainWindow):
             
             pos = it.pos()
             it.d["x"], it.d["y"] = pos.x(), pos.y()
-
-            #r = it.rect() #謎い。d[] は最新のはず
-            #it.d["width"], it.d["height"] = r.width(), r.height()
             it.d["z"] = it.zValue()
+
+            # === GroupItem の特別処理を追加 ===
+            if isinstance(it, GroupItem):
+                # 子アイテムIDリストを保存データに反映
+                it.d["child_item_ids"] = it.child_item_ids.copy()
+            # =====================================
 
             if isinstance(it, VideoItem):
                 try:
-                    if not my_has_attr(it, "audio"):
-                        pass
-                    it.d["muted"] = it.audio.isMuted()
+                    if hasattr(it, "audio"):
+                        it.d["muted"] = it.audio.isMuted()
                 except Exception as e:
                     warn(f"[WARN] muted状態の取得に失敗: {e}")
 
@@ -1981,9 +2071,9 @@ class MainWindow(QMainWindow):
         except Exception as e:
             QMessageBox.critical(self, "SAVE", str(e))
 
-# ==============================================================
-#  private helpers
-# ==============================================================
+    # ==============================================================
+    #  private helpers
+    # ==============================================================
     def _scroll_to_start_marker(self):
         """
         is_start==True の Marker があれば align に従ってビューをジャンプ
@@ -2041,6 +2131,83 @@ class MainWindow(QMainWindow):
             warn(f"[SCROLL] 開始地点へのスクロールに失敗: {e}")
             import traceback
             traceback.print_exc()
+    def _get_next_group_id(self):
+        """新しいグループIDを取得"""
+        existing_ids = []
+        for item in self.scene.items():
+            if isinstance(item, GroupItem):
+                try:
+                    existing_ids.append(int(item.d.get("id", 0)))
+                except (TypeError, ValueError):
+                    continue
+        
+        if existing_ids:
+            return max(existing_ids) + 100
+        else:
+            return 20000  # グループIDは20000から開始
+
+    def _group_selected_items(self):
+        """選択されたアイテムをグループ化"""
+        selected_items = [item for item in self.scene.selectedItems() 
+                         if isinstance(item, (CanvasItem, VideoItem)) and 
+                         not isinstance(item, GroupItem)]
+        
+        if len(selected_items) < 2:
+            QMessageBox.information(self, "グループ化", "グループ化するには2つ以上のアイテムを選択してください。")
+            return
+            
+        # GroupItem作成
+        group_id = self._get_next_group_id()
+        d = {
+            "type": "group",
+            "id": group_id,
+            "caption": f"GROUP-{group_id}",
+            "show_caption": True,
+            "x": 0, "y": 0, "width": 100, "height": 100,
+            "z": -1000,  # 最背面
+            "child_item_ids": []
+        }
+        
+        group_item = GroupItem(d, text_color=self.text_color)
+        
+        # 選択されたアイテムをグループに追加
+        for item in selected_items:
+            group_item.add_item(item)
+            item.setSelected(False)  # 選択解除
+            
+        # シーンに追加
+        self.scene.addItem(group_item)
+        self.data["items"].append(d)
+        
+        # 最背面に設定
+        group_item.setZValue(-1000)
+        
+        # 新しいグループを選択
+        group_item.setSelected(True)
+        
+        print(f"グループ化完了: {len(selected_items)}個のアイテムを含むグループを作成しました")
+
+    def _ungroup_selected_items(self):
+        """選択されたGroupItemを解除（削除）"""
+        selected_groups = [item for item in self.scene.selectedItems() 
+                          if isinstance(item, GroupItem)]
+        
+        if not selected_groups:
+            QMessageBox.information(self, "グループ化の解除", "解除するグループが選択されていません。")
+            return
+            
+        ungroup_count = 0
+        for group_item in selected_groups:
+            # グループ内のアイテムを選択状態にする
+            for child_item in group_item.child_items:
+                if child_item.scene():
+                    child_item.setSelected(True)
+                    
+            # グループアイテムを削除
+            self._remove_item(group_item)
+            ungroup_count += 1
+            
+        print(f"グループ化解除完了: {ungroup_count}個のグループを解除しました")
 
 # ==============================================================
 #  App helper - 補助関数

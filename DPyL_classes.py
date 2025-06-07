@@ -174,6 +174,11 @@ class CanvasItem(QGraphicsItemGroup):
 
         # 位置変更時はスナップ補正
         elif change == QGraphicsItem.GraphicsItemChange.ItemPositionChange:
+            # === グループ移動中はスナップしない ===
+            if getattr(self, '_group_moving', False):
+                return value
+            # =======================================
+            
             # ロード中のスナップを無効化
             if (my_has_attr(self.scene(), "views") and self.scene().views() and
                 not getattr(self.scene().views()[0].window(), "_loading_in_progress", False)):
@@ -351,6 +356,11 @@ class CanvasItem(QGraphicsItemGroup):
         他のオブジェクトの端にサイズを吸着する（デフォルト実装）
         - threshold: 吸着判定のピクセル数
         """
+        # === グループ移動中はスナップしない ===
+        if getattr(self, '_group_moving', False):
+            return w, h
+        # =======================================
+        
         #print(f"[snap_resize_size] called: w={w} h={h}")
         scene = self.scene()
         if not scene:
@@ -375,7 +385,8 @@ class CanvasItem(QGraphicsItemGroup):
                 if dh < best_dh:
                     best_dh = dh
                     best_h = oy - y0
-        return best_w, best_h        
+        return best_w, best_h
+        
     def setZValue(self, z: float):
         """
         Z 値変更時にグリップも追従させる
