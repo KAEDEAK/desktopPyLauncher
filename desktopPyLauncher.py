@@ -1970,7 +1970,7 @@ class MainWindow(QMainWindow):
             except Exception as e:
                 warn(f"Geometry restore failed: {e}")
 
-        self._apply_background()
+        #self._apply_background()
         self._apply_scene_padding()
         
         # GroupItem の子アイテム関係を復元（少し遅延させて確実に）
@@ -1978,6 +1978,7 @@ class MainWindow(QMainWindow):
         
         self._scroll_to_start_marker()
         #QTimer.singleShot(100, self._scroll_to_start_marker) #遅延処理 (今は必要ない)
+        self._apply_background()
 
         self._show_loading(False)
 
