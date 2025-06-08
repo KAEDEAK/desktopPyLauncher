@@ -7,7 +7,7 @@
     html,body{margin:0;padding:0;height:100%;overflow:hidden;font-family:-apple-system,BlinkMacSystemFont,"Helvetica Neue",YuGothic,"Hiragino Kaku Gothic ProN",Meiryo,sans-serif;background:#1e1e1e;color:#eee;}
     #canvasWrapper{position:relative;width:100%;height:100%;overflow:scroll;background:#2b2b2b;cursor:grab;}
     #canvas{position:relative;min-width:2000px;min-height:2000px;}
-    .item{position:absolute;box-sizing:border-box;border:1px solid #555;border-radius:4px;overflow:hidden;}
+    .item{position:absolute;box-sizing:border-box;border-radius:4px;overflow:hidden;}
     .launcher img{width:100%;height:100%;object-fit:contain;display:block;}
     .note{padding:6px;overflow:auto;white-space:pre-wrap;}
     .note table{border-collapse:collapse;width:100%;}
@@ -19,6 +19,8 @@
     .marker-caption{color:#ffcccc;font-weight:bold;text-shadow:1px 1px 2px rgba(0,0,0,0.8);}
     .videoPlaceholder{display:flex;align-items:center;justify-content:center;width:100%;height:100%;background:#000;color:#888;font-size:14px;font-family:monospace;}
     #minimapCanvas{position:fixed;right:16px;bottom:16px;width:180px;height:180px;background:rgba(0,0,0,0.6);border:1px solid #aaa;z-index:1000;}
+    .item a{color:#aaf;}
+    .item a:hover{color:#eea;}
 </style>
 </head>
 <body>
@@ -39,6 +41,7 @@ const wrapper = document.getElementById("canvasWrapper");
 const mini    = document.getElementById("minimapCanvas");
 const mCtx    = mini.getContext("2d");
 let miniScale = 1;
+const markers = new Map();
 
 // ---------------- Drag Scroll ----------------
 let isDrag=false,startX=0,startY=0,scrollL=0,scrollT=0;
@@ -104,33 +107,84 @@ function attachOpenUrl(el, url){
     });
 }
 
-function addLauncher(d){
-    const el=document.createElement("div");el.className="item launcher";
-    Object.assign(el.style,{left:d.x+"px",top:d.y+"px",width:d.width+"px",height:d.height+"px"});
-    let imgSrc="";
-    if(d.icon_embed){imgSrc="data:image/png;base64,"+d.icon_embed;}
-    else if(d.embed){imgSrc="data:image/png;base64,"+d.embed;}
-    else{const ext=d.path?d.path.substring(d.path.lastIndexOf('.')).toLowerCase():"";imgSrc=definedIcons[ext]||"res/default.png";}
-    const img=new Image();img.src=imgSrc;img.onload=drawMini;
-    img.onerror=()=>{img.src="data:image/svg+xml;base64,"+btoa('<svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 48 48"><rect width="48" height="48" fill="#666"/><text x="24" y="28" text-anchor="middle" fill="#ccc" font-size="12">?</text></svg>');drawMini();};
+function applyBrightness(element, brightness) {
+    if (brightness == null || brightness === 50) return;
+    // 0–100 を 0–2 の範囲に変換（50 が 1.0）
+    const filterValue = brightness / 50;
+    element.style.filter = `brightness(${filterValue})`;
+}
+
+function addLauncher(d) {
+    const el = document.createElement("div");
+    el.className = "item launcher";
+    Object.assign(el.style, {
+        left:  d.x + "px",
+        top:   d.y + "px",
+        width: d.width + "px",
+        height:d.height + "px"
+    });
+
+    let imgSrc = "";
+    if (d.icon_embed) {
+        imgSrc = "data:image/png;base64," + d.icon_embed;
+    } else if (d.embed) {
+        imgSrc = "data:image/png;base64," + d.embed;
+    } else {
+        const ext = d.path ? d.path.substring(d.path.lastIndexOf(".")).toLowerCase() : "";
+        imgSrc = definedIcons[ext] || "res/default.png";
+    }
+
+    const img = new Image();
+    img.src = imgSrc;
+    img.onload = () => {
+        applyBrightness(img, d.brightness);
+        drawMini();
+    };
+    img.onerror = () => {
+        img.src = "data:image/svg+xml;base64," +
+            btoa('<svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 48 48"><rect width="48" height="48" fill="#666"/><text x="24" y="28" text-anchor="middle" fill="#ccc" font-size="12">?</text></svg>');
+        applyBrightness(img, d.brightness);
+        drawMini();
+    };
+
     el.appendChild(img);
     canvas.appendChild(el);
     addCaption(d, d.caption);
     attachOpenUrl(el, d.path);
 }
 
-function addImage(d){
-    const box=document.createElement("div");box.className="item";
-    Object.assign(box.style,{left:d.x+"px",top:d.y+"px",width:d.width+"px",height:d.height+"px"});
-    const img=new Image();
-    img.style.width="100%";img.style.height="100%";img.style.objectFit="contain";
-    if((d.store==="embed"||!d.path) && (d.embed||d.data)){
-        img.src="data:image/*;base64,"+(d.embed||d.data);
-    }else{
-        img.src=d.path;
+function addImage(d) {
+    const box = document.createElement("div");
+    box.className = "item";
+    Object.assign(box.style, {
+        left:  d.x + "px",
+        top:   d.y + "px",
+        width: d.width + "px",
+        height:d.height + "px"
+    });
+
+    const img = new Image();
+    img.style.width      = "100%";
+    img.style.height     = "100%";
+    img.style.objectFit  = "contain";
+
+    if ((d.store === "embed" || !d.path) && (d.embed || d.data)) {
+        img.src = "data:image/*;base64," + (d.embed || d.data);
+    } else {
+        img.src = d.path;
     }
-    img.onload=drawMini;
-    img.onerror=()=>{img.src="data:image/svg+xml;base64,"+btoa('<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100" viewBox="0 0 100 100"><rect width="100" height="100" fill="#333"/><text x="50" y="50" text-anchor="middle" fill="#ccc" font-size="12">画像読み込み失敗</text></svg>');drawMini();};
+
+    img.onload = () => {
+        applyBrightness(img, d.brightness);
+        drawMini();
+    };
+    img.onerror = () => {
+        img.src = "data:image/svg+xml;base64," +
+            btoa('<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100" viewBox="0 0 100 100"><rect width="100" height="100" fill="#333"/><text x="50" y="50" text-anchor="middle" fill="#ccc" font-size="12">画像読み込み失敗</text></svg>');
+        applyBrightness(img, d.brightness);
+        drawMini();
+    };
+
     box.appendChild(img);
     canvas.appendChild(box);
     addCaption(d, d.caption);
@@ -148,47 +202,80 @@ function addVideo(d){
     addCaption(d, d.caption||"Video");
 }
 
-function addMarker(d){
-    const el=document.createElement("div");
-    el.className="item marker";
-    Object.assign(el.style,{
-        left: d.x + "px",
-        top: d.y + "px", 
-        width: d.width + "px",
+function jumpToMarker(id) {
+    const target = markers.get(id);
+    if (target) {
+        target.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }
+}
+
+function addMarker(d) {
+    const el = document.createElement("div");
+    // jump_id があればクリック可能クラスも追加
+    el.className = "item marker" + (d.jump_id != null ? " clickable" : "");
+    Object.assign(el.style, {
+        left:   d.x + "px",
+        top:    d.y + "px",
+        width:  d.width + "px",
         height: d.height + "px"
     });
-    
+
     let markerText = "";
-    if(d.is_start) {
+    if (d.is_start) {
         markerText = "START";
         el.style.color = "#66ff66";
-    } else if(d.jump_id) {
+    } else if (d.jump_id) {
         markerText = `→${d.jump_id}`;
         el.style.color = "#ffff66";
     } else {
         markerText = `ID:${d.id}`;
         el.style.color = "#ff6666";
     }
-    
-    el.title = `Marker ID: ${d.id}${d.jump_id ? `, Jump to: ${d.jump_id}` : ''}${d.is_start ? ' (START)' : ''}`;
+
+    el.title = `Marker ID: ${d.id}` +
+               (d.jump_id ? `, Jump to: ${d.jump_id}` : "") +
+               (d.is_start ? " (START)" : "");
     el.textContent = markerText;
     canvas.appendChild(el);
-    
-    if(d.show_caption !== false) {
+
+    // マーカー要素をグローバルマップに登録
+    markers.set(d.id, el);
+
+    // ダブルクリックでジャンプ
+    if (d.jump_id != null) {
+        el.addEventListener("dblclick", e => {
+            jumpToMarker(d.jump_id);
+            e.stopPropagation();
+        });
+    }
+
+    if (d.show_caption !== false) {
         addCaption(d, d.caption, true);
     }
 }
 
-function addNote(d){
-    const el=document.createElement("div");el.className="item note";
-    Object.assign(el.style,{left:d.x+"px",top:d.y+"px",width:d.width+"px",height:d.height+"px"});
-    el.style.background=d.fill_background?(d.bgcolor||"#222"):"transparent";
-    if(d.color) el.style.color=d.color;
-    if(d.fontsize) el.style.fontSize=d.fontsize+"px";
-    const content=d.text||"";
-    el.innerHTML=d.format==="markdown"?marked.parse(content):content;
+function addNote(d) {
+    const el = document.createElement("div");
+    // fill_background に応じてクラスを切り替え
+    el.className = "item note" + (d.fill_background ? " has-background" : "");
+    Object.assign(el.style, {
+        left:   d.x + "px",
+        top:    d.y + "px",
+        width:  d.width + "px",
+        height: d.height + "px"
+    });
+
+    // 背景色 or 透過
+    el.style.background = d.fill_background ? (d.bgcolor || "#222") : "transparent";
+    if (d.color)    el.style.color    = d.color;
+    if (d.fontsize) el.style.fontSize = d.fontsize + "px";
+
+    const content = d.text || "";
+    el.innerHTML = d.format === "markdown" ? marked.parse(content) : content;
+
     canvas.appendChild(el);
 }
+
 
 function drawMini(){
     mCtx.clearRect(0,0,mini.width,mini.height);
