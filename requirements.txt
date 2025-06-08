@@ -2,4 +2,5 @@ Markdown==3.8
 Pillow==11.2.1
 PyQt6==6.9.0
 PyQt6_sip==13.10.0
-pywin32==306
+pywin32>=306,<311
+

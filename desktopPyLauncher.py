@@ -876,6 +876,7 @@ class MainWindow(QMainWindow):
         
         act("💾SAVE", self._save)
         act("🔁LOAD", lambda: (self._load(), self._set_mode(edit=False)))        
+        act("📤EXPORT", self._export_html)
         tb.addSeparator()
         
         spacer1 = QWidget()
@@ -936,6 +937,7 @@ class MainWindow(QMainWindow):
         act("Exit", self.close)
         
         self._update_nav()
+        
     def _toggle_water_effect(self, checked):
         '''Water エフェクトのオン/オフ切り替え'''
         self.view.toggle_water_effect(checked)
@@ -2097,8 +2099,101 @@ class MainWindow(QMainWindow):
                 QMessageBox.information(self, "SAVE", "保存しました！")
         except Exception as e:
             QMessageBox.critical(self, "SAVE", str(e))
-
     # ==============================================================
+    #  export
+    # ==============================================================
+    def _export_html(self):
+        """
+        現在のプロジェクトをHTMLファイルとしてエクスポート
+        """
+        try:
+            # テンプレートファイルを読み込み
+            template_path = Path(__file__).parent / "template" / "template.html"
+            if not template_path.exists():
+                QMessageBox.critical(self, "エラー", f"テンプレートファイルが見つかりません:\n{template_path}")
+                return
+                
+            with open(template_path, "r", encoding="utf-8") as f:
+                template_html = f.read()
+            
+            # データをコピーしてローカルパスを削除
+            export_data = json.loads(json.dumps(self.data))  # ディープコピー
+            
+            def escape_windows_path(path_str):
+                """Windowsパスのバックスラッシュをエスケープ"""
+                if path_str and isinstance(path_str, str):
+                    return path_str.replace('\\', '\\\\')
+                return path_str
+            
+            for item in export_data.get("items", []):
+                # embedデータがあるかチェック
+                has_embed = item.get("icon_embed") or item.get("embed")
+                
+                # pathの処理
+                path = item.get("path", "")
+                if path:
+                    if path.startswith(("http://", "https://")):
+                        # URLは保持（エスケープして）
+                        item["path"] = escape_windows_path(path)
+                    elif has_embed:
+                        # embedがある場合はパスをマスクして保持
+                        item["path"] = "--truncated_by_security_reason--"
+                    else:
+                        # ローカルパスでembedがない場合は削除
+                        item.pop("path", None)
+                
+                # workdirを削除
+                item.pop("workdir", None)
+                
+                # iconパスの処理
+                icon = item.get("icon", "")
+                if icon:
+                    if icon.startswith(("http://", "https://")) or icon.endswith((".dll", ".exe")):
+                        # URL、システムファイルは保持
+                        item["icon"] = escape_windows_path(icon)
+                    elif has_embed:
+                        # embedがある場合はアイコンパスをマスク
+                        item["icon"] = "--truncated_by_security_reason--"
+                    else:
+                        # ローカルファイルでembedがない場合は削除
+                        item.pop("icon", None)
+            
+            # 背景パスの処理（embedはないのでローカルパスは削除）
+            if "background" in export_data and "path" in export_data["background"]:
+                bg_path = export_data["background"]["path"]
+                if bg_path and not bg_path.startswith(("http://", "https://")):
+                    export_data["background"].pop("path", None)
+                else:
+                    export_data["background"]["path"] = escape_windows_path(bg_path)
+            
+            # JSONに変換
+            json_str = json.dumps(export_data, ensure_ascii=False, indent=2)
+            
+            # テンプレートの置換マーカーを実際のJSONデータに置き換え
+            html_content = template_html.replace('<!-- embeded_json_data//-->', json_str)
+            
+            # 保存先ファイルダイアログ
+            default_name = self.json_path.stem + ".html"
+            save_path, _ = QFileDialog.getSaveFileName(
+                self, 
+                "HTMLファイルとして保存", 
+                str(self.json_path.parent / default_name),
+                "HTML files (*.html);;All files (*)"
+            )
+            
+            if save_path:
+                # HTMLファイルとして保存
+                with open(save_path, "w", encoding="utf-8") as f:
+                    f.write(html_content)
+                
+                QMessageBox.information(
+                    self, 
+                    "エクスポート完了", 
+                    f"HTMLファイルとして保存しました:\n{save_path}"
+                )
+                
+        except Exception as e:
+            QMessageBox.critical(self, "エクスポートエラー", f"HTMLエクスポートに失敗しました:\n{str(e)}")
     #  private helpers
     # ==============================================================
     def _scroll_to_start_marker(self):

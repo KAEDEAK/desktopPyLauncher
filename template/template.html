@@ -19,12 +19,13 @@
     .marker-caption{color:#ffcccc;font-weight:bold;text-shadow:1px 1px 2px rgba(0,0,0,0.8);}
     .videoPlaceholder{display:flex;align-items:center;justify-content:center;width:100%;height:100%;background:#000;color:#888;font-size:14px;font-family:monospace;}
     #minimapCanvas{position:fixed;right:16px;bottom:16px;width:180px;height:180px;background:rgba(0,0,0,0.6);border:1px solid #aaa;z-index:1000;}
-
 </style>
 </head>
 <body>
 <div id="canvasWrapper"><div id="canvas"></div></div>
 <canvas id="minimapCanvas" width="180" height="180"></canvas>
+
+<script type="application/json" id="jsonData"><!-- embeded_json_data//--></script>
 
 <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
 <script>
@@ -38,102 +39,6 @@ const wrapper = document.getElementById("canvasWrapper");
 const mini    = document.getElementById("minimapCanvas");
 const mCtx    = mini.getContext("2d");
 let miniScale = 1;
-
-// 埋め込み用JSONデータ（後で置換される）
-const embeddedJsonData = `<!-- embeded_json_data//-->`;
-
-// サンプルJSON（テンプレート置換時は削除される）
-const sampleJson = {
-  "fileinfo": {
-    "name": "desktopPyLauncher.py",
-    "info": "project data file",
-    "version": "1.0"
-  },
-  "items": [
-    {
-      "type": "launcher",
-      "caption": "Sample App",
-      "path": "https://example.com",
-      "x": 100,
-      "y": 100,
-      "width": 64,
-      "height": 64
-    },
-    {
-      "type": "image",
-      "caption": "Sample Image",
-      "path": "https://via.placeholder.com/150",
-      "x": 200,
-      "y": 100,
-      "width": 150,
-      "height": 150
-    },
-    {
-      "type": "note",
-      "text": "# サンプルノート\n\nこれは**Markdown**形式のノートです。\n\n- リスト1\n- リスト2\n- リスト3",
-      "format": "markdown",
-      "x": 400,
-      "y": 100,
-      "width": 200,
-      "height": 150,
-      "fill_background": true,
-      "bgcolor": "#323334",
-      "color": "#CCCACD",
-      "fontsize": 14
-    },
-    {
-      "type": "marker",
-      "id": 10000,
-      "caption": "START",
-      "jump_id": null,
-      "is_start": true,
-      "align": "左上",
-      "show_caption": true,
-      "x": 50,
-      "y": 50,
-      "width": 32,
-      "height": 32,
-      "z": 0
-    },
-    {
-      "type": "marker",
-      "id": 10100,
-      "caption": "POINT-A",
-      "jump_id": 10200,
-      "is_start": false,
-      "align": "中央",
-      "show_caption": true,
-      "x": 300,
-      "y": 300,
-      "width": 32,
-      "height": 32,
-      "z": 0
-    },
-    {
-      "type": "marker",
-      "id": 10200,
-      "caption": "POINT-B",
-      "jump_id": null,
-      "is_start": false,
-      "align": "左上",
-      "show_caption": false,
-      "x": 500,
-      "y": 200,
-      "width": 32,
-      "height": 32,
-      "z": 0
-    },
-    {
-      "type": "video",
-      "caption": "Sample Video",
-      "path": "/path/to/video.mp4",
-      "x": 100,
-      "y": 300,
-      "width": 320,
-      "height": 180
-    }
-  ]
-};
 
 // ---------------- Drag Scroll ----------------
 let isDrag=false,startX=0,startY=0,scrollL=0,scrollT=0;
@@ -153,13 +58,10 @@ wrapper.addEventListener("mousemove",e=>{
 const endDrag=()=>{isDrag=false;wrapper.style.cursor="grab";};
 wrapper.addEventListener("mouseup",endDrag);
 wrapper.addEventListener("mouseleave",endDrag);
-// ------------------------------------------------
 
-// ---------- ビュー生成 -----------
 function buildUI(data){
     if(!data||!Array.isArray(data.items))return;
     
-    // 既存のアイテムをクリア
     canvas.innerHTML = '';
     
     let maxX=0,maxY=0;
@@ -168,16 +70,17 @@ function buildUI(data){
     canvas.style.minHeight=(maxY+400)+'px';
     miniScale=Math.min(mini.width/(maxX+400),mini.height/(maxY+400));
 
-    data.items.forEach(it=>{
-        switch(it.type){
-          case "launcher": addLauncher(it); break;
-          case "image":    addImage(it); break;
-          case "note":     addNote(it); break;
-          case "video":    addVideo(it); break;
-          case "marker":   addMarker(it); break;
-          default: console.warn("unsupported type",it.type);
-        }
-    });
+  data.items.forEach(it=>{
+      switch(it.type){
+        case "launcher": addLauncher(it); break;
+        case "json":     addLauncher(it); break;  // ← 追加
+        case "image":    addImage(it); break;
+        case "note":     addNote(it); break;
+        case "video":    addVideo(it); break;
+        case "marker":   addMarker(it); break;
+        default: console.warn("unsupported type",it.type);
+      }
+  });
     drawMini();
 }
 
@@ -255,7 +158,6 @@ function addMarker(d){
         height: d.height + "px"
     });
     
-    // マーカーの表示内容
     let markerText = "";
     if(d.is_start) {
         markerText = "START";
@@ -268,15 +170,10 @@ function addMarker(d){
         el.style.color = "#ff6666";
     }
     
-    // マーカーIDをツールチップとして表示
     el.title = `Marker ID: ${d.id}${d.jump_id ? `, Jump to: ${d.jump_id}` : ''}${d.is_start ? ' (START)' : ''}`;
-    
-    // マーカー本体のテキスト表示
     el.textContent = markerText;
-    
     canvas.appendChild(el);
     
-    // キャプション表示（show_captionがtrueの場合のみ）
     if(d.show_caption !== false) {
         addCaption(d, d.caption, true);
     }
@@ -293,7 +190,6 @@ function addNote(d){
     canvas.appendChild(el);
 }
 
-// ---------- ミニマップ描画 ---------
 function drawMini(){
     mCtx.clearRect(0,0,mini.width,mini.height);
     mCtx.fillStyle="#444";mCtx.fillRect(0,0,mini.width,mini.height);
@@ -304,7 +200,6 @@ function drawMini(){
         const y=(r.top-rect.top)*miniScale;
         const w=r.width*miniScale,h=r.height*miniScale;
         
-        // マーカーは異なる色で表示
         if(el.classList.contains('marker')) {
             mCtx.fillStyle="rgba(255,100,100,0.8)";
         } else {
@@ -317,21 +212,15 @@ function drawMini(){
     mCtx.strokeStyle="#ff0";mCtx.lineWidth=1;mCtx.strokeRect(vx,vy,vw,vh);
 }
 
-// ----------- 初期化処理 -----------
 document.addEventListener("DOMContentLoaded", () => {
-    // 埋め込みJSONデータを読み込み
     try {
-        if (embeddedJsonData && embeddedJsonData !== `<!-- embeded_json_data//-->`) {
-            const data = JSON.parse(embeddedJsonData);
+        const jsonElement = document.getElementById('jsonData');
+        if (jsonElement && jsonElement.textContent.trim()) {
+            const data = JSON.parse(jsonElement.textContent);
             buildUI(data);
-        } else {
-            // 埋め込みデータがない場合はサンプルを表示
-            buildUI(sampleJson);
         }
     } catch(err) {
         console.error("JSON解析エラー:", err);
-        // エラーの場合はサンプルを表示
-        buildUI(sampleJson);
     }
     
     window.addEventListener("load", drawMini);
