@@ -1,0 +1,341 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<title>desktopPyLauncher JSON Viewer</title>
+<style>
+    html,body{margin:0;padding:0;height:100%;overflow:hidden;font-family:-apple-system,BlinkMacSystemFont,"Helvetica Neue",YuGothic,"Hiragino Kaku Gothic ProN",Meiryo,sans-serif;background:#1e1e1e;color:#eee;}
+    #canvasWrapper{position:relative;width:100%;height:100%;overflow:scroll;background:#2b2b2b;cursor:grab;}
+    #canvas{position:relative;min-width:2000px;min-height:2000px;}
+    .item{position:absolute;box-sizing:border-box;border:1px solid #555;border-radius:4px;overflow:hidden;}
+    .launcher img{width:100%;height:100%;object-fit:contain;display:block;}
+    .note{padding:6px;overflow:auto;white-space:pre-wrap;}
+    .note table{border-collapse:collapse;width:100%;}
+    .note table, .note th, .note td{border:1px solid #666;}
+    .note th,.note td{padding:4px;}
+    .marker{border:none;background:transparent;display:flex;align-items:center;justify-content:center;color:#ff6666;font-size:18px;font-weight:bold;text-shadow:2px 2px 4px rgba(0,0,0,0.8);}
+    .marker::before{content:"📍";font-size:24px;margin-right:4px;}
+    .caption{position:absolute;text-align:center;color:#ccc;font-size:12px;pointer-events:none;}
+    .marker-caption{color:#ffcccc;font-weight:bold;text-shadow:1px 1px 2px rgba(0,0,0,0.8);}
+    .videoPlaceholder{display:flex;align-items:center;justify-content:center;width:100%;height:100%;background:#000;color:#888;font-size:14px;font-family:monospace;}
+    #minimapCanvas{position:fixed;right:16px;bottom:16px;width:180px;height:180px;background:rgba(0,0,0,0.6);border:1px solid #aaa;z-index:1000;}
+
+</style>
+</head>
+<body>
+<div id="canvasWrapper"><div id="canvas"></div></div>
+<canvas id="minimapCanvas" width="180" height="180"></canvas>
+
+<script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+<script>
+const definedIcons = {
+  ".bat":"res/batch-file.png",".cmd":"res/batch-file.png",".py":"res/python-file.png",
+  ".exe":"res/exe-file.png",".url":"res/url-file.png",".lnk":"res/shortcut-file.png",
+  ".txt":"res/text-file.png",".md":"res/markdown-file.png",".json":"res/json-file.png"
+};
+const canvas  = document.getElementById("canvas");
+const wrapper = document.getElementById("canvasWrapper");
+const mini    = document.getElementById("minimapCanvas");
+const mCtx    = mini.getContext("2d");
+let miniScale = 1;
+
+// 埋め込み用JSONデータ（後で置換される）
+const embeddedJsonData = `<!-- embeded_json_data//-->`;
+
+// サンプルJSON（テンプレート置換時は削除される）
+const sampleJson = {
+  "fileinfo": {
+    "name": "desktopPyLauncher.py",
+    "info": "project data file",
+    "version": "1.0"
+  },
+  "items": [
+    {
+      "type": "launcher",
+      "caption": "Sample App",
+      "path": "https://example.com",
+      "x": 100,
+      "y": 100,
+      "width": 64,
+      "height": 64
+    },
+    {
+      "type": "image",
+      "caption": "Sample Image",
+      "path": "https://via.placeholder.com/150",
+      "x": 200,
+      "y": 100,
+      "width": 150,
+      "height": 150
+    },
+    {
+      "type": "note",
+      "text": "# サンプルノート\n\nこれは**Markdown**形式のノートです。\n\n- リスト1\n- リスト2\n- リスト3",
+      "format": "markdown",
+      "x": 400,
+      "y": 100,
+      "width": 200,
+      "height": 150,
+      "fill_background": true,
+      "bgcolor": "#323334",
+      "color": "#CCCACD",
+      "fontsize": 14
+    },
+    {
+      "type": "marker",
+      "id": 10000,
+      "caption": "START",
+      "jump_id": null,
+      "is_start": true,
+      "align": "左上",
+      "show_caption": true,
+      "x": 50,
+      "y": 50,
+      "width": 32,
+      "height": 32,
+      "z": 0
+    },
+    {
+      "type": "marker",
+      "id": 10100,
+      "caption": "POINT-A",
+      "jump_id": 10200,
+      "is_start": false,
+      "align": "中央",
+      "show_caption": true,
+      "x": 300,
+      "y": 300,
+      "width": 32,
+      "height": 32,
+      "z": 0
+    },
+    {
+      "type": "marker",
+      "id": 10200,
+      "caption": "POINT-B",
+      "jump_id": null,
+      "is_start": false,
+      "align": "左上",
+      "show_caption": false,
+      "x": 500,
+      "y": 200,
+      "width": 32,
+      "height": 32,
+      "z": 0
+    },
+    {
+      "type": "video",
+      "caption": "Sample Video",
+      "path": "/path/to/video.mp4",
+      "x": 100,
+      "y": 300,
+      "width": 320,
+      "height": 180
+    }
+  ]
+};
+
+// ---------------- Drag Scroll ----------------
+let isDrag=false,startX=0,startY=0,scrollL=0,scrollT=0;
+wrapper.addEventListener("mousedown",e=>{
+    if(e.button!==0)return;
+    isDrag=true;wrapper.style.cursor="grabbing";
+    startX=e.clientX;startY=e.clientY;
+    scrollL=wrapper.scrollLeft;scrollT=wrapper.scrollTop;
+    e.preventDefault();
+});
+wrapper.addEventListener("mousemove",e=>{
+    if(!isDrag)return;
+    wrapper.scrollLeft=scrollL-(e.clientX-startX);
+    wrapper.scrollTop =scrollT-(e.clientY-startY);
+    drawMini();
+});
+const endDrag=()=>{isDrag=false;wrapper.style.cursor="grab";};
+wrapper.addEventListener("mouseup",endDrag);
+wrapper.addEventListener("mouseleave",endDrag);
+// ------------------------------------------------
+
+// ---------- ビュー生成 -----------
+function buildUI(data){
+    if(!data||!Array.isArray(data.items))return;
+    
+    // 既存のアイテムをクリア
+    canvas.innerHTML = '';
+    
+    let maxX=0,maxY=0;
+    data.items.forEach(it=>{maxX=Math.max(maxX,it.x+(it.width||48));maxY=Math.max(maxY,it.y+(it.height||48));});
+    canvas.style.minWidth=(maxX+400)+'px';
+    canvas.style.minHeight=(maxY+400)+'px';
+    miniScale=Math.min(mini.width/(maxX+400),mini.height/(maxY+400));
+
+    data.items.forEach(it=>{
+        switch(it.type){
+          case "launcher": addLauncher(it); break;
+          case "image":    addImage(it); break;
+          case "note":     addNote(it); break;
+          case "video":    addVideo(it); break;
+          case "marker":   addMarker(it); break;
+          default: console.warn("unsupported type",it.type);
+        }
+    });
+    drawMini();
+}
+
+function addCaption(d, text, isMarker = false){
+    if(!text) return;
+    const cap=document.createElement("div");
+    cap.className = isMarker ? "caption marker-caption" : "caption";
+    cap.textContent=text;
+    cap.style.left = d.x + "px";
+    cap.style.top  = (d.y + d.height + 2) + "px";
+    cap.style.width = d.width + "px";
+    canvas.appendChild(cap);
+}
+
+function attachOpenUrl(el, url){
+    if(!url || !(url.startsWith("http://")||url.startsWith("https://"))) return;
+    el.style.cursor="pointer";
+    el.addEventListener("dblclick", e=>{
+        window.open(url, "_blank");
+        e.stopPropagation();
+    });
+}
+
+function addLauncher(d){
+    const el=document.createElement("div");el.className="item launcher";
+    Object.assign(el.style,{left:d.x+"px",top:d.y+"px",width:d.width+"px",height:d.height+"px"});
+    let imgSrc="";
+    if(d.icon_embed){imgSrc="data:image/png;base64,"+d.icon_embed;}
+    else if(d.embed){imgSrc="data:image/png;base64,"+d.embed;}
+    else{const ext=d.path?d.path.substring(d.path.lastIndexOf('.')).toLowerCase():"";imgSrc=definedIcons[ext]||"res/default.png";}
+    const img=new Image();img.src=imgSrc;img.onload=drawMini;
+    img.onerror=()=>{img.src="data:image/svg+xml;base64,"+btoa('<svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 48 48"><rect width="48" height="48" fill="#666"/><text x="24" y="28" text-anchor="middle" fill="#ccc" font-size="12">?</text></svg>');drawMini();};
+    el.appendChild(img);
+    canvas.appendChild(el);
+    addCaption(d, d.caption);
+    attachOpenUrl(el, d.path);
+}
+
+function addImage(d){
+    const box=document.createElement("div");box.className="item";
+    Object.assign(box.style,{left:d.x+"px",top:d.y+"px",width:d.width+"px",height:d.height+"px"});
+    const img=new Image();
+    img.style.width="100%";img.style.height="100%";img.style.objectFit="contain";
+    if((d.store==="embed"||!d.path) && (d.embed||d.data)){
+        img.src="data:image/*;base64,"+(d.embed||d.data);
+    }else{
+        img.src=d.path;
+    }
+    img.onload=drawMini;
+    img.onerror=()=>{img.src="data:image/svg+xml;base64,"+btoa('<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100" viewBox="0 0 100 100"><rect width="100" height="100" fill="#333"/><text x="50" y="50" text-anchor="middle" fill="#ccc" font-size="12">画像読み込み失敗</text></svg>');drawMini();};
+    box.appendChild(img);
+    canvas.appendChild(box);
+    addCaption(d, d.caption);
+    attachOpenUrl(box, d.path);
+}
+
+function addVideo(d){
+    const box=document.createElement("div");box.className="item";
+    Object.assign(box.style,{left:d.x+"px",top:d.y+"px",width:d.width+"px",height:d.height+"px"});
+    const ph=document.createElement("div");
+    ph.className="videoPlaceholder";
+    ph.textContent="📹 Video (Not Supported)";
+    box.appendChild(ph);
+    canvas.appendChild(box);
+    addCaption(d, d.caption||"Video");
+}
+
+function addMarker(d){
+    const el=document.createElement("div");
+    el.className="item marker";
+    Object.assign(el.style,{
+        left: d.x + "px",
+        top: d.y + "px", 
+        width: d.width + "px",
+        height: d.height + "px"
+    });
+    
+    // マーカーの表示内容
+    let markerText = "";
+    if(d.is_start) {
+        markerText = "START";
+        el.style.color = "#66ff66";
+    } else if(d.jump_id) {
+        markerText = `→${d.jump_id}`;
+        el.style.color = "#ffff66";
+    } else {
+        markerText = `ID:${d.id}`;
+        el.style.color = "#ff6666";
+    }
+    
+    // マーカーIDをツールチップとして表示
+    el.title = `Marker ID: ${d.id}${d.jump_id ? `, Jump to: ${d.jump_id}` : ''}${d.is_start ? ' (START)' : ''}`;
+    
+    // マーカー本体のテキスト表示
+    el.textContent = markerText;
+    
+    canvas.appendChild(el);
+    
+    // キャプション表示（show_captionがtrueの場合のみ）
+    if(d.show_caption !== false) {
+        addCaption(d, d.caption, true);
+    }
+}
+
+function addNote(d){
+    const el=document.createElement("div");el.className="item note";
+    Object.assign(el.style,{left:d.x+"px",top:d.y+"px",width:d.width+"px",height:d.height+"px"});
+    el.style.background=d.fill_background?(d.bgcolor||"#222"):"transparent";
+    if(d.color) el.style.color=d.color;
+    if(d.fontsize) el.style.fontSize=d.fontsize+"px";
+    const content=d.text||"";
+    el.innerHTML=d.format==="markdown"?marked.parse(content):content;
+    canvas.appendChild(el);
+}
+
+// ---------- ミニマップ描画 ---------
+function drawMini(){
+    mCtx.clearRect(0,0,mini.width,mini.height);
+    mCtx.fillStyle="#444";mCtx.fillRect(0,0,mini.width,mini.height);
+    const rect=canvas.getBoundingClientRect();
+    Array.from(canvas.querySelectorAll(".item")).forEach(el=>{
+        const r=el.getBoundingClientRect();
+        const x=(r.left-rect.left)*miniScale;
+        const y=(r.top-rect.top)*miniScale;
+        const w=r.width*miniScale,h=r.height*miniScale;
+        
+        // マーカーは異なる色で表示
+        if(el.classList.contains('marker')) {
+            mCtx.fillStyle="rgba(255,100,100,0.8)";
+        } else {
+            mCtx.fillStyle="rgba(0,200,255,0.5)";
+        }
+        mCtx.fillRect(x,y,Math.max(2,w),Math.max(2,h));
+    });
+    const vx=wrapper.scrollLeft*miniScale,vy=wrapper.scrollTop*miniScale;
+    const vw=wrapper.clientWidth*miniScale,vh=wrapper.clientHeight*miniScale;
+    mCtx.strokeStyle="#ff0";mCtx.lineWidth=1;mCtx.strokeRect(vx,vy,vw,vh);
+}
+
+// ----------- 初期化処理 -----------
+document.addEventListener("DOMContentLoaded", () => {
+    // 埋め込みJSONデータを読み込み
+    try {
+        if (embeddedJsonData && embeddedJsonData !== `<!-- embeded_json_data//-->`) {
+            const data = JSON.parse(embeddedJsonData);
+            buildUI(data);
+        } else {
+            // 埋め込みデータがない場合はサンプルを表示
+            buildUI(sampleJson);
+        }
+    } catch(err) {
+        console.error("JSON解析エラー:", err);
+        // エラーの場合はサンプルを表示
+        buildUI(sampleJson);
+    }
+    
+    window.addEventListener("load", drawMini);
+});
+</script>
+</body>
+</html>
