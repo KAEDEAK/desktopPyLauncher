@@ -3,56 +3,33 @@
 <head>
 <meta charset="utf-8">
 <title>desktopPyLauncher JSON Viewer</title>
-<!-- Google Fonts: Noto Sans JP -->
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;700&display=swap" rel="stylesheet">
 <style>
-    /* グローバルフォント設定 - Noto Sans JPで統一 */
-    html,body{
-        margin:0;
-        padding:0;
-        height:100%;
-        overflow:hidden;
-        /* Noto Sans JPを最優先、フォールバックも指定 */
-        font-family: 'Noto Sans JP', 'Hiragino Kaku Gothic ProN', 'ヒラギノ角ゴ ProN W3', sans-serif;
-        background:#1e1e1e;
-        color:#eee;
-        /* フォントレンダリングを統一 */
-        -webkit-font-smoothing: antialiased;
-        -moz-osx-font-smoothing: grayscale;
-        text-rendering: optimizeLegibility;
-    }
-    
+    html,body{margin:0;padding:0;height:100%;overflow:hidden;font-family:-apple-system,BlinkMacSystemFont,"Helvetica Neue",YuGothic,"Hiragino Kaku Gothic ProN",Meiryo,sans-serif;background:#1e1e1e;color:#eee;}
     #canvasWrapper{position: relative;width: 100%;height: 100%;overflow: hidden; cursor: grab;background: #2b2b2b;}
     #canvas{position:relative;min-width:2000px;min-height:2000px;}
     .item{position:absolute;box-sizing:border-box;border-radius:4px;overflow:hidden;}
     .launcher img{width:100%;height:100%;object-fit:contain;display:block;}
     
-    /* ノートのスタイルを改善（フォント統一版） */
+    /* ノートのスタイルを改善（ブラウザ差異対応） */
     .note{
         padding:0;
         margin:0;
         overflow:auto;
         white-space:pre-wrap;
         word-wrap:break-word;
-        /* 明示的にNoto Sans JPを指定 */
-        font-family: 'Noto Sans JP', 'Hiragino Kaku Gothic ProN', sans-serif;
-        line-height: 1.3; /* Noto Sans JP用に微調整 */
+        /* Qt のデフォルトフォントに近づける */
+        font-family: "Segoe UI", "Yu Gothic UI", "Meiryo UI", sans-serif;
+        line-height: 1.2;
         /* Webkitブラウザ対応 */
         -webkit-text-size-adjust: 100%;
         -webkit-font-smoothing: antialiased;
-        /* フォントメトリクスの統一 */
-        font-feature-settings: "palt" 1; /* プロポーショナルメトリクス */
     }
     
     /* ノートコンテンツのリセット */
     .note-content {
         margin: 0;
-        padding: 5px; /* 6px→5pxに微調整 */
+        padding: 6px;
         box-sizing: border-box;
-        /* 行の高さを厳密に指定 */
-        line-height: 1.3;
     }
     
     /* Markdown要素の厳密なリセット（Chrome対応） */
@@ -63,9 +40,7 @@
         /* 親要素のフォントサイズと色を継承 */
         font-size: inherit;
         color: inherit;
-        line-height: 1.3;
-        /* フォントファミリーも継承 */
-        font-family: inherit;
+        line-height: 1.2;
         /* Webkitのデフォルトスタイルを上書き */
         -webkit-margin-before: 0;
         -webkit-margin-after: 0;
@@ -78,50 +53,42 @@
     }
     
     /* Markdown の見出し（最小限のマージン） */
-    .note-content h1 { font-size: 1.5em; margin: 0.2em 0; font-weight: 700; line-height: 1.2; }
-    .note-content h2 { font-size: 1.3em; margin: 0.15em 0; font-weight: 700; line-height: 1.2; }
-    .note-content h3 { font-size: 1.1em; margin: 0.1em 0; font-weight: 700; line-height: 1.2; }
-    .note-content h4, .note-content h5, .note-content h6 { font-size: 1em; margin: 0.1em 0; font-weight: 700; line-height: 1.2; }
+    .note-content h1 { font-size: 1.5em; margin: 0.3em 0; font-weight: bold; }
+    .note-content h2 { font-size: 1.3em; margin: 0.25em 0; font-weight: bold; }
+    .note-content h3 { font-size: 1.1em; margin: 0.2em 0; font-weight: bold; }
+    .note-content h4, .note-content h5, .note-content h6 { font-size: 1em; margin: 0.15em 0; font-weight: bold; }
     
     /* Markdown の段落（最小限のマージン） */
     .note-content p { 
-        margin: 0.2em 0;
-        line-height: 1.3;
+        margin: 0.3em 0;
+        /* 最初と最後の段落のマージンを削除 */
     }
     .note-content p:first-child { margin-top: 0; }
     .note-content p:last-child { margin-bottom: 0; }
     
     /* リストの調整 */
     .note-content ul, .note-content ol { 
-        margin: 0.2em 0; 
+        margin: 0.3em 0; 
         padding-left: 1.2em;
         /* Chromeのデフォルトリストスタイルを上書き */
         -webkit-padding-start: 1.2em;
         list-style-position: outside;
     }
     .note-content li { 
-        margin: 0;
-        line-height: 1.3;
+        margin: 0.1em 0;
         /* Chromeのリストアイテムのデフォルトマージンを除去 */
         display: list-item;
     }
     .note-content ul:first-child, .note-content ol:first-child { margin-top: 0; }
     .note-content ul:last-child, .note-content ol:last-child { margin-bottom: 0; }
     
-    /* ネストしたリストの調整 */
-    .note-content li > ul, .note-content li > ol {
-        margin-top: 0;
-        margin-bottom: 0;
-    }
-    
     /* Markdown のテーブルスタイル */
     .note-content table{
         border-collapse:collapse;
         width:100%;
-        margin: 0.2em 0;
+        margin: 0.3em 0;
         /* テーブルのボックスモデルを統一 */
         box-sizing: border-box;
-        line-height: 1.2;
     }
     .note-content table:first-child { margin-top: 0; }
     .note-content table:last-child { margin-bottom: 0; }
@@ -139,20 +106,19 @@
         background: rgba(0,0,0,0.3);
         padding: 0.1em 0.2em;
         border-radius: 3px;
-        font-family: 'Consolas', 'Monaco', monospace;
-        font-size: 0.85em; /* 0.9em→0.85emに微調整 */
+        font-family: "Consolas", "Yu Gothic", monospace;
+        font-size: 0.9em;
         /* インラインコードの行高を調整 */
         line-height: 1;
     }
     .note-content pre {
         background: rgba(0,0,0,0.3);
-        padding: 0.2em;
+        padding: 0.3em;
         border-radius: 3px;
         overflow-x: auto;
-        margin: 0.2em 0;
+        margin: 0.3em 0;
         /* preタグ内の空白を保持 */
         white-space: pre;
-        line-height: 1.3;
     }
     .note-content pre:first-child { margin-top: 0; }
     .note-content pre:last-child { margin-bottom: 0; }
@@ -166,7 +132,7 @@
     .note-content hr {
         border: none;
         border-top: 1px solid #666;
-        margin: 0.3em 0;
+        margin: 0.5em 0;
         /* Chromeのhrデフォルトスタイルを上書き */
         height: 0;
         box-sizing: content-box;
@@ -184,15 +150,15 @@
     /* 引用 */
     .note-content blockquote {
         border-left: 3px solid #666;
-        margin: 0.2em 0;
-        padding-left: 0.5em;
+        margin: 0.3em 0;
+        padding-left: 0.8em;
         color: #ccc;
     }
     .note-content blockquote:first-child { margin-top: 0; }
     .note-content blockquote:last-child { margin-bottom: 0; }
     
     /* 強調・斜体 */
-    .note-content strong, .note-content b { font-weight: 700; }
+    .note-content strong, .note-content b { font-weight: bold; }
     .note-content em, .note-content i { font-style: italic; }
     
     /* 画像 */
@@ -200,11 +166,6 @@
         max-width: 100%;
         height: auto;
         vertical-align: middle;
-    }
-    
-    /* モノスペースフォントも統一 */
-    .note-content code, .note-content pre {
-        font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
     }
     
     .marker{border:none;background:transparent;display:flex;align-items:center;justify-content:center;color:#ff6666;font-size:18px;font-weight:bold;text-shadow:2px 2px 4px rgba(0,0,0,0.8);}
@@ -545,7 +506,7 @@ function addMarker(d) {
 }
 
 /**
- * NoteItem 描画／編集切替（フォント統一版）
+ * NoteItem 描画／編集切替（ブラウザ差異対応版）
  */
 function addNote(d) {
   const el = document.createElement("div");
@@ -559,10 +520,10 @@ function addNote(d) {
     height:     d.height + "px",
     userSelect: "none",
     boxSizing:  "border-box",
-    // スクロールバー設定
+    // Chromeのスクロールバー対策
     overflow:   "auto",
     overflowX:  "hidden",
-    // スクロールバーのスタイルを調整
+    // スクロールバーのスタイルを調整（Webkit系）
     scrollbarWidth: "thin", // Firefox
     scrollbarColor: "#666 transparent" // Firefox
   });
@@ -585,9 +546,6 @@ function addNote(d) {
 
   const content = d.text || "";
   
-  // フォントサイズの微調整（ブラウザ差を吸収）
-  const adjustedFontSize = d.fontsize ? Math.round(d.fontsize * 0.95) : 13;
-  
   if (d.format === "markdown") {
     // Markdownの場合、まずHTMLに変換
     const htmlContent = marked.parse(content);
@@ -596,14 +554,13 @@ function addNote(d) {
     const contentDiv = document.createElement('div');
     contentDiv.className = 'note-content';
     contentDiv.style.cssText = `
-      padding: 5px;
+      padding: 6px;
       color: ${d.color || '#CCCACD'};
-      font-size: ${adjustedFontSize}px;
-      font-family: 'Noto Sans JP', 'Hiragino Kaku Gothic ProN', sans-serif;
-      line-height: 1.3;
+      font-size: ${d.fontsize || 14}px;
+      font-family: inherit;
+      line-height: 1.2;
       margin: 0;
       box-sizing: border-box;
-      word-break: break-word;
       /* テキスト選択時のハイライト色 */
       ::selection { background: rgba(100, 150, 255, 0.3); }
     `;
@@ -625,16 +582,15 @@ function addNote(d) {
     const contentDiv = document.createElement('div');
     contentDiv.className = 'note-content';
     contentDiv.style.cssText = `
-      padding: 5px;
+      padding: 6px;
       color: ${d.color || '#CCCACD'};
-      font-size: ${adjustedFontSize}px;
-      font-family: 'Noto Sans JP', 'Hiragino Kaku Gothic ProN', sans-serif;
-      line-height: 1.3;
+      font-size: ${d.fontsize || 14}px;
+      font-family: inherit;
+      line-height: 1.2;
       margin: 0;
       box-sizing: border-box;
       white-space: pre-wrap;
       word-wrap: break-word;
-      word-break: break-word;
     `;
     contentDiv.textContent = content;
     el.appendChild(contentDiv);

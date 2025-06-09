@@ -12,7 +12,7 @@ from shlex import split as shlex_split
 from win32com.client import Dispatch
 import subprocess
 from PyQt6.QtCore import (
-    Qt, QPointF, QRectF, QSizeF, QTimer, QSize, QFileInfo, QBuffer, QByteArray, QIODevice, QProcess
+    Qt, QPointF, QRectF, QSizeF, QTimer, QSize, QFileInfo, QBuffer, QByteArray, QIODevice, QProcess, QCoreApplication
 )
 from PyQt6.QtGui import (
     QPixmap, QPainter, QPalette, QColor, QBrush, QPen, QIcon, QMovie
@@ -25,7 +25,7 @@ from PyQt6.QtWidgets import (
     QGraphicsProxyWidget, QGraphicsColorizeEffect
 )
 
-# ───────────────────────── internal util ──────────────────────────
+# ---------------------------------------------------------------------------------------------------- internal util -------------------------------------------------
 from DPyL_utils import (
     warn, b64e, ICON_SIZE,IMAGE_EXTS,
     _icon_pixmap,compose_url_icon,
@@ -35,6 +35,11 @@ from DPyL_utils import (
 
 from DPyL_debug import (my_has_attr,dump_missing_attrs,trace_this)
 
+log_cnt=0
+def movie_debug_print(msg: str) -> None:
+    global log_cnt
+    log_cnt+=1
+    print(f"[MOVIE_DEBUG] {log_cnt} {msg}", file=sys.stderr)
 # ==================================================================
 #  CanvasItem（基底クラス）
 # ==================================================================
@@ -81,6 +86,8 @@ class CanvasItem(QGraphicsItemGroup):
     ):
         super().__init__()
         self._movie = None
+        self._destroying=False
+        movie_debug_print("CanvasItem.__init__")
         # --- 枠用の矩形アイテムを先に生成 ---
         self._rect_item = QGraphicsRectItem(parent=self)
         self._rect_item.setRect(0, 0, 0, 0)
@@ -166,6 +173,9 @@ class CanvasItem(QGraphicsItemGroup):
         self.set_editable(not run)
 
     def itemChange(self, change: QGraphicsItem.GraphicsItemChange, value: Any):
+        if self._destroying:
+            movie_debug_print("CanvasItem.itemChange !!! destroying A (guard hit)")
+            return        
         # 選択状態変化で枠の色変更
         if change == QGraphicsItem.GraphicsItemChange.ItemSelectedHasChanged:
             pen = self._rect_item.pen()
@@ -396,6 +406,152 @@ class CanvasItem(QGraphicsItemGroup):
         if my_has_attr(self, "grip") and self.grip:
             self.grip.update_zvalue()
             
+    def delete_self(self):
+        self._destroying=True
+        movie_debug_print("CanvasItem.delete_self")
+        r"""
+        共通の削除処理（サブクラスでオーバーライド可）
+        ・グリップ／キャプション／ピクスマップを先にシーンから除去
+        ・最後に自身をシーンから removeItem して参照を断つ        
+        """
+        # 1) グリップ除去
+        if hasattr(self, "grip") and self.grip and self.grip.scene():
+            self.grip.scene().removeItem(self.grip)
+        self.grip = None
+
+        # 2) キャプション除去
+        if hasattr(self, "cap_item") and self.cap_item and self.cap_item.scene():
+            self.cap_item.scene().removeItem(self.cap_item)
+        self.cap_item = None
+
+        # 3) ピクスマップ除去
+        if hasattr(self, "_pix_item") and self._pix_item and self._pix_item.scene():
+            self._pix_item.scene().removeItem(self._pix_item)
+        self._pix_item = None
+
+        # 4) 自身をシーンから除去
+        if self.scene():
+            self.scene().removeItem(self)
+
+        
+# --------------------------------------------------
+#  GifMixin  :  QMovie ライフサイクルを隠蔽
+# --------------------------------------------------
+
+class GifMixin:
+    """
+    多重継承するだけで GIF が動く Mixin。
+    CanvasItem 側で用意される以下のメンバーに依存する。
+
+        self.d            : dict  … width/height 等のメタ
+        self._pix_item    : QGraphicsPixmapItem
+        self._rect_item   : QGraphicsRectItem（無くても可）
+
+    継承順は「GifMixin, CanvasItem」を推奨。
+    """
+
+    # ---------------------------------------------------
+    #   ライフサイクル
+    # ---------------------------------------------------
+    def __init__(self, *args, **kwargs):
+        self._movie: Optional[QMovie] = None
+        self._gif_buffer: Optional[QBuffer] = None
+        super().__init__(*args, **kwargs)
+
+    def __del__(self):
+        self._stop_movie()
+
+    # ---------------------------------------------------
+    #   公開 API
+    # ---------------------------------------------------
+    def load_gif(
+        self,
+        *,
+        path: str | None = None,
+        raw: bytes | None = None,
+        scaled_w: int | None = None,
+        scaled_h: int | None = None
+    ) -> bool:
+        """
+        GIF をセットアップして再生開始。戻り値 True＝GIF として扱えた。
+        path または raw（base64 等を decode 済みバイト列）を渡す。
+        """
+        if not self._is_gif_source(path, raw):
+            return False                          # GIF ではない
+
+        self._stop_movie()                       # 既存を完全停止
+
+        # QMovie 構築
+        if raw:
+            self._gif_buffer = QBuffer()
+            self._gif_buffer.setData(QByteArray(raw))
+            self._gif_buffer.open(QIODevice.OpenModeFlag.ReadOnly)
+            self._movie = QMovie()
+            self._movie.setDevice(self._gif_buffer)
+        else:
+            self._movie = QMovie(path)
+
+        if scaled_w and scaled_h:
+            self._movie.setScaledSize(QSize(scaled_w, scaled_h))
+
+        self._movie.frameChanged.connect(self._on_movie_frame)
+        self._movie.start()
+        self._on_movie_frame()                   # 1 フレーム目即描画
+        return True
+
+    # ---------------------------------------------------
+    #   内部ユーティリティ
+    # ---------------------------------------------------
+    @staticmethod
+    def _is_gif_source(path: str | None, raw: bytes | None) -> bool:
+        if path and path.lower().endswith(".gif") and Path(path).exists():
+            return True
+        if raw and raw[:6] in (b"GIF87a", b"GIF89a"):
+            return True
+        return False
+
+    def _stop_movie(self):
+        """再生中 GIF を安全に破棄"""
+        if self._movie:
+            try:
+                self._movie.frameChanged.disconnect(self._on_movie_frame)
+            except Exception:
+                pass
+            self._movie.stop()
+            self._movie = None
+        if self._gif_buffer:
+            try:
+                self._gif_buffer.close()
+            except Exception:
+                pass
+            self._gif_buffer = None
+
+    # ------------------------------------------------------------------
+    #   フレーム更新スロット
+    # ------------------------------------------------------------------
+    def _on_movie_frame(self):
+        if not self._movie or not hasattr(self, "_pix_item"):
+            return
+        frame: QPixmap = self._movie.currentPixmap()
+        if frame.isNull():
+            return
+
+        tgt_w = int(self.d.get("width",  frame.width()))
+        tgt_h = int(self.d.get("height", frame.height()))
+        scaled = frame.scaled(
+            tgt_w, tgt_h,
+            Qt.AspectRatioMode.KeepAspectRatioByExpanding,
+            Qt.TransformationMode.SmoothTransformation,
+        )
+        cx = max(0, (scaled.width()  - tgt_w) // 2)
+        cy = max(0, (scaled.height() - tgt_h) // 2)
+        pm_final = scaled.copy(cx, cy, tgt_w, tgt_h)
+
+        self._pix_item.setPixmap(pm_final)
+        if hasattr(self, "_rect_item"):
+            self._rect_item.setRect(0, 0, tgt_w, tgt_h)
+
+            
 # ==================================================================
 #  LauncherItem ― exe / url
 # ==================================================================
@@ -404,95 +560,246 @@ def quote_if_needed(path: str) -> str:
     path = path.strip()
     return f'"{path}"' if " " in path and not (path.startswith('"') and path.endswith('"')) else path
 
-class LauncherItem(CanvasItem):
+# --------------------------------------------------
+#  GifMixin  :  QMovie ライフサイクルを隠蔽
+# --------------------------------------------------
+class GifMixin:
+    """
+    多重継承するだけで GIF が動く Mixin。
+    CanvasItem 側で用意される以下のメンバーに依存する。
+        self.d            : dict  … width/height 等のメタ
+        self._pix_item    : QGraphicsPixmapItem
+        self._rect_item   : QGraphicsRectItem（無くても可）
+    継承順は「GifMixin, CanvasItem」を推奨。
+    """
+    # ---------------------------------------------------
+    #   ライフサイクル
+    # ---------------------------------------------------
+    def __init__(self, *args, **kwargs):
+        self._movie: Optional[QMovie] = None
+        self._gif_buffer: Optional[QBuffer] = None
+        super().__init__(*args, **kwargs)
+        
+    def __del__(self):
+        try:
+            self._stop_movie()
+        except Exception:
+            pass  # デストラクタでは例外を抑制
+        
+    # ---------------------------------------------------
+    #   公開 API
+    # ---------------------------------------------------
+    def load_gif(
+        self,
+        *,
+        path: str | None = None,
+        raw: bytes | None = None,
+        scaled_w: int | None = None,
+        scaled_h: int | None = None
+    ) -> bool:
+        """
+        GIF をセットアップして再生開始。戻り値 True＝GIF として扱えた。
+        path または raw（base64 等を decode 済みバイト列）を渡す。
+        """
+        if not self._is_gif_source(path, raw):
+            return False                          # GIF ではない
+            
+        self._stop_movie()                       # 既存を完全停止
+        
+        # QMovie 構築
+        if raw:
+            self._gif_buffer = QBuffer()
+            self._gif_buffer.setData(QByteArray(raw))
+            self._gif_buffer.open(QIODevice.OpenModeFlag.ReadOnly)
+            self._movie = QMovie()
+            self._movie.setDevice(self._gif_buffer)
+        else:
+            self._movie = QMovie(path)
+            
+        # QMovieのスケーリングは使用しない（オリジナルサイズのまま取得）
+        # 手動でスケーリングとクロップを行うため
+            
+        self._movie.frameChanged.connect(self._on_movie_frame)
+        self._movie.start()
+        self._on_movie_frame()                   # 1 フレーム目即描画
+        return True
+        
+    def toggle_gif_playback(self):
+        """GIFの再生/停止をトグル"""
+        if not self._movie:
+            return
+            
+        if self._movie.state() == QMovie.MovieState.Running:
+            self._movie.setPaused(True)
+        else:
+            self._movie.start()
+            
+    def is_gif_playing(self) -> bool:
+        """GIFが再生中かどうか"""
+        return self._movie and self._movie.state() == QMovie.MovieState.Running
+        
+    def stop_gif(self):
+        """GIF再生を停止"""
+        if self._movie:
+            self._movie.stop()
+            
+    def start_gif(self):
+        """GIF再生を開始"""
+        if self._movie:
+            self._movie.start()
+            
+    # ---------------------------------------------------
+    #   内部ユーティリティ
+    # ---------------------------------------------------
+    @staticmethod
+    def _is_gif_source(path: str | None, raw: bytes | None) -> bool:
+        if path and path.lower().endswith(".gif") and Path(path).exists():
+            return True
+        if raw and raw[:6] in (b"GIF87a", b"GIF89a"):
+            return True
+        return False
+        
+    def _stop_movie(self):
+        """再生中 GIF を安全に破棄"""
+        try:
+            if self._movie:
+                try:
+                    self._movie.frameChanged.disconnect(self._on_movie_frame)
+                except (TypeError, RuntimeError):
+                    pass  # 既に切断済みまたはオブジェクト削除済み
+                try:
+                    self._movie.stop()
+                except RuntimeError:
+                    pass  # オブジェクト削除済み
+                self._movie = None
+        except Exception:
+            pass  # デストラクタ時の安全性を最優先
+            
+        try:
+            if self._gif_buffer:
+                try:
+                    self._gif_buffer.close()
+                except RuntimeError:
+                    pass  # オブジェクト削除済み
+                self._gif_buffer = None
+        except Exception:
+            pass  # デストラクタ時の安全性を最優先
+            
+    # ------------------------------------------------------------------
+    #   フレーム更新スロット
+    # ------------------------------------------------------------------
+    def _on_movie_frame(self):
+        if not self._movie or not hasattr(self, "_pix_item"):
+            return
+            
+        frame: QPixmap = self._movie.currentPixmap()
+        if frame.isNull():
+            return
+            
+        # 目標サイズ（アイコンの描画領域）
+        tgt_w = int(self.d.get("width",  frame.width()))
+        tgt_h = int(self.d.get("height", frame.height()))
+        
+        # オリジナルGIFフレームサイズ
+        orig_w = frame.width()
+        orig_h = frame.height()
+        
+        if orig_w == 0 or orig_h == 0:
+            return
+            
+        # 縦横比を維持しつつ、短い方の辺を目標サイズにフィットさせるスケール比を計算
+        # max() を使うことで、必ず目標サイズを覆うようにスケーリング（Cover動作）
+        scale_x = tgt_w / orig_w
+        scale_y = tgt_h / orig_h
+        scale = max(scale_x, scale_y)  # 短い方の辺をフィット
+        
+        # スケーリング後のサイズ
+        scaled_w = int(orig_w * scale)
+        scaled_h = int(orig_h * scale)
+        
+        # スケーリング実行
+        scaled = frame.scaled(
+            scaled_w, scaled_h,
+            Qt.AspectRatioMode.IgnoreAspectRatio,  # 計算済みなので比率は無視
+            Qt.TransformationMode.SmoothTransformation,
+        )
+        
+        # 中央部分をクロップ（はみ出した部分を切り取り）
+        cx = max(0, (scaled_w - tgt_w) // 2)
+        cy = max(0, (scaled_h - tgt_h) // 2)
+        pm_final = scaled.copy(cx, cy, tgt_w, tgt_h)
+        
+        # 明るさ補正を適用（継承クラスで実装される場合）
+        if hasattr(self, '_apply_brightness_to_pixmap'):
+            pm_final = self._apply_brightness_to_pixmap(pm_final)
+            
+        self._pix_item.setPixmap(pm_final)
+        
+        if hasattr(self, "_rect_item"):
+            self._rect_item.setRect(0, 0, tgt_w, tgt_h)
+            
+        # キャプション位置を更新（GIF フレーム高さに合わせて）
+        if hasattr(self, "cap_item") and self.cap_item:
+            self.cap_item.setPos(0, tgt_h)
+            
+        # グリップ位置更新（継承クラスで実装される場合）
+        if hasattr(self, "_update_grip_pos"):
+            self._update_grip_pos()
+            
+        # EDITラベル位置更新（LauncherItem用）
+        if hasattr(self, "_edit_label") and self._edit_label:
+            self._edit_label.setPos(2, 2)
+
+
+# --------------------------------------------------
+#  改良された LauncherItem (GifMixin + CanvasItem)
+# --------------------------------------------------
+class LauncherItem(GifMixin, CanvasItem):
     TYPE_NAME = "launcher"
+    
     # 実行系拡張子
     SCRIPT_LIKE = (".bat", ".cmd", ".ps1", ".py", ".js", ".vbs", ".wsf")
     EXE_LIKE    = (".exe", ".com", ".jar", ".msi")
-
-    # 編集系拡張子（NOTE: EDITABLE_LIKEでもいい）
     EDITABLE_LIKE = (".txt", ".json", ".yaml", ".yml", ".md")
-
-    # ショートカット的な扱い
     SHORTCUT_LIKE = (".lnk", ".url")
 
     @classmethod
     def supports_path(cls, path: str) -> bool:
         ext = Path(path).suffix.lower()
-
-        # --- プロジェクト JSON は JSONItem に譲る ---
+        # JSONプロジェクトファイルは除外
         if ext == ".json":
             try:
                 with open(path, encoding="utf-8") as f:
                     fi = json.load(f).get("fileinfo", {})
                     if fi.get("name") == "desktopPyLauncher.py":
-                        return False  # 🏳 JSONItem の担当
+                        return False
             except Exception:
-                warn("Exception at supports_path")
-                pass  # 読めない→普通の JSON とみなす
-
+                pass
+                
         return ext in (
             cls.SHORTCUT_LIKE +
             cls.EXE_LIKE +
             cls.SCRIPT_LIKE +
-            cls.EDITABLE_LIKE
+            cls.EDITABLE_LIKE +
+            (".gif",)  # GIFもサポート
         )
-    @classmethod
-    def _create_item_from_path(cls, path: str, sp):
-        # from handle_drop
-       
-        ext = Path(path).suffix.lower()
-
-        # .url (Internet Shortcut)
-        if ext == ".url":
-            url, icon_file, icon_index = cls.parse_url_shortcut(path)
-            if url:
-                d = {
-                    "type": "launcher",
-                    "caption": Path(path).stem,
-                    "path": url, 
-                    "shortcut": path,
-                }
-                if icon_file:
-                    d["icon"] = icon_file
-                if icon_index is not None:
-                    d["icon_index"] = icon_index
-                d["x"] = sp.x()
-                d["y"] = sp.y()
-                return LauncherItem(d, cls.text_color), d
-            else:
-                warn(f".url parse failed: {path}")
-            
-        # それ以外（既存処理）
-        for i in range(len(CanvasItem.ITEM_CLASSES)):
-            cls = CanvasItem.ITEM_CLASSES[i]
-            try:
-                if cls.supports_path(path):
-                    return cls.create_from_path(path, sp, cls)
-            except Exception as e:
-                warn(f"[factory] {cls.__name__}: {e}")
-        return None, None
 
     @classmethod
     def create_from_path(cls, path: str, sp, win):
-        #from MainWindow constructor, etc.
-        
-        #print("launcherItem.create_from_path")
         ext = Path(path).suffix.lower()
         d = {
             "type": "launcher",
             "caption": Path(path).stem,
             "x": sp.x(), "y": sp.y()
         }
-      
+        
         if ext in cls.EDITABLE_LIKE:
             d["is_editable"] = True
         else:
-            d["is_editable"] = False        
+            d["is_editable"] = False
 
         if ext == ".url":
             url, icon_file, icon_index = cls.parse_url_shortcut(path)
-            #print(url, icon_file, icon_index)
             if url:
                 d["path"] = url
                 d["shortcut"] = path
@@ -502,10 +809,8 @@ class LauncherItem(CanvasItem):
                     d["icon_index"] = icon_index
             else:
                 d["path"] = path
-
         elif ext == ".lnk":
             target, workdir, iconloc = cls.parse_lnk_shortcut(path)
-            #print(f"[DEBUG] .lnk parse: target={target}, iconloc={iconloc}")
             if target:
                 d["path"] = target
                 d["shortcut"] = path
@@ -525,42 +830,235 @@ class LauncherItem(CanvasItem):
                     d["icon_index"] = 0
             else:
                 d["path"] = path
-
         else:
             d["path"] = path
             d["workdir"] = str(Path(path).parent)
 
         return cls(d, win.text_color), d
 
+    def __init__(self, d: dict, cb_resize=None, text_color=None):
+        super().__init__(d, cb_resize, text_color)
+        
+        # 基本属性
+        self.icon = self.d.get("icon", "")
+        self.workdir = self.d.get("workdir", "")
+        self.embed = self.d.get("icon_embed")
+        self.is_editable = self.d.get("is_editable", False)
+        self.runas = self.d.get("runas", False)
+        self.brightness = self.d.get("brightness", 50)
+        
+        # EDITラベル作成
+        self._edit_label = QGraphicsTextItem("EDIT", self)
+        self._edit_label.setDefaultTextColor(QColor("#cc3333"))
+        font = self._edit_label.font()
+        font.setPointSize(8)
+        self._edit_label.setFont(font)
+        self._edit_label.setZValue(9999)
+        self._edit_label.setHtml('<span style="background-color:#0044cc;color:#ffff00;">EDIT</span>')
+        self._edit_label.setVisible(self.is_editable)
+        
+        # ピクスマップアイテム
+        self._pix_item = QGraphicsPixmapItem(parent=self)
+        self._refresh_icon()
 
-    @staticmethod
-    def parse_lnk_shortcut(path: str) -> tuple[str | None, str | None, str | None]:
-        """
-        .lnk（Windowsショートカット）から
-        (TargetPath + Arguments, WorkDir, IconLocation) を抽出
-        """
+    @property
+    def path(self):
+        return self.d.get("path", "")
+
+    def _refresh_icon(self):
+        """アイコン画像を更新（GIF対応）"""
         try:
-            shell = Dispatch("WScript.Shell")
-            link  = shell.CreateShortcut(path)
-
-            target   = link.TargetPath or ""
-            args     = link.Arguments or ""
-            workdir  = link.WorkingDirectory or None
-            iconloc  = link.IconLocation or None
-
-            # 🔧 引数がある場合は結合（※空白区切り）
-            full_target = f"{target} {args}".strip() if args else target
-
-            return full_target, workdir, iconloc
+            # GIF処理を最初に試行
+            if self._try_load_gif():
+                self._update_caption_and_grip()
+                return
+                
+            # 通常の静止画処理
+            self._load_static_image()
+            self._update_caption_and_grip()
+            
         except Exception as e:
-            warn(f"[parse_lnk_shortcut] {e}")
-            return None, None, None
+            warn(f"_refresh_icon failed: {e}")
+            self._load_fallback_icon()
+            self._update_caption_and_grip()
 
+    def _update_caption_and_grip(self):
+        """キャプションとグリップ位置を更新"""
+        # キャプション位置を更新
+        self.init_caption()
+        
+        # グリップ位置を更新
+        self._update_grip_pos()
+        
+        # EDITラベル位置を更新
+        if hasattr(self, "_edit_label") and self._edit_label:
+            self._edit_label.setVisible(self.is_editable)
+            self._edit_label.setPos(2, 2)
+
+    def _try_load_gif(self) -> bool:
+        """GIFの読み込みを試行"""
+        tgt_w = int(self.d.get("width", ICON_SIZE))
+        tgt_h = int(self.d.get("height", ICON_SIZE))
+        
+        # embed データからGIF読み込み
+        if self.embed:
+            try:
+                raw = base64.b64decode(self.embed)
+                if self.load_gif(raw=raw):  # スケーリングパラメータを削除
+                    self.d["width"], self.d["height"] = tgt_w, tgt_h
+                    return True
+            except Exception as e:
+                warn(f"GIF embed load failed: {e}")
+        
+        # ファイルパスからGIF読み込み
+        src_path = self.d.get("icon") or self.path
+        if src_path and src_path.lower().endswith(".gif"):
+            if self.load_gif(path=src_path):  # スケーリングパラメータを削除
+                self.d["width"], self.d["height"] = tgt_w, tgt_h
+                return True
+                
+        return False
+
+    def _load_static_image(self):
+        """静止画の読み込み処理"""
+        tgt_w = int(self.d.get("width", ICON_SIZE))
+        tgt_h = int(self.d.get("height", ICON_SIZE))
+        
+        pix = None
+        
+        # embed データから読み込み
+        if self.embed:
+            pix = QPixmap()
+            try:
+                pix.loadFromData(base64.b64decode(self.embed))
+            except Exception as e:
+                warn(f"Static image embed load failed: {e}")
+                pix = None
+        
+        # ファイルパスから読み込み
+        if not pix or pix.isNull():
+            src = self.d.get("icon") or self.path
+            if src:
+                idx = self.d.get("icon_index", 0)
+                pix = _icon_pixmap(src, idx, max(tgt_w, tgt_h, ICON_SIZE))
+        
+        # フォールバック
+        if not pix or pix.isNull():
+            pix = _icon_pixmap("", 0, ICON_SIZE)
+            
+        # スケーリングと明るさ調整
+        self._src_pixmap = pix.copy()
+        scaled = self._apply_scaling_and_crop(pix, tgt_w, tgt_h)
+        final_pix = self._apply_brightness_to_pixmap(scaled)
+        
+        self._pix_item.setPixmap(final_pix)
+        self._rect_item.setRect(0, 0, tgt_w, tgt_h)
+        self.d["width"], self.d["height"] = tgt_w, tgt_h
+        
+        # キャプション位置を手動設定（静止画の場合）
+        if hasattr(self, "cap_item") and self.cap_item:
+            self.cap_item.setPos(0, tgt_h)
+
+    def _load_fallback_icon(self):
+        """フォールバックアイコン読み込み"""
+        tgt_w = int(self.d.get("width", ICON_SIZE))
+        tgt_h = int(self.d.get("height", ICON_SIZE))
+        pix = _icon_pixmap("", 0, ICON_SIZE)
+        self._pix_item.setPixmap(pix)
+        self._rect_item.setRect(0, 0, tgt_w, tgt_h)
+
+    def _apply_scaling_and_crop(self, pix: QPixmap, w: int, h: int) -> QPixmap:
+        """スケーリングとクロップを適用"""
+        scaled = pix.scaled(
+            w, h,
+            Qt.AspectRatioMode.KeepAspectRatioByExpanding,
+            Qt.TransformationMode.SmoothTransformation,
+        )
+        cx = max(0, (scaled.width() - w) // 2)
+        cy = max(0, (scaled.height() - h) // 2)
+        return scaled.copy(cx, cy, w, h)
+
+    def _apply_brightness_to_pixmap(self, pix: QPixmap) -> QPixmap:
+        """明るさ補正を適用"""
+        if self.brightness == 50 or pix.isNull():
+            return pix
+            
+        level = self.brightness - 50
+        alpha = int(abs(level) / 50 * 255)
+        
+        overlay = QPixmap(pix.size())
+        overlay.fill(Qt.GlobalColor.transparent)
+        painter = QPainter(overlay)
+        col = QColor(255, 255, 255, alpha) if level > 0 else QColor(0, 0, 0, alpha)
+        painter.fillRect(overlay.rect(), col)
+        painter.end()
+        
+        result = QPixmap(pix.size())
+        result.fill(Qt.GlobalColor.transparent)
+        p2 = QPainter(result)
+        p2.drawPixmap(0, 0, pix)
+        p2.drawPixmap(0, 0, overlay)
+        p2.end()
+        return result
+
+    def resize_content(self, w: int, h: int):
+        """リサイズ処理"""
+        self.d["width"], self.d["height"] = w, h
+        
+        if self._movie:
+            # GIFの場合は現在フレームを手動でリサイズ
+            # QMovieのスケーリングは使用せず、_on_movie_frame()で処理
+            self._on_movie_frame()
+        else:
+            # 静止画の場合は通常のリサイズ
+            if hasattr(self, "_src_pixmap") and not self._src_pixmap.isNull():
+                scaled = self._apply_scaling_and_crop(self._src_pixmap, w, h)
+                final_pix = self._apply_brightness_to_pixmap(scaled)
+                self._pix_item.setPixmap(final_pix)
+            
+            # 静止画の場合はキャプション位置を手動更新
+            if hasattr(self, "cap_item") and self.cap_item:
+                self.cap_item.setPos(0, h)
+            
+        self._rect_item.setRect(0, 0, w, h)
+        self._update_grip_pos()
+
+    def mousePressEvent(self, ev):
+        """
+        クリック処理
+        - 左クリック: GIFがある場合は再生/停止トグル
+        - その他: 通常の処理（選択等）
+        """
+        if ev.button() == Qt.MouseButton.LeftButton and self._movie:
+            # GIFの場合は再生/停止トグル（シングルクリック）
+            self.toggle_gif_playback()
+            ev.accept()
+        else:
+            super().mousePressEvent(ev)
+
+    def mouseDoubleClickEvent(self, ev):
+        """
+        ダブルクリック処理
+        - 実行モード: on_activate() を呼び出し
+        - 編集モード: on_edit() を呼び出し
+        """
+        if getattr(self, "run_mode", False):
+            # 実行モード
+            self.on_activate()
+        else:
+            # 編集モード
+            self.on_edit()
+        ev.accept()
+
+    # 既存のメソッド（parse_url_shortcut, parse_lnk_shortcut, on_edit, on_activate等）
+    # は変更なしでそのまま使用...
+    
+    @staticmethod
     def parse_url_shortcut(path: str) -> tuple[str|None, str|None, int|None]:
+        """URLショートカットファイルの解析"""
         url = None
         icon_file = None
         icon_index = None
-        # エンコ自動判定でテキストパース
         for enc in ("utf-8", "shift_jis", "cp932"):
             try:
                 with open(path, encoding=enc) as f:
@@ -574,262 +1072,56 @@ class LauncherItem(CanvasItem):
                             try:
                                 icon_index = int(line[10:])
                             except Exception:
-                                warn("Exception at parse_url_shortcut")
                                 pass
                 if url:
                     break
-            except Exception as e:
-                warn(f"Exception at parse_url_shortcut.{e}")
+            except Exception:
                 continue
         return url, icon_file, icon_index
 
-    def __init__(self, d: dict[str, Any] | None = None,
-                 cb_resize=None, text_color=None):
-        super().__init__(d, cb_resize, text_color)
-        # 属性代入をプロパティに変更（これが解決策）
-        self.icon      = self.d.get("icon", "")        
-        self.workdir = self.d.get("workdir", "")
-        self.embed = self.d.get("icon_embed")
-        self.is_editable = self.d.get("is_editable", False)
-        self.runas = self.d.get("runas", False)
-        self.brightness = None
-        
-        # --- "EDIT" ラベル作成 ---
-        self._edit_label = QGraphicsTextItem("EDIT", self)
-        self._edit_label.setDefaultTextColor(QColor("#cc3333"))
-        font = self._edit_label.font()
-        font.setPointSize(8)
-        self._edit_label.setFont(font)
-        self._edit_label.setZValue(9999)
-        self._edit_label.setHtml('<span style="background-color:#0044cc;color:#ffff00;">EDIT</span>')
-        self._edit_label.setVisible(self.is_editable)
-        
-        #self._update_edit_label_pos()
-        self._pix_item = QGraphicsPixmapItem(parent=self)
-        self._refresh_icon()
-
-    # 常に最新のself.d["path"]を返すプロパティに変更
-    @property
-    def path(self):
-        return self.d.get("path", "")
-        
-    def _update_edit_label_pos(self):
-        """アイコン右下に EDIT ラベルを配置"""
-        #rect = self._rect_item.rect()
-        #label_rect = self._edit_label.boundingRect()
-        #x = rect.width() - label_rect.width() - 4
-        #y = rect.height() - label_rect.height() - 2
-        x=2
-        y=2
-        self._edit_label.setPos(x, y)
-        
-
-    def _refresh_icon(self):
-        """
-        アイコン画像を d['width']/d['height'] に合わせて再生成する。
-        ・Embed > IconFile > パス先アイコン > GIF の優先順で取得
-        ・指定サイズに cover スケール + 中央Crop
-        """
+    @staticmethod
+    def parse_lnk_shortcut(path: str) -> tuple[str | None, str | None, str | None]:
+        """.lnkショートカットファイルの解析"""
         try:
-            # --- 0) 既存GIFムービー停止 ---
-            if self._movie:
-                self._movie.frameChanged.disconnect(self._on_movie_frame)
-                self._movie.stop()
-                self._movie = None
-                self._gif_buffer = None
-
-            # --- raw変数をここで必ず初期化 ---
-            raw = None
-            src_data = None   # bytes なら embed
-            src_path = ""     # str    ならファイルパス
-
-            # 1) ソース取得
-            if self.embed:
-                src_data = b64decode(self.embed)
-                raw = src_data
-            else:
-                src_path = self.d.get("icon") or self.path
-
-            # GIF判定
-            is_gif = (
-                (src_path.lower().endswith(".gif") and Path(src_path).exists())
-                or (src_data and src_data[:6] in (b"GIF87a", b"GIF89a"))
-            )
-
-            # 2-A) GIF の場合は、まず元のフレームサイズで領域を初期化→同じクロップ処理を適用
-            if is_gif:
-                tgt_w = int(self.d.get("width", 200))
-                tgt_h = int(self.d.get("height", 200))                
-                self._movie = QMovie()
-                if raw:
-                    self._gif_buffer = QBuffer()
-                    self._gif_buffer.setData(raw)
-                    self._gif_buffer.open(QIODevice.OpenModeFlag.ReadOnly)
-                    self._movie.setDevice(self._gif_buffer)
-                else:
-                    self._movie.setFileName(src_path)
-
-                # ムービー開始して最初のフレームを取得
-                self._movie.start()
-                first_pix = self._movie.currentPixmap()
-                if not first_pix.isNull():
-                    # ① オリジナルサイズで client area を初期化
-                    orig_w = first_pix.width()
-                    orig_h = first_pix.height()
-                    self.d["width"], self.d["height"] = orig_w, orig_h
-
-                    # ② そのサイズでムービーをスケーリング
-                    self._movie.setScaledSize(QSize(orig_w, orig_h))
-                # フレーム更新時も同じ処理を行う
-                self._movie.frameChanged.connect(self._on_movie_frame)
-                # 初回フレーム描画
-                self._on_movie_frame()
-                #指定のサイズに戻す
-                self.d["width"], self.d["height"] = tgt_w, tgt_h
-                return
-
-            # 2-B) GIF 以外の通常画像処理
-            if self.embed:
-                pix = QPixmap()
-                pix.loadFromData(b64decode(self.embed))
-            else:
-                src = self.d.get("icon") or self.path
-                # 画像ファイルなら QPixmap で直接読み込む
-                if src and Path(src).suffix.lower() in IMAGE_EXTS:
-                    pix = QPixmap(src)
-                else:
-                    idx = self.d.get("icon_index", 0)
-                    base_size = max(
-                        int(self.d.get("width",  ICON_SIZE)),
-                        int(self.d.get("height", ICON_SIZE)),
-                        ICON_SIZE,
-                    )
-                    pix = _icon_pixmap(src, idx, base_size)
-                    # 2.5) URL の場合は favicon をフォールバック
-                    if pix.isNull() and src.lower().startswith("http"):
-                        b64 = fetch_favicon_base64(src)
-                        if b64:
-                            pix = compose_url_icon(b64)
-
-            # 3) フォールバック
-            if pix.isNull():
-                pix = _icon_pixmap("", 0, ICON_SIZE)
-
-            # 4) 原寸保持 → cover スケール + 中央Crop
-            self._src_pixmap = pix.copy()
-            tgt_w = int(self.d.get("width",  pix.width()))
-            tgt_h = int(self.d.get("height", pix.height()))
-            scaled = self._src_pixmap.scaled(
-                tgt_w, tgt_h,
-                Qt.AspectRatioMode.KeepAspectRatioByExpanding,
-                Qt.TransformationMode.SmoothTransformation,
-            )
-            cx = max(0, (scaled.width()  - tgt_w) // 2)
-            cy = max(0, (scaled.height() - tgt_h) // 2)
-            pix_final = scaled.copy(cx, cy, tgt_w, tgt_h)
-
-            # 5) 描画＋メタ更新
-            self._pix_item.setPixmap(pix_final)
-            self._rect_item.setRect(0, 0, tgt_w, tgt_h)
-            self.d["width"], self.d["height"] = tgt_w, tgt_h
-
-            # キャプション・グリップ更新
-            self.init_caption()
-            self._update_grip_pos()
-
-            # EDITラベル（編集モード表示）更新
-            if my_has_attr(self, "_edit_label"):
-                self._update_edit_label_pos()
-                self._edit_label.setVisible(self.is_editable)
-            else:
-                self._edit_label.setVisible(False)
-
+            from win32com.client import Dispatch
+            shell = Dispatch("WScript.Shell")
+            link = shell.CreateShortcut(path)
+            target = link.TargetPath or ""
+            args = link.Arguments or ""
+            workdir = link.WorkingDirectory or None
+            iconloc = link.IconLocation or None
+            full_target = f"{target} {args}".strip() if args else target
+            return full_target, workdir, iconloc
         except Exception as e:
-            warn(f"_refresh_icon failed: {e}")
+            warn(f"[parse_lnk_shortcut] {e}")
+            return None, None, None
 
-    def _on_movie_frame(self):
-        """
-        GIF アニメの各フレームをアイコンに反映
-        """
-        if not self._movie:
-            return
-        pix = self._movie.currentPixmap()
-        if pix.isNull():
-            return
-
-        tgt_w = int(self.d.get("width",  pix.width()))
-        tgt_h = int(self.d.get("height", pix.height()))
-        scaled = pix.scaled(
-            tgt_w, tgt_h,
-            Qt.AspectRatioMode.KeepAspectRatioByExpanding,
-            Qt.TransformationMode.SmoothTransformation,
-        )
-        cx = max(0, (scaled.width()  - tgt_w) // 2)
-        cy = max(0, (scaled.height() - tgt_h) // 2)
-        pm_final = scaled.copy(cx, cy, tgt_w, tgt_h)
-
-        self._pix_item.setPixmap(pm_final)
-        self._rect_item.setRect(0, 0, tgt_w, tgt_h)
-        self._update_grip_pos()
-        # ── GIF の場合のみ、キャプションをアイコン直下に再配置 ──
-        if my_has_attr(self, "cap_item"):
-            # フレーム高さ tgt_h を使ってキャプション位置をリセット
-            self.cap_item.setPos(0, tgt_h)        
-        
-    def resize_content(self, w: int, h: int):
-        self.d["width"], self.d["height"] = w, h
-
-        if self._movie:
-            # GIFの場合はムービー停止せずに、現在フレームで縦横比維持＋クロップ処理
-            frame = self._movie.currentPixmap()
-            if not frame.isNull():
-                scaled = frame.scaled(
-                    w, h,
-                    Qt.AspectRatioMode.KeepAspectRatioByExpanding,
-                    Qt.TransformationMode.SmoothTransformation,
-                )
-                cx = max(0, (scaled.width() - w) // 2)
-                cy = max(0, (scaled.height() - h) // 2)
-                pm_final = scaled.copy(cx, cy, w, h)
-                self._pix_item.setPixmap(pm_final)
-        else:
-            # 静止画は既存のまま（縦横比維持＋クロップ）
-            src = getattr(self, "_src_pixmap", None)
-            if src and not src.isNull():
-                scaled = src.scaled(
-                    w, h,
-                    Qt.AspectRatioMode.KeepAspectRatioByExpanding,
-                    Qt.TransformationMode.SmoothTransformation,
-                )
-                cx = max(0, (scaled.width() - w) // 2)
-                cy = max(0, (scaled.height() - h) // 2)
-                pm = scaled.copy(cx, cy, w, h)
-                self._pix_item.setPixmap(pm)
-
-        self._rect_item.setRect(0, 0, w, h)
-        self._update_grip_pos()
-
-
+    def _update_edit_label_pos(self):
+        """EDITラベルの位置更新"""
+        if hasattr(self, "_edit_label") and self._edit_label:
+            self._edit_label.setPos(2, 2)
 
     def on_edit(self):
-        # 編集ダイアログ起動・編集結果反映
+        """編集ダイアログを開く"""
         win = self.scene().views()[0].window()
+        from DPyL_classes import LauncherEditDialog
         dlg = LauncherEditDialog(self.d, win)
         if dlg.exec() == QDialog.DialogCode.Accepted:
             self.embed   = self.d.get("icon_embed")   # 更新された可能性
             self.workdir = self.d.get("workdir", "")
             # 一時プレビューのサイズで width/height を保存
-            if my_has_attr(dlg, "preview") and isinstance(dlg.preview, QGraphicsPixmapItem):
+            if hasattr(dlg, "preview") and isinstance(dlg.preview, QGraphicsPixmapItem):
                 pix = dlg.preview.pixmap()
                 if not pix.isNull():
                     self.d["width"], self.d["height"] = pix.width(), pix.height()
 
             self._refresh_icon()
-            if my_has_attr(self, "cap_item"):
+            if hasattr(self, "cap_item") and self.cap_item:
                 self.cap_item.setPlainText(self.d.get("caption", ""))
         self.is_editable = self.d.get("is_editable", False)
-        self._edit_label.setVisible(self.is_editable)
-        self._update_edit_label_pos()
+        if hasattr(self, "_edit_label"):
+            self._edit_label.setVisible(self.is_editable)
+            self._update_edit_label_pos()
         self.set_run_mode(not win.a_edit.isChecked())
 
     def on_activate(self):
@@ -838,6 +1130,13 @@ class LauncherItem(CanvasItem):
         フォルダ → エクスプローラーで開く  
         拡張子に応じて subprocess / QProcess / os.startfile を使い分け
         """
+        import os
+        import sys
+        import subprocess
+        from pathlib import Path
+        from shlex import split as shlex_split
+        from PyQt6.QtCore import QProcess
+        
         path = self.d.get("path", "")
         if not path:
             warn("[LauncherItem] path が設定されていません")
@@ -854,25 +1153,21 @@ class LauncherItem(CanvasItem):
         ext = Path(path).suffix.lower()
         
         # --- URL ならブラウザで開く（例: https://example.com/ など） ---
-        #     Path(path).suffix が ".com" になっちゃうケースを防ぐため
         if isinstance(path, str) and path.lower().startswith(("http://", "https://")):
             try:
-                os.startfile(path)  # Windows なら既定のブラウザで開くっす
+                os.startfile(path)  # Windows なら既定のブラウザで開く
             except Exception as e:
                 warn(f"[LauncherItem.on_activate] URLオープン失敗: {e}")
             return
             
-        # --- 作業ディレクトリの初期化 ---
         # --- 作業ディレクトリの初期化 ---
         workdir = (self.d.get("workdir") or "").strip()
         if not workdir:
             workdir = str(Path(path).parent)
         workdir = os.path.abspath(workdir)
 
-        # --------------------------------------------------------------
-        #   CWD を workdir にスワップ（os.startfile 用）
-        # --------------------------------------------------------------
-        orig_cwd    = os.getcwd()
+        # CWD を workdir にスワップ（os.startfile 用）
+        orig_cwd = os.getcwd()
         cwd_changed = False
         if workdir and os.path.isdir(workdir):
             try:
@@ -906,10 +1201,10 @@ class LauncherItem(CanvasItem):
                 except Exception as e:
                     warn(f"[LauncherItem.on_activate] .js 起動エラー: {e}")
                     return
+                    
             # --- .vbs スクリプト ---
             if ext in (".vbs", ".wsf"):
                 try:
-                    # 明示的に workdir を設定して wscript 起動！
                     ok = QProcess.startDetached("wscript", [path], workdir)
                     if not ok:
                         warn(f"QProcess 起動失敗: wscript {path}")
@@ -917,9 +1212,14 @@ class LauncherItem(CanvasItem):
                 except Exception as e:
                     warn(f"[LauncherItem.on_activate] .vbs 起動エラー: {e}")
                 return
+                
             # --- 実行ファイル系 (.exe, .com, .jar, .msi) ---
             if ext in self.EXE_LIKE:
                 try:
+                    def quote_if_needed(path: str) -> str:
+                        path = path.strip()
+                        return f'"{path}"' if " " in path and not (path.startswith('"') and path.endswith('"')) else path
+
                     args = shlex_split(quote_if_needed(path), posix=False)
                     if not args:
                         warn(f"引数分解に失敗: {path}")
@@ -943,7 +1243,6 @@ class LauncherItem(CanvasItem):
                     warn(f"[LauncherItem.on_activate] 起動エラー: {e}")
                 return
 
-
             # --- その他（is_editableなファイル等） ---
             try:
                 os.startfile(path)
@@ -953,13 +1252,23 @@ class LauncherItem(CanvasItem):
             # ここで必ず元の CWD へ戻す（プロジェクト保存に影響させない）
             if cwd_changed:
                 os.chdir(orig_cwd)
+    
+    def __del__(self):
+        """デストラクタでGIFリソースをクリーンアップ"""
+        try:
+            self._stop_movie()
+        except Exception:
+            pass  # デストラクタでは例外を抑制
+        try:
+            super().__del__()
+        except Exception:
+            pass  # 多重継承時の安全性確保
 
 
-
-# ==================================================================
-#  GifItem
-# ==================================================================
-class GifItem(CanvasItem):
+# --------------------------------------------------
+#  改良された GifItem (GifMixin + CanvasItem)
+# --------------------------------------------------
+class GifItem(GifMixin, CanvasItem):
     TYPE_NAME = "gif"
 
     @classmethod
@@ -984,200 +1293,113 @@ class GifItem(CanvasItem):
     def __init__(self, d):
         super().__init__(d)
         self.path = d.get("path")
-        self.brightness = int(d.get("brightness", 50)) 
-        self.movie = QMovie(self.path)
-        self.movie.frameChanged.connect(self._on_frame_changed)
-
+        self.brightness = int(d.get("brightness", 50))
+        
+        # ピクスマップアイテム
         self._pix_item = QGraphicsPixmapItem(parent=self)
-        self.movie.start()
-        self._playing = True
+        
+        # GIF読み込みと開始
+        tgt_w = d.get("width", 200)
+        tgt_h = d.get("height", 200)
+        
+        if self.path and Path(self.path).exists():
+            if not self.load_gif(path=self.path):  # スケーリングパラメータを削除
+                warn(f"Failed to load GIF: {self.path}")
+        
+        self.resize_to(tgt_w, tgt_h)
 
-        self.resize_to(d.get("width", 200), d.get("height", 200))
-      
     def resize_to(self, w, h):
+        """サイズ変更"""
         self.d["width"] = w
         self.d["height"] = h
+        
+        if self._movie:
+            # GIFの場合は手動でリサイズ（QMovieのスケーリングは使用しない）
+            self._on_movie_frame()
+        else:
+            # 静止画の場合はキャプション位置を手動更新
+            if hasattr(self, "cap_item") and self.cap_item:
+                self.cap_item.setPos(0, h)
+            
         self._update_grip_pos()
-        self._apply_caption()
-        self._update_frame_display()
-
-    def _on_frame_changed(self):
-        self._update_frame_display()
-
-    def _update_frame_display(self):
-        frame = self.movie.currentPixmap()
-        if frame.isNull():
-            return
-
-        target_w = self.d.get("width", frame.width())
-        target_h = self.d.get("height", frame.height())
-
-        scaled = frame.scaled(
-            target_w, target_h,
-            Qt.AspectRatioMode.KeepAspectRatioByExpanding,
-            Qt.TransformationMode.SmoothTransformation
-        )
-
-        crop_x = max(0, (scaled.width()  - target_w) // 2)
-        crop_y = max(0, (scaled.height() - target_h) // 2)
-        cropped = scaled.copy(crop_x, crop_y, target_w, target_h)
-
-        self._pix_item.setPixmap(cropped)
-        self._rect_item.setRect(0, 0, target_w, target_h)
-        # --- 明るさ補正ここから -------------------------------
-        bri = getattr(self, "brightness", 50)
-        if bri != 50:
-            level = bri - 50
-            alpha = int(abs(level) / 50 * 255)
-            overlay = QPixmap(cropped.size())
-            overlay.fill(Qt.GlobalColor.transparent)
-            painter = QPainter(overlay)
-            col = QColor(255,255,255,alpha) if level > 0 else QColor(0,0,0,alpha)
-            painter.fillRect(overlay.rect(), col)
-            painter.end()
-
-            result = QPixmap(cropped.size())
-            result.fill(Qt.GlobalColor.transparent)
-            p2 = QPainter(result)
-            p2.drawPixmap(0,0,cropped)
-            p2.drawPixmap(0,0,overlay)
-            p2.end()
-
-            self._pix_item.setPixmap(result)
-        # --- 明るさ補正ここまで -------------------------------
-        # --- 明るさ補正を適用 -----------------
-        pm_final = self._apply_bri_to_pixmap(cropped, self.brightness)
-        self._pix_item.setPixmap(pm_final)
-        self._rect_item.setRect(0, 0, target_w, target_h)        
+        self.init_caption()
 
     def resize_content(self, w: int, h: int):
-        self.d["width"] = w
-        self.d["height"] = h
-        self._update_frame_display()
+        """CanvasItemからのリサイズ処理"""
+        self.resize_to(w, h)
 
-    def _apply_brightness(self):
-        # ImageItem 互換API
-        if self._pix_item and not self._pix_item.pixmap().isNull():
-            pm = self._apply_bri_to_pixmap(self._pix_item.pixmap(), self.brightness)
-            self._pix_item.setPixmap(pm)
-
-    def mousePressEvent(self, ev):
-        if ev.button() == Qt.MouseButton.LeftButton:
-            self._toggle_play()
-            ev.accept()
-        else:
-            super().mousePressEvent(ev)
-
-    def _toggle_play(self):
-        if self._playing:
-            self.movie.stop()
-        else:
-            self.movie.start()
-        self._playing = not self._playing
-
-    def on_activate(self):
-        QProcess.startDetached("explorer", [str(self.path)])
-
-    def on_edit(self):
-        dlg = ImageEditDialog(self)
-        if dlg.exec() == QDialog.DialogCode.Accepted:
-            self.caption = self.d.get("caption", "")
-            self.brightness = int(self.d.get("brightness", 50))
-            self._apply_caption()
-            self._update_frame_display()
-        win = self.scene().views()[0].window()
-        self.set_run_mode(not win.a_edit.isChecked())
-
-    def _apply_caption(self):
-        self.init_caption()
-        self._rect_item.setRect(
-            0, 0,
-            self.d.get("width", 200),
-            self.d.get("height", 200) + (self.cap_item.boundingRect().height() if my_has_attr(self, "cap_item") else 0)
-        )
-
-    def play(self):
-        if my_has_attr(self, "movie") and self.movie:
-            self.movie.start()
-
-    def pause(self):
-        if my_has_attr(self, "movie") and self.movie:
-            self.movie.setPaused(True)
-    def mousePressEvent(self, event):
-        # 他の選択アイテムを明示的に選択解除
-        scene = self.scene()
-        if scene:
-            for item in scene.selectedItems():
-                if item is not self:
-                    item.setSelected(False)
-        self.setSelected(True)
-        super().mousePressEvent(event)
-        
-    # -------------------------------------------------
-    #   内部ユーティリティ : ピクスマップに明るさ合成
-    # -------------------------------------------------
-    @staticmethod
-    def _apply_bri_to_pixmap(src: QPixmap, bri: int) -> QPixmap:
-        """
-        bri: 0～100（50=無補正、<50暗く、>50明るく）
-        """
-        if bri == 50 or src.isNull():
-            return src
-
-        level = bri - 50
+    def _apply_brightness_to_pixmap(self, pix: QPixmap) -> QPixmap:
+        """明るさ補正を適用（GifMixinから呼び出される）"""
+        if self.brightness == 50 or pix.isNull():
+            return pix
+            
+        level = self.brightness - 50
         alpha = int(abs(level) / 50 * 255)
-
-        overlay = QPixmap(src.size())
+        
+        overlay = QPixmap(pix.size())
         overlay.fill(Qt.GlobalColor.transparent)
         painter = QPainter(overlay)
         col = QColor(255, 255, 255, alpha) if level > 0 else QColor(0, 0, 0, alpha)
         painter.fillRect(overlay.rect(), col)
         painter.end()
-
-        result = QPixmap(src.size())
+        
+        result = QPixmap(pix.size())
         result.fill(Qt.GlobalColor.transparent)
-        p = QPainter(result)
-        p.drawPixmap(0, 0, src)
-        p.drawPixmap(0, 0, overlay)
-        p.end()
+        p2 = QPainter(result)
+        p2.drawPixmap(0, 0, pix)
+        p2.drawPixmap(0, 0, overlay)
+        p2.end()
         return result
-    def on_edit(self):
-        """
-        編集ダイアログでキャプション／パス／明るさを編集後、
-        新しい GIF を再ロードして表示を更新するっす！
-        """
-        # ダイアログ実行前に古いパスを覚えておく
-        old_path = getattr(self, "path", "")
 
+    def mousePressEvent(self, ev):
+        """クリックでGIFのトグル再生"""
+        if ev.button() == Qt.MouseButton.LeftButton:
+            self.toggle_gif_playback()
+            ev.accept()
+        else:
+            super().mousePressEvent(ev)
+
+    def on_activate(self):
+        """ダブルクリックでファイルを開く"""
+        try:
+            import os
+            if self.path:
+                os.startfile(self.path)
+        except Exception as e:
+            warn(f"Failed to open file: {e}")
+
+    def on_edit(self):
+        """編集ダイアログを開く"""
+        from DPyL_classes import ImageEditDialog
         dlg = ImageEditDialog(self)
         if dlg.exec() == QDialog.DialogCode.Accepted:
-            # 1) メタ情報更新
-            self.d["caption"]    = self.d.get("caption", "")
-            self.caption         = self.d["caption"]
-            self.brightness      = int(self.d.get("brightness", 50))
-            self.d["brightness"] = self.brightness
-
-            # 2) パス更新の判定＆QMovie再構築
+            self.caption = self.d.get("caption", "")
+            self.brightness = int(self.d.get("brightness", 50))
+            
+            # パスが変更された場合、GIFを再読み込み
             new_path = self.d.get("path", "")
-            if new_path and new_path != old_path:
-                # 既存ムービー停止＆破棄
-                try:
-                    self.movie.frameChanged.disconnect(self._on_frame_changed)
-                    self.movie.stop()
-                except Exception:
-                    warn("Exception at on_edit")
-                    pass
-                # 新しい QMovie をセットアップ
+            if new_path and new_path != self.path:
                 self.path = new_path
-                self.movie = QMovie(self.path)
-                self.movie.frameChanged.connect(self._on_frame_changed)
-                self.movie.start()
-
-            # 3) キャプション＆フレーム再描画
-            self._apply_caption()
-            self._update_frame_display()   
+                tgt_w = int(self.d.get("width", 200))
+                tgt_h = int(self.d.get("height", 200))
+                self.load_gif(path=self.path)  # スケーリングパラメータを削除
+                
+            self.init_caption()
+            
+        # モード切替
         win = self.scene().views()[0].window()
         self.set_run_mode(not win.a_edit.isChecked())
+
+    def __del__(self):
+        """デストラクタでGIFリソースをクリーンアップ"""
+        try:
+            self._stop_movie()
+        except Exception:
+            pass  # デストラクタでは例外を抑制
+        try:
+            super().__del__()
+        except Exception:
+            pass  # 多重継承時の安全性確保
 # ==================================================================
 #  ImageItem
 # ==================================================================
@@ -1230,14 +1452,47 @@ class ImageItem(CanvasItem):
         self._pix_item.setPixmap(pm)
 
     def on_edit(self):
-        dlg = ImageEditDialog(self)
+        """
+        編集ダイアログでキャプション／パス／明るさを編集後、
+        新しい GIF を再ロードして表示を更新するっす！
+        """
+        # ダイアログ実行前のソースを記憶
+        old_path  = getattr(self, "path", "")
+        old_embed = getattr(self, "embed", None)
+
+        dlg = ImageEditDialog(self)                     # 既存ダイアログを再利用
         if dlg.exec() == QDialog.DialogCode.Accepted:
-            self.path = self.d.get("path", "")
-            self.embed = self.d.get("embed")
-            self.brightness = self.d.get("brightness", 50)
-            self._apply_pixmap()
+
+            # 1) メタ情報（caption / brightness）を反映
+            self.caption         = self.d.get("caption", "")
+            self.brightness      = int(self.d.get("brightness", 50))
+            self._apply_caption()                       # ← 既存ヘルパー
+            #   ※ ここではまだフレーム再描画しない
+
+            # 2) パス／Embed 更新チェック
+            new_path  = self.d.get("path", "")
+            new_embed = self.d.get("embed", None)       # store == "embed" のときのみ存在
+
+            # 変更があれば QMovie を作り直す
+            if (new_path != old_path) or (new_embed != old_embed):
+                self.path  = new_path
+                self.embed = new_embed
+
+                if self.embed:                          # embed 優先
+                    raw = base64.b64decode(self.embed)
+                    self._setup_movie(raw=raw)          # ← mixin API
+                else:
+                    self._setup_movie(path=self.path)
+
+            # 3) 再描画 & 明るさ補正
+            self._update_frame_display()                # 現在フレームを再描画
+            self._apply_brightness()                    # 明るさだけ単独変更もある
+
+        # 4) 編集モード判定をメインウィンドウと同期
         win = self.scene().views()[0].window()
         self.set_run_mode(not win.a_edit.isChecked())
+
+        
     def on_activate(self):
         try:
             if self.path:
@@ -1659,14 +1914,14 @@ class LauncherEditDialog(QDialog):
         self.setWindowTitle("Launcher 編集")
         layout = QVBoxLayout(self)
 
-        # ── Caption ──
+        # -- Caption --
         h = QHBoxLayout()
         h.addWidget(QLabel("Caption"))
         self.le_caption = QLineEdit(data.get("caption", ""))
         h.addWidget(self.le_caption)
         layout.addLayout(h)
 
-        # ── Path / URL ──
+        # -- Path / URL --
         h = QHBoxLayout()
         h.addWidget(QLabel("Path/URL"))
         self.le_path = QLineEdit(data.get("path", ""))
@@ -1676,7 +1931,7 @@ class LauncherEditDialog(QDialog):
         h.addWidget(btn_p)
         layout.addLayout(h)
 
-        # ── WorkDir（復活済み） ──
+        # -- WorkDir（復活済み） --
         h = QHBoxLayout()
         h.addWidget(QLabel("WorkDir"))
         self.le_workdir = QLineEdit(data.get("workdir", ""))
@@ -1686,7 +1941,7 @@ class LauncherEditDialog(QDialog):
         h.addWidget(btn_wd)
         layout.addLayout(h)
 
-        # ── Icon Type ──
+        # -- Icon Type --
         h = QHBoxLayout()
         h.addWidget(QLabel("Icon Type"))
         self.combo_icon_type = QComboBox()
@@ -1696,7 +1951,7 @@ class LauncherEditDialog(QDialog):
         h.addWidget(self.combo_icon_type)
         layout.addLayout(h)
 
-        # ── Icon File + Default ──
+        # -- Icon File + Default --
         h = QHBoxLayout()
         h.addWidget(QLabel("Icon File"))
         self.le_icon = QLineEdit(data.get("icon", ""))
@@ -1712,7 +1967,7 @@ class LauncherEditDialog(QDialog):
         h.addWidget(btn_paste)
         layout.addLayout(h)
 
-        # ── Icon Index ──
+        # -- Icon Index --
         h = QHBoxLayout()
         h.addWidget(QLabel("Icon Index"))
         self.spin_index = QSpinBox()
@@ -1723,7 +1978,7 @@ class LauncherEditDialog(QDialog):
         h.addWidget(self.spin_index)
         layout.addLayout(h)
 
-        # ── Preview ──
+        # -- Preview --
         h = QHBoxLayout()
         h.addWidget(QLabel("Preview"))
         self.lbl_prev = QLabel()
@@ -1733,17 +1988,17 @@ class LauncherEditDialog(QDialog):
         h.addWidget(self.lbl_prev, 1)
         layout.addLayout(h)
 
-        # ── Run as Admin ──
+        # -- Run as Admin --
         self.chk_runas = QCheckBox("管理者として実行（runas）")
         self.chk_runas.setChecked(data.get("runas", False))
         layout.addWidget(self.chk_runas)
 
-        # ── Executable flag ──
+        # -- Executable flag --
         self.chk_exe = QCheckBox("編集で開く")
         self.chk_exe.setChecked(data.get("is_editable", False))
         layout.addWidget(self.chk_exe)
 
-        # ── OK / Cancel ──
+        # -- OK / Cancel --
         h = QHBoxLayout(); h.addStretch(1)
         ok = QPushButton("OK"); ok.clicked.connect(self.accept)
         ng = QPushButton("Cancel"); ng.clicked.connect(self.reject)
@@ -2040,7 +2295,7 @@ class LauncherEditDialog(QDialog):
 
         warn("Clipboardに画像またはGIFファイルが見つかりません")
 
-# ───────────────────────── __all__ export ─────────────────────────
+# -------------------------------------------------- __all__ export --------------------------------------------------
 __all__ = [
     "CanvasItem", "LauncherItem", "ImageItem", "JSONItem", 
     "CanvasResizeGrip",

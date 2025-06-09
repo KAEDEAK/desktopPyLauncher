@@ -17,7 +17,7 @@ DPyL_video.py  ―  VideoItem / ResizeGrip / ポイント編集ダイアログ
 """
 
 from __future__ import annotations
-# ─────────────────────────────
+# ---------------------------
 import os, copy
 from pathlib import Path
 from typing import Any
@@ -45,7 +45,7 @@ from PyQt6.QtCore import (
 )
 from functools import partial
 
-# ───────── internal modules ─────────────────────────────────────
+# ------- internal modules -----------------------------------
 from DPyL_utils   import warn, debug_print, ms_to_hms, hms_to_ms, VIDEO_EXTS
 from DPyL_classes import CanvasResizeGrip
 from DPyL_debug import my_has_attr
@@ -194,7 +194,7 @@ class VideoItem(QGraphicsVideoItem):
         # 自分自身を形状でクリップ（QGraphicsVideoItemの二重描画対策）
         self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemClipsToShape, True)
 
-        # ── 前回のシーン矩形（残像クリア用）を保持
+        # -- 前回のシーン矩形（残像クリア用）を保持
         self._prev_scene_rect = self.boundingRect().translated(self.pos())
 
         # ---- player / audio --------------------------------------

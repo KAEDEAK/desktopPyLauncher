@@ -21,7 +21,7 @@ from PyQt6.QtWidgets import QApplication, QFileIconProvider
 from DPyL_debug import my_has_attr
 
 
-# ────────────────────────────── 定数 ──────────────────────────────
+# ------------------------------ 定数 ------------------------------
 DEBUG_MODE = any(arg == "-debug" for arg in sys.argv)
 if DEBUG_MODE:
     print("DEBUG_MODE")
@@ -34,7 +34,7 @@ EXECUTE_EXTS       = (".lnk", ".bat", ".txt", ".html", ".htm", ".url")
 PYTHON_SCRIPT_EXT  = ".py"
 ICON_PROVIDER = QFileIconProvider()
 
-# ────────────────────────────── 基本ユーティリティ ──────────────────────────────
+# ------------------------------ 基本ユーティリティ ------------------------------
 def warn(msg: str) -> None:
     """-debug指定時のみstderrへ警告出力"""
     if DEBUG_MODE:
@@ -55,7 +55,7 @@ def b64d(s: str) -> str:
         warn(f"b64decode failed: {e}")
         return s
 
-# ── 時間変換 ─────────────────────────────────────────────
+# -- 時間変換 -------------------------------------------
 def ms_to_hms_ms(ms: int) -> str:
     """ミリ秒を 'hh:mm:ss.zzz' 形式に変換"""
     s = ms // 1000
@@ -98,7 +98,7 @@ def ms_to_hms(ms: int) -> str:
     h, m = divmod(m, 60)
     return f"{h:02}:{m:02}:{s:02}.{z:03}"
 
-# ── パス判定 ─────────────────────────────────────────────
+# -- パス判定 -------------------------------------------
 def is_network_drive(path: str) -> bool:
     """UNC/ネットワークドライブか判定"""
     return path.startswith("\\\\") or path.startswith("//")
@@ -155,7 +155,7 @@ def b64encode_pixmap(pixmap: QPixmap) -> str:
     pixmap.save(buffer, "PNG")
     return base64.b64encode(buffer.data()).decode("utf-8")
 
-# ── favicon取得 ─────────────────────────────────────────────
+# -- favicon取得 -------------------------------------------
 def fetch_favicon_base64(domain_or_url: str, target_size: int = 64) -> str | None:
     def _to_base64(data: bytes) -> str:
         return base64.b64encode(data).decode("utf-8")
@@ -207,7 +207,7 @@ def fetch_favicon_base64(domain_or_url: str, target_size: int = 64) -> str | Non
         warn(f"[favicon] google fetch failed: {e}")
         return None
         
-# ── アイコン抽出 ─────────────────────────────────────────────
+# -- アイコン抽出 -------------------------------------------
 def _extract_hicon(path: str, index: int) -> QPixmap | None:
     """
     Windowsリソース(HICON)からQPixmap生成  
@@ -327,7 +327,7 @@ def _icon_pixmap_full(path: str, idx: int = 0, size: int = ICON_SIZE) -> QPixmap
       * **空パス**           : imageres.dll から idx 指定で取得（Windows 既定アイコン）  
       * いずれも失敗したら最後に _default_icon() で “?” を返す
     """
-    # ── ① パスが空 → Windows 既定アイコン ──
+    # -- ① パスが空 → Windows 既定アイコン --
     if not path:
         pix = get_fixed_local_icon(idx, size)
         if not pix.isNull():
@@ -336,7 +336,7 @@ def _icon_pixmap_full(path: str, idx: int = 0, size: int = ICON_SIZE) -> QPixmap
 
     ext = Path(path).suffix.lower()
 
-    # ── ② 画像ファイル系 ──
+    # -- ② 画像ファイル系 --
     if ext in (".png", ".jpg", ".jpeg", ".bmp", ".gif"):
         real = os.path.abspath(os.path.expandvars(path))
         if os.path.exists(real):
@@ -348,7 +348,7 @@ def _icon_pixmap_full(path: str, idx: int = 0, size: int = ICON_SIZE) -> QPixmap
                     Qt.TransformationMode.SmoothTransformation,
                 )
 
-    # ── ③ DLL / EXE / ICO リソース抽出 ──
+    # -- ③ DLL / EXE / ICO リソース抽出 --
     if ext in (".dll", ".exe", ".ico"):
         try:
             real = os.path.normpath(os.path.expandvars(path))
@@ -362,7 +362,7 @@ def _icon_pixmap_full(path: str, idx: int = 0, size: int = ICON_SIZE) -> QPixmap
         except Exception as e:
             warn(f"_icon_pixmap ExtractIconExW failed: {e}")
 
-    # ── ④ .url 他は QFileIconProvider ──
+    # -- ④ .url 他は QFileIconProvider --
     try:
         fi = QFileInfo(path)
         icon = ICON_PROVIDER.icon(fi)
@@ -372,12 +372,12 @@ def _icon_pixmap_full(path: str, idx: int = 0, size: int = ICON_SIZE) -> QPixmap
     except Exception as e:
         warn(f"QFileIconProvider failed for {path}: {e}")
 
-    # ── ⑤ どれも取れなかったらもう一度 imageres.dll を試行 ──
+    # -- ⑤ どれも取れなかったらもう一度 imageres.dll を試行 --
     pix = get_fixed_local_icon(idx, size)
     if not pix.isNull():
         return pix
 
-    # ── ⑥ 最終手段 “?” ──
+    # -- ⑥ 最終手段 “?” --
     return _default_icon(size)
     
 def _load_pix_or_icon(src: str, idx: int = 0, icon_sz: int = ICON_SIZE) -> QPixmap:
@@ -393,7 +393,7 @@ def _load_pix_or_icon(src: str, idx: int = 0, icon_sz: int = ICON_SIZE) -> QPixm
         if not pm.isNull():
             return pm          # ★ここで縦横比・解像度そのまま
     return _icon_pixmap(src, idx, icon_sz)
-# ────────────────────────────── __all__ ──────────────────────────────
+# ------------------------------ __all__ ------------------------------
 __all__ = [
     # 基本ユーティリティ
     "warn", "debug_print", "b64e", "b64d",

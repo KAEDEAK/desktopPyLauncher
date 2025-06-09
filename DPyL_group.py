@@ -31,7 +31,8 @@ class GroupItem(MarkerItem):
     TYPE_NAME = "group"
 
     def __init__(self, d: Dict[str, Any], *, text_color=None):
-        super().__init__(d, text_color=text_color)
+        # _last_group_pos を最初に初期化
+        self._last_group_pos = QPointF(d.get("x", 0), d.get("y", 0))
         
         # グループに含まれるアイテムのIDリスト（永続化用）
         self.child_item_ids: List[int] = d.get("child_item_ids", [])
@@ -39,8 +40,11 @@ class GroupItem(MarkerItem):
         # 実際のアイテム参照リスト（実行時のみ）
         self.child_items: List[QGraphicsItem] = []
         
-        # 前回の位置を記録（位置変更時の差分計算用）
-        self._last_group_pos = QPointF(d.get("x", 0), d.get("y", 0))
+        # _updating_bounds フラグも初期化
+        self._updating_bounds = False
+        
+        # 親クラスの初期化を呼ぶ
+        super().__init__(d, text_color=text_color)
         
         # グループの枠を視覚的に分かりやすくする
         self._rect_item.setBrush(QBrush(QColor(100, 150, 255, 30)))  # 薄い青
@@ -59,7 +63,6 @@ class GroupItem(MarkerItem):
             self.child_items.append(item)
             
             # IDを保存（永続化用）
-            # 既存のアイテムにIDがない場合は、位置とタイプで識別
             item_id = None
             if hasattr(item, 'd'):
                 if 'id' not in item.d:
@@ -155,17 +158,20 @@ class GroupItem(MarkerItem):
                     break
                     
         # 現在位置を記録（ロード時の初期化）
-        self._last_pos = self.pos()
+        self._last_group_pos = self.pos()
                     
     def mousePressEvent(self, event):
         """マウス押下時の処理"""
+        # _last_group_pos の安全な初期化
+        if not hasattr(self, '_last_group_pos'):
+            self._last_group_pos = self.pos()
+        
         # 現在位置を記録
-        self._last_pos = self.pos()
+        self._last_group_pos = self.pos()
         super().mousePressEvent(event)
         
     def mouseMoveEvent(self, event):
         """マウス移動時の処理"""
-        # setPos メソッドで統一的に処理されるため、追加処理は不要
         super().mouseMoveEvent(event)
                     
     def mouseReleaseEvent(self, event):
@@ -174,6 +180,10 @@ class GroupItem(MarkerItem):
 
     def itemChange(self, change, value):
         """アイテム変更時の処理"""
+        # _last_group_pos の存在確認を追加
+        if not hasattr(self, '_last_group_pos'):
+            self._last_group_pos = QPointF(self.d.get("x", 0), self.d.get("y", 0))
+        
         # シーンに追加された時の初期化
         if change == QGraphicsItem.GraphicsItemChange.ItemSceneHasChanged:
             if value is not None:  # シーンに追加された
@@ -188,7 +198,7 @@ class GroupItem(MarkerItem):
                 current_pos = self.pos()
                 delta = current_pos - self._last_group_pos
                 
-                # 微小な移動でも確実に同期させる（条件を削除）
+                # 微小な移動でも確実に同期させる
                 if hasattr(self, 'child_items') and self.child_items and (delta.x() != 0 or delta.y() != 0):
                     warn(f"[GroupItem] Position changed: delta=({delta.x():.3f}, {delta.y():.3f}), child_items={len(self.child_items)}")
                     
@@ -197,19 +207,18 @@ class GroupItem(MarkerItem):
                             old_item_pos = item.pos()
                             new_item_pos = old_item_pos + delta
                             
-                            # デバッグログ（より詳細な精度で表示）
                             warn(f"[GroupItem] Moving child {i}: {old_item_pos.x():.3f},{old_item_pos.y():.3f} -> {new_item_pos.x():.3f},{new_item_pos.y():.3f}")
                             
                             # 子アイテムの移動時にスナップ処理を無効化
                             if hasattr(item, '__class__') and item.__class__.__name__ == 'GroupItem':
-                                # 子GroupItemの場合は、バウンディングボックス更新フラグを設定
+                                # 子GroupItemの場合
                                 item._updating_bounds = True
                                 item.setPos(new_item_pos)
-                                item._last_group_pos = new_item_pos
+                                if hasattr(item, '_last_group_pos'):
+                                    item._last_group_pos = new_item_pos
                                 item._updating_bounds = False
                             else:
                                 # 通常のアイテムの場合、スナップを無効化して移動
-                                # 子アイテムにグループ移動中フラグを設定
                                 item._group_moving = True
                                 
                                 # 一時的にロード中フラグを設定してスナップ処理をスキップ
@@ -217,13 +226,12 @@ class GroupItem(MarkerItem):
                                 if scene and scene.views():
                                     win = scene.views()[0].window()
                                     old_loading_flag = getattr(win, '_loading_in_progress', False)
-                                    win._loading_in_progress = True  # スナップ処理を無効化
+                                    win._loading_in_progress = True
                                     item.setPos(new_item_pos)
-                                    win._loading_in_progress = old_loading_flag  # 元に戻す
+                                    win._loading_in_progress = old_loading_flag
                                 else:
                                     item.setPos(new_item_pos)
                                 
-                                # グループ移動中フラグをクリア
                                 item._group_moving = False
                             
                             # 子アイテムの座標もデータに反映
@@ -304,7 +312,7 @@ class GroupEditDialog(QDialog):
     """
     グループの各プロパティを編集するダイアログ
     """
-    def __init__(self, item: GroupItem):
+    def __init__(self, item):  # GroupItem型注釈を削除（循環インポート回避）
         super().__init__(item.scene().views()[0])
         self.setWindowTitle("グループ設定")
         self.item = item
@@ -331,7 +339,6 @@ class GroupEditDialog(QDialog):
         # キャプション表示・非表示設定
         self.chk_show_caption = QCheckBox("キャプションを表示")
         self.chk_show_caption.setChecked(bool(self.d.get("show_caption", True)))
-        # ★修正：addLayout → addWidget★
         vbox.addWidget(self.chk_show_caption)
 
         # 含まれるアイテム数の表示
@@ -381,11 +388,3 @@ class GroupEditDialog(QDialog):
         self.d["show_caption"] = self.chk_show_caption.isChecked()
 
         super().accept()
-
-# ==============================================================
-#   exports
-# ==============================================================
-__all__ = [
-    "GroupItem",
-    "GroupEditDialog",
-]

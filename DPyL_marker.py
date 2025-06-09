@@ -63,7 +63,7 @@ class MarkerItem(CanvasItem):
         self._update_caption_visibility()
         self._update_frame_visibility()
 
-    # ──────────────────── キャプション処理を抑制 ────────────────────
+    # -------------------- キャプション処理を抑制 --------------------
     def init_caption(self):
         """
         基底クラスのキャプション生成を無効化するために、何もしない。

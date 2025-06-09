@@ -42,7 +42,7 @@ from PyQt6.QtGui import QColor, QBrush, QPainterPath, QPen, QFont, QTextDocument
 from PyQt6.QtCore import Qt, QPointF, QRectF, QTimer
 from PyQt6 import sip
 
-# ───────── internal modules ───────────────────────────────────────────
+# ------- internal modules -----------------------------------------
 from DPyL_classes import CanvasItem, CanvasResizeGrip
 from DPyL_utils import warn, b64e, b64d  # 既存ユーティリティ
 
@@ -64,7 +64,7 @@ class NoteItem(CanvasItem):
 
     def __init__(self, d: dict[str, Any] | None = None, cb_resize=None):
         super().__init__(d, cb_resize)
-        # ── 追加: スクロール動作のモード管理 ───────────────
+        # -- 追加: スクロール動作のモード管理 -------------
         # 「最初のクリックで武装 → 次のドラッグでスクロール」
         self._scroll_ready: bool  = False   # クリック済みフラグ
         self._dragging: bool      = False   # 実際にドラッグ中か
@@ -119,7 +119,7 @@ class NoteItem(CanvasItem):
         self._resize_timer.timeout.connect(self._apply_text)
         
         try:
-            # ── 追加: トグルインジケーター ───────────────────
+            # -- 追加: トグルインジケーター -----------------
             self._IND_SIZE = 8   # px
             self._indicator = QGraphicsRectItem(
                 0, 0, self._IND_SIZE, self._IND_SIZE, self
@@ -499,7 +499,7 @@ class NoteEditDialog(QDialog):
         #self.chk_md.stateChanged.connect(self._update_preview)
         #self.txt_edit.textChanged.connect(self._update_preview)
         #self._update_preview()
-        # ── 150 ms デバウンス ─────────────────────
+        # -- 150 ms デバウンス -------------------
         self._prev_timer = QTimer(self)
         self._prev_timer.setSingleShot(True)
         self._prev_timer.timeout.connect(self._update_preview)
@@ -569,7 +569,7 @@ class NoteEditDialog(QDialog):
 
         super().accept()
 
-# ───────────────────────────── __all__ ───────────────────────────────
+# --------------------------- __all__ -----------------------------
 __all__ = [
     "NoteItem",
     "NoteEditDialog",

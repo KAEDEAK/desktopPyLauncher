@@ -1021,33 +1021,14 @@ class MainWindow(QMainWindow):
 
         # --- コピー（複数選択対応） ---
         if sel == act_copy:
-            items = self.scene.selectedItems()
-            ds = [it.d for it in items if isinstance(it, (CanvasItem, VideoItem))]
-            if ds:
-                min_x = min(d.get("x", 0) for d in ds)
-                min_y = min(d.get("y", 0) for d in ds)
-                clipboard_data = {
-                    "base": [min_x, min_y],
-                    "items": ds
-                }
-                QApplication.clipboard().setText(json.dumps(clipboard_data, ensure_ascii=False, indent=2))
+            self.copy_or_cut_selected_items(cut=False)
             ev.accept()
             return
 
         # --- カット（複数選択対応） ---
         if sel == act_cut:
-            items = self.scene.selectedItems()
-            ds = [it.d for it in items if isinstance(it, (CanvasItem, VideoItem))]
-            if ds:
-                min_x = min(d.get("x", 0) for d in ds)
-                min_y = min(d.get("y", 0) for d in ds)
-                clipboard_data = {
-                    "base": [min_x, min_y],
-                    "items": ds
-                }
-                QApplication.clipboard().setText(json.dumps(clipboard_data, ensure_ascii=False, indent=2))
-                for it in items:
-                    self._remove_item(it)
+            # 定義済みメソッドを呼び出し（cut=True で切り取り）
+            self.copy_or_cut_selected_items(cut=True)
             ev.accept()
             return
         
@@ -1268,7 +1249,6 @@ class MainWindow(QMainWindow):
         try:
             js = json.loads(txt)
             items = []
-
             # --- 新形式 ---
             if isinstance(js, dict) and "items" in js and "base" in js:
                 base_x, base_y = js["base"]
@@ -1295,7 +1275,7 @@ class MainWindow(QMainWindow):
         except Exception as e:
             warn(f"ペースト失敗: {e}")
 
-        return pasted_items  # ←←← これが重要！
+        return pasted_items
 
 
     # --- 画像ペースト処理 ---
@@ -1336,14 +1316,17 @@ class MainWindow(QMainWindow):
             
         else:
             warn("画像データがクリップボードにありません")
+            
+            
     # --- アイテム削除とJSON同期 ---
+    r"""
     def remove_item(self, item: QGraphicsItem):
-        """
-        VideoItem.delete_self() 互換API
-        _remove_item()の安全ラッパー
-        """
+        #VideoItem.delete_self() 互換API
+        #_remove_item()の安全ラッパー
+        #現状つかってない
         self._remove_item(item)
-        
+    """  
+    r"""
     def _remove_item(self, item: QGraphicsItem):
         # VideoItemなら後始末
         if isinstance(item, VideoItem):
@@ -1366,6 +1349,34 @@ class MainWindow(QMainWindow):
             
         # JSONから辞書データ削除
         if my_has_attr(item, "d") and item.d in self.data.get("items", []):
+            self.data["items"].remove(item.d)
+    """
+    # TODO: 様子見
+    def _remove_item(self, item: QGraphicsItem):
+        """
+        アイテムを安全に削除
+        ① VideoItem は専用後始末
+        ② CanvasItem 派生は delete_self() 呼び出し
+        ③ その他はシーン除去＋ data["items"] から辞書削除
+        """
+        # ① VideoItem はこれまでどおり deleteLater() も呼ぶ
+        if isinstance(item, VideoItem):
+            item.delete_self()
+            if item.video_resize_dots and item.video_resize_dots.scene():
+                item.video_resize_dots.scene().removeItem(item.video_resize_dots)
+            item.video_resize_dots = None
+            return
+
+        # ② CanvasItem 派生は自身の delete_self() に委譲
+        from DPyL_classes import CanvasItem
+        if isinstance(item, CanvasItem):
+            item.delete_self()
+            return
+
+        # ③ それ以外
+        if item.scene():
+            item.scene().removeItem(item)
+        if hasattr(item, "d") and item.d in self.data.get("items", []):
             self.data["items"].remove(item.d)
 
 
@@ -1604,7 +1615,9 @@ class MainWindow(QMainWindow):
         best_y = new_pos.y()
         r1 = item.boundingRect().translated(new_pos)
 
-        for other in self.scene.items():
+        #for other in self.scene.items():
+        all_items = list(self.scene.items())
+        for other in all_items:            
             if other is item or not my_has_attr(other, "boundingRect"):
             #if isinstance(other, QGraphicsItem) and other is not item:
                 continue
@@ -1977,8 +1990,8 @@ class MainWindow(QMainWindow):
         QTimer.singleShot(100, self._restore_group_relationships)
         
         self._scroll_to_start_marker()
-        #QTimer.singleShot(100, self._scroll_to_start_marker) #遅延処理 (今は必要ない)
         self._apply_background()
+        #QTimer.singleShot(100, self._scroll_to_start_marker) #遅延処理 (今は必要ない)
 
         self._show_loading(False)
 
@@ -2223,7 +2236,7 @@ class MainWindow(QMainWindow):
             warn(f"[SCROLL] マーカーID {m.d.get('id')}: 位置({sp.x()}, {sp.y()}), 実際のサイズ{w}x{h}, 配置: {aln}")
 
             if aln == "中央":
-                # ── ビューポート中央寄せ ───────────────────
+                # -- ビューポート中央寄せ -----------------
                 # マーカーの中心座標を計算（実際の描画領域の中心）
                 marker_center_x = sp.x() + w/2
                 marker_center_y = sp.y() + h/2
@@ -2236,7 +2249,7 @@ class MainWindow(QMainWindow):
                 #QTimer.singleShot(50, lambda: self.view.centerOn(marker_center_x, marker_center_y))
                 
             else:
-                # ── 左上寄せ ─────────────────────────────
+                # -- 左上寄せ ---------------------------
                 # ビューポート寸法をシーン座標へ変換（ズーム倍率対応）
                 transform = self.view.transform()
                 vp_w = self.view.viewport().width()  / transform.m11()
