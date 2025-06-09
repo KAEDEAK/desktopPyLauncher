@@ -2,7 +2,7 @@
 <html lang="ja">
 <head>
 <meta charset="utf-8">
-<title><!-- title --></title>
+<title>desktopPyLauncher JSON Viewer</title>
 <!-- Google Fonts: Noto Sans JP -->
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -181,24 +181,49 @@
         color: #eea;
     }
     
-    .launcher{border:2px solid #6b6b6b;background-color:#333;}
-    .image{border:2px solid #4a8f4a;background-color:#333;}
-    .note{background-color:#323334;border:2px solid #5b5b5b;color:#CCCACD;}
-    .marker{border:2px solid #d4842e;background-color:#444;color:#CCCACD;}
-    .video{border:2px solid #ff6b6b;background-color:#333;}
-    .caption{position:absolute;font-size:12px;color:#ccc;text-align:center;background:rgba(0,0,0,0.8);padding:2px 4px;border-radius:3px;white-space:nowrap;max-width:200px;}
-    .marker-caption{color:#d4842e;}
-    .videoPlaceholder{display:flex;align-items:center;justify-content:center;width:100%;height:100%;background:#444;color:#ccc;font-size:14px;text-align:center;}
-    #minimapCanvas{position:absolute;top:10px;right:10px;border:2px solid #666;background:rgba(0,0,0,0.8);cursor:pointer;}
+    /* 引用 */
+    .note-content blockquote {
+        border-left: 3px solid #666;
+        margin: 0.2em 0;
+        padding-left: 0.5em;
+        color: #ccc;
+    }
+    .note-content blockquote:first-child { margin-top: 0; }
+    .note-content blockquote:last-child { margin-bottom: 0; }
+    
+    /* 強調・斜体 */
+    .note-content strong, .note-content b { font-weight: 700; }
+    .note-content em, .note-content i { font-style: italic; }
+    
+    /* 画像 */
+    .note-content img {
+        max-width: 100%;
+        height: auto;
+        vertical-align: middle;
+    }
+    
+    /* モノスペースフォントも統一 */
+    .note-content code, .note-content pre {
+        font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
+    }
+    
+    .marker{border:none;background:transparent;display:flex;align-items:center;justify-content:center;color:#ff6666;font-size:18px;font-weight:bold;text-shadow:2px 2px 4px rgba(0,0,0,0.8);}
+    .marker::before{content:"📍";font-size:24px;margin-right:4px;}
+    .caption{position:absolute;text-align:center;color:#ccc;font-size:12px;pointer-events:none;text-shadow:1px 1px 1px rgba(0,0,0,.75);}
+    .marker-caption{color:#ffcccc;font-weight:bold;text-shadow:1px 1px 2px rgba(0,0,0,0.8);}
+    .videoPlaceholder{display:flex;align-items:center;justify-content:center;width:100%;height:100%;background:#000;color:#888;font-size:14px;font-family:monospace;}
+    #minimapCanvas{position:fixed;right:16px;bottom:16px;width:180px;height:180px;background:rgba(0,0,0,0.6);border:1px solid #aaa;z-index:1000;}
+    .item a{color:#aaf;}
+    .item a:hover{color:#eea;}
+
+    #canvasWrapper{
+      scroll:both;
+      overflow:scroll;
+    }
 </style>
 </head>
-
 <body>
-
-<div id="canvasWrapper">
-  <div id="canvas"></div>
-</div>
-
+<div id="canvasWrapper"><div id="canvas"></div></div>
 <canvas id="minimapCanvas" width="180" height="180"></canvas>
 
 <script type="application/json" id="jsonData"><!-- embeded_json_data//--></script>
@@ -233,32 +258,6 @@ let dragStartX  = 0;
 let dragStartY  = 0;
 let miniScale   = 1;
 const markers   = new Map();
-
-// Z値の管理用
-let zMin = 0;
-let zMax = 0;
-let zRange = 1;
-
-/** ★ ミニマップクリック機能（新規追加） */
-function onMinimapClick(e) {
-  const rect = mini.getBoundingClientRect();
-  const clickX = e.clientX - rect.left;
-  const clickY = e.clientY - rect.top;
-  
-  // ミニマップ座標をシーン座標に変換
-  const sceneX = clickX / miniScale;
-  const sceneY = clickY / miniScale;
-  
-  // ビューポートの中心がクリック位置になるように移動
-  const centerX = wrapper.clientWidth / 2;
-  const centerY = wrapper.clientHeight / 2;
-  
-  translateX = centerX - sceneX * zoom;
-  translateY = centerY - sceneY * zoom;
-  
-  canvas.style.transform = `translate(${translateX}px, ${translateY}px) scale(${zoom})`;
-  drawMini();
-}
 
 /** ドラッグ開始 */
 function onDragStart(e) {
@@ -312,20 +311,6 @@ function onWheel(e) {
 function buildUI(data) {
   if (!data || !Array.isArray(data.items)) return;
   canvas.innerHTML = "";
-  
-  // Z値の範囲を計算
-  const zValues = data.items.map(it => it.z || 0).filter(z => typeof z === 'number');
-  if (zValues.length > 0) {
-    zMin = Math.min(...zValues);
-    zMax = Math.max(...zValues);
-    zRange = zMax - zMin;
-    if (zRange === 0) zRange = 1; // 0除算を避ける
-  } else {
-    zMin = 0;
-    zMax = 0;
-    zRange = 1;
-  }
-  
   let maxX = 0, maxY = 0;
   data.items.forEach(it => {
     maxX = Math.max(maxX, it.x + (it.width || 48));
@@ -338,8 +323,7 @@ function buildUI(data) {
     switch(it.type) {
       case "launcher":
       case "json":   addLauncher(it); break;
-      case "image":
-      case "gif":    addImage(it);    break;
+      case "image":  addImage(it);    break;
       case "note":   addNote(it);     break;
       case "video":  addVideo(it);    break;
       case "marker": addMarker(it);   break;
@@ -376,18 +360,6 @@ function drawMini(){
 
 /* -------------------------------- */
 
-/**
- * Z値を適用（0-1000の範囲にマッピング）
- */
-function applyZIndex(element, zValue) {
-  if (typeof zValue === 'number') {
-    // Z値を0-1000の範囲にマッピング
-    const normalizedZ = zRange > 0 ? ((zValue - zMin) / zRange) * 1000 : 500;
-    element.style.zIndex = Math.round(normalizedZ);
-  } else {
-    element.style.zIndex = 500; // デフォルト値
-  }
-}
 
 /**
  * キャプション追加
@@ -400,15 +372,6 @@ function addCaption(d, text, isMarker = false) {
   cap.style.left  = d.x + "px";
   cap.style.top   = (d.y + d.height + 2) + "px";
   cap.style.width = d.width + "px";
-  
-  // キャプションのZ値は親アイテムより少し高く設定
-  if (typeof d.z === 'number') {
-    const normalizedZ = zRange > 0 ? ((d.z - zMin) / zRange) * 1000 : 500;
-    cap.style.zIndex = Math.round(normalizedZ) + 1;
-  } else {
-    cap.style.zIndex = 501; // デフォルト値 + 1
-  }
-  
   canvas.appendChild(cap);
 }
 
@@ -416,15 +379,21 @@ function addCaption(d, text, isMarker = false) {
  * ダブルクリックでURLを開く
  */
 function attachOpenUrl(el, url) {
-  if (!url || !url.trim()) return;
-  el.addEventListener("dblclick", () => window.open(url, "_blank"));
+  if (!url || !(url.startsWith("http://") || url.startsWith("https://"))) return;
+  el.style.cursor = "pointer";
+  el.addEventListener("dblclick", e => {
+    window.open(url, "_blank");
+    e.stopPropagation();
+  });
 }
 
-function applyBrightness(imgEl, brightness) {
-  brightness = brightness || 100;
-  if (brightness !== 100) {
-    imgEl.style.filter = `brightness(${brightness}%)`;
-  }
+/**
+ * 明るさフィルター適用
+ */
+function applyBrightness(element, brightness) {
+  if (brightness == null || brightness === 50) return;
+  const filterValue = brightness / 50;
+  element.style.filter = `brightness(${filterValue})`;
 }
 
 /**
@@ -440,37 +409,18 @@ function addLauncher(d) {
     height: d.height + "px"
   });
 
-  // Z値を適用
-  applyZIndex(el, d.z);
-
-  let imgSrc;
-  if ((d.store === "embed" || !d.path) && (d.icon_embed || d.embed || d.data)) {
-    // アイコンデータがembedされている場合
-    const iconData = d.icon_embed || d.embed || d.data;
-    let mimeType = "image/*";
-    
-    // base64データの最初の文字で画像形式を判定
-    if (iconData.startsWith("/9j/")) {
-      mimeType = "image/jpeg";
-    } else if (iconData.startsWith("iVBOR")) {
-      mimeType = "image/png";
-    } else if (iconData.startsWith("R0lGOD")) {
-      mimeType = "image/gif";
-    }
-    
-    imgSrc = `data:${mimeType};base64,${iconData}`;
-  } else if (d.path) {
-    const ext = d.path.substring(d.path.lastIndexOf(".")).toLowerCase();
+  let imgSrc = "";
+  if (d.icon_embed)       imgSrc = "data:image/png;base64," + d.icon_embed;
+  else if (d.embed)       imgSrc = "data:image/png;base64," + d.embed;
+  else {
+    const ext = d.path ? d.path.substring(d.path.lastIndexOf(".")).toLowerCase() : "";
     imgSrc = definedIcons[ext] || "res/default.png";
-  } else {
-    imgSrc = "res/default.png";
   }
 
   const img = new Image();
   img.src = imgSrc;
   img.onload  = () => { applyBrightness(img, d.brightness); drawMini(); };
   img.onerror = () => {
-    console.warn("Launcher icon load error for:", d);
     img.src = "data:image/svg+xml;base64," +
       btoa('<svg xmlns="http://www.w3.org/2000/svg" width="48" height="48"><rect width="48" height="48" fill="#666"/><text x="24" y="28" fill="#ccc" font-size="12" text-anchor="middle">?</text></svg>');
     applyBrightness(img, d.brightness);
@@ -496,47 +446,19 @@ function addImage(d) {
     height: d.height + "px"
   });
 
-  // Z値を適用
-  applyZIndex(box, d.z);
-
   const img = new Image();
   img.style.width     = "100%";
   img.style.height    = "100%";
   img.style.objectFit = "contain";
 
-  // embedフィールドまたはdataフィールドがある場合
   if ((d.store === "embed" || !d.path) && (d.embed || d.data)) {
-    let mimeType = "image/*";
-    const base64Data = d.embed || d.data;
-    
-    // typeに基づいてMIMEタイプを決定
-    if (d.type === "gif") {
-      mimeType = "image/gif";
-    } else if (d.type === "image") {
-      // base64データの最初の文字で画像形式を判定
-      if (base64Data.startsWith("/9j/")) {
-        mimeType = "image/jpeg";
-      } else if (base64Data.startsWith("iVBOR")) {
-        mimeType = "image/png";
-      } else if (base64Data.startsWith("R0lGOD")) {
-        mimeType = "image/gif";
-      } else {
-        mimeType = "image/jpeg"; // デフォルト
-      }
-    }
-    
-    img.src = `data:${mimeType};base64,${base64Data}`;
-  } else if (d.path) {
-    img.src = d.path;
+    img.src = "data:image/*;base64," + (d.embed || d.data);
   } else {
-    // フォールバック：エラー画像を表示
-    img.src = "data:image/svg+xml;base64," +
-      btoa('<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100"><rect width="100" height="100" fill="#333"/><text x="50" y="50" fill="#ccc" font-size="12" text-anchor="middle">画像読み込み失敗</text></svg>');
+    img.src = d.path;
   }
 
   img.onload  = () => { applyBrightness(img, d.brightness); drawMini(); };
   img.onerror = () => {
-    console.warn("Image load error for:", d);
     img.src = "data:image/svg+xml;base64," +
       btoa('<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100"><rect width="100" height="100" fill="#333"/><text x="50" y="50" fill="#ccc" font-size="12" text-anchor="middle">画像読み込み失敗</text></svg>');
     applyBrightness(img, d.brightness);
@@ -561,10 +483,6 @@ function addVideo(d) {
     width:  d.width  + "px",
     height: d.height + "px"
   });
-
-  // Z値を適用
-  applyZIndex(box, d.z);
-
   const ph = document.createElement("div");
   ph.className   = "videoPlaceholder";
   ph.textContent = "📹 Video (Not Supported)";
@@ -588,42 +506,7 @@ function jumpToMarker(id) {
  */
 function addMarker(d) {
   const el = document.createElement("div");
-  el.className = "item marker" + (d.jump_id != null ? " jump-marker" : "");
-  Object.assign(el.style, {
-    left:   d.x + "px",
-    top:    d.y + "px",
-    width:  d.width  + "px",
-    height: d.height + "px",
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "center",
-    fontSize: Math.min(16, d.height * 0.4) + "px",
-    fontWeight: "bold"
-  });
-
-  // Z値を適用
-  applyZIndex(el, d.z);
-
-  const text = d.text || "🔹";
-  el.textContent = text;
-
-  if (d.jump_id != null) {
-    markers.set(d.jump_id, el);
-    el.style.cursor = "pointer";
-    el.addEventListener("click", () => jumpToMarker(d.jump_id));
-  }
-
-  canvas.appendChild(el);
-  addCaption(d, d.caption, true);
-  attachOpenUrl(el, d.path);
-}
-
-/**
- * NoteItem 描画
- */
-function addNote(d) {
-  const el = document.createElement("div");
-  el.className = "item note";
+  el.className = "item marker" + (d.jump_id != null ? " clickable" : "");
   Object.assign(el.style, {
     left:   d.x + "px",
     top:    d.y + "px",
@@ -631,47 +514,161 @@ function addNote(d) {
     height: d.height + "px"
   });
 
-  // Z値を適用
-  applyZIndex(el, d.z);
-
-  const contentDiv = document.createElement("div");
-  contentDiv.className = "note-content";
-
-  if (d.format === "markdown") {
-    try {
-      contentDiv.innerHTML = marked.parse(d.text || "");
-    } catch (err) {
-      contentDiv.textContent = d.text || "";
-    }
+  let markerText = "";
+  if (d.is_start) {
+    markerText = "START";
+    el.style.color = "#66ff66";
+  } else if (d.jump_id) {
+    markerText = `→${d.jump_id}`;
+    el.style.color = "#ffff66";
   } else {
-    contentDiv.textContent = d.text || "";
+    markerText = `ID:${d.id}`;
+    el.style.color = "#ff6666";
   }
 
-  if (d.fill_background === false) {
-    el.style.background = "transparent";
-    el.style.border = "none";
+  el.title       = `Marker ID: ${d.id}` +
+                   (d.jump_id ? `, Jump to: ${d.jump_id}` : "") +
+                   (d.is_start ? " (START)" : "");
+  el.textContent = markerText;
+  canvas.appendChild(el);
+
+  markers.set(d.id, el);
+  if (d.jump_id != null) {
+    el.addEventListener("dblclick", e => {
+      jumpToMarker(d.jump_id);
+      e.stopPropagation();
+    });
+  }
+  if (d.show_caption !== false) {
+    addCaption(d, d.caption, true);
+  }
+}
+
+/**
+ * NoteItem 描画／編集切替（フォント統一版）
+ */
+function addNote(d) {
+  const el = document.createElement("div");
+  el.className = "item note" + (d.fill_background ? " has-background" : "");
+  
+  // ボックスモデルをQt側に合わせる
+  Object.assign(el.style, {
+    left:       d.x + "px",
+    top:        d.y + "px",
+    width:      d.width  + "px",
+    height:     d.height + "px",
+    userSelect: "none",
+    boxSizing:  "border-box",
+    // スクロールバー設定
+    overflow:   "auto",
+    overflowX:  "hidden",
+    // スクロールバーのスタイルを調整
+    scrollbarWidth: "thin", // Firefox
+    scrollbarColor: "#666 transparent" // Firefox
+  });
+  
+  // 背景色設定
+  el.style.background = d.fill_background ? (d.bgcolor || "#323334") : "transparent";
+  
+  // Webkit系スクロールバーのカスタマイズ（インラインで適用）
+  const scrollbarStyle = document.createElement('style');
+  scrollbarStyle.textContent = `
+    .note::-webkit-scrollbar { width: 6px; height: 6px; }
+    .note::-webkit-scrollbar-track { background: transparent; }
+    .note::-webkit-scrollbar-thumb { background: #666; border-radius: 3px; }
+    .note::-webkit-scrollbar-thumb:hover { background: #888; }
+  `;
+  if (!document.querySelector('#noteScrollbarStyle')) {
+    scrollbarStyle.id = 'noteScrollbarStyle';
+    document.head.appendChild(scrollbarStyle);
   }
 
-  el.appendChild(contentDiv);
+  const content = d.text || "";
+  
+  // フォントサイズの微調整（ブラウザ差を吸収）
+  const adjustedFontSize = d.fontsize ? Math.round(d.fontsize * 0.95) : 13;
+  
+  if (d.format === "markdown") {
+    // Markdownの場合、まずHTMLに変換
+    const htmlContent = marked.parse(content);
+    
+    // ラッパーdivで囲んで、基本スタイルを強制的に適用
+    const contentDiv = document.createElement('div');
+    contentDiv.className = 'note-content';
+    contentDiv.style.cssText = `
+      padding: 5px;
+      color: ${d.color || '#CCCACD'};
+      font-size: ${adjustedFontSize}px;
+      font-family: 'Noto Sans JP', 'Hiragino Kaku Gothic ProN', sans-serif;
+      line-height: 1.3;
+      margin: 0;
+      box-sizing: border-box;
+      word-break: break-word;
+      /* テキスト選択時のハイライト色 */
+      ::selection { background: rgba(100, 150, 255, 0.3); }
+    `;
+    contentDiv.innerHTML = htmlContent;
+    el.appendChild(contentDiv);
+    
+    // style属性を持つ要素の処理
+    contentDiv.querySelectorAll('[style]').forEach(elem => {
+      const currentStyle = elem.getAttribute('style');
+      if (!currentStyle.includes('color:')) {
+        elem.style.color = 'inherit';
+      }
+      if (!currentStyle.includes('font-size:')) {
+        elem.style.fontSize = 'inherit';
+      }
+    });
+  } else {
+    // プレーンテキストの場合
+    const contentDiv = document.createElement('div');
+    contentDiv.className = 'note-content';
+    contentDiv.style.cssText = `
+      padding: 5px;
+      color: ${d.color || '#CCCACD'};
+      font-size: ${adjustedFontSize}px;
+      font-family: 'Noto Sans JP', 'Hiragino Kaku Gothic ProN', sans-serif;
+      line-height: 1.3;
+      margin: 0;
+      box-sizing: border-box;
+      white-space: pre-wrap;
+      word-wrap: break-word;
+      word-break: break-word;
+    `;
+    contentDiv.textContent = content;
+    el.appendChild(contentDiv);
+  }
 
-  // ダブルクリックで編集モード切り替え
+  // ダブルクリックで編集モード切替
   el.addEventListener("dblclick", e => {
-    if (contentDiv.isContentEditable) {
-      contentDiv.contentEditable = "false";
-      contentDiv.style.userSelect = "none";
-      el.style.userSelect = "none";
-    } else {
+    e.preventDefault();
+    const contentDiv = el.querySelector('.note-content');
+    if (!contentDiv.isContentEditable) {
       contentDiv.contentEditable = "true";
-      contentDiv.style.userSelect = "auto";
-      el.style.userSelect = "auto";
+      contentDiv.style.userSelect = "text";
+      el.style.userSelect = "text";
       contentDiv.focus();
-      if (d.format === "text") {
-        const range = document.createRange();
-        range.selectNodeContents(contentDiv);
+      
+      // クリック位置にカーソルを配置
+      let range;
+      if (document.caretRangeFromPoint) {
+        range = document.caretRangeFromPoint(e.clientX, e.clientY);
+      } else if (document.caretPositionFromPoint) {
+        const pos = document.caretPositionFromPoint(e.clientX, e.clientY);
+        range = document.createRange();
+        range.setStart(pos.offsetNode, pos.offset);
+      }
+      if (range) {
+        range.collapse(true);
         const sel = window.getSelection();
         sel.removeAllRanges();
         sel.addRange(range);
       }
+    } else {
+      contentDiv.contentEditable = "false";
+      contentDiv.style.userSelect = "none";
+      el.style.userSelect = "none";
     }
     e.stopPropagation();
   });
@@ -694,9 +691,6 @@ document.addEventListener("DOMContentLoaded", () => {
   wrapper.addEventListener("mouseleave", onDragEnd);
   wrapper.addEventListener("wheel",      onWheel);
 
-  // ★ ミニマップクリックイベントを追加
-  mini.addEventListener("click", onMinimapClick);
-
   try {
     const jsonElement = document.getElementById("jsonData");
     if (jsonElement && jsonElement.textContent.trim()) {
@@ -710,6 +704,8 @@ document.addEventListener("DOMContentLoaded", () => {
   window.addEventListener("load", drawMini);
 });
 </script>
+
+
 
 </body>
 </html>
