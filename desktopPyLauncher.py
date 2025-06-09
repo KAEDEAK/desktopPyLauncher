@@ -43,7 +43,11 @@ from DPyL_classes import (
     CanvasItem, CanvasResizeGrip,
     BackgroundDialog
 )
-
+from DPyL_ticker import (
+    NotificationManager, show_save_notification, show_export_html_notification,
+    show_export_error_notification, show_project_load_notification, 
+    show_error_notification, show_warning_notification
+)
 from DPyL_note    import (NoteItem,NOTE_BG_COLOR,NOTE_FG_COLOR)
 from DPyL_video   import VideoItem
 from DPyL_marker import MarkerItem
@@ -740,6 +744,8 @@ class MainWindow(QMainWindow):
         
         #self.view.installEventFilter(self)
         
+        self.notification_manager = NotificationManager(self.scene, self.view)
+        
         # --- スクロールやシーン変更時にミニマップを再描画 / スクロールやシーン変更時に「表示／非表示判定」を行う ---
         if SHOW_MINIMAP:
             self.view.horizontalScrollBar().valueChanged.connect(self.minimap.updateVisibility)
@@ -774,6 +780,10 @@ class MainWindow(QMainWindow):
         super().resizeEvent(event)
         self._position_minimap()
         self._resize_timer.start(100)
+        
+        # 変更: 通知マネージャーのシーンとビューを更新
+        if hasattr(self, 'notification_manager'):
+            self.notification_manager.set_scene_and_view(self.scene, self.view) 
                 
         
     def mouseReleaseEvent(self, ev):
@@ -2110,9 +2120,9 @@ class MainWindow(QMainWindow):
             with open(self.json_path, "w", encoding="utf-8") as f:
                 json.dump(self.data, f, ensure_ascii=False, indent=2)
             if not auto:
-                QMessageBox.information(self, "SAVE", "保存しました！")
+                show_save_notification(self)
         except Exception as e:
-            QMessageBox.critical(self, "SAVE", str(e))
+            show_error_notification(f"保存エラー: {str(e)}", self)
     # ==============================================================
     #  export
     # ==============================================================
@@ -2124,7 +2134,8 @@ class MainWindow(QMainWindow):
             # テンプレートファイルを読み込み
             template_path = Path(__file__).parent / "template" / "template.html"
             if not template_path.exists():
-                QMessageBox.critical(self, "エラー", f"テンプレートファイルが見つかりません:\n{template_path}")
+                show_error_notification(f"テンプレートファイルが見つかりません: {template_path}", self)
+
                 return
                 
             with open(template_path, "r", encoding="utf-8") as f:
@@ -2200,14 +2211,10 @@ class MainWindow(QMainWindow):
                 with open(save_path, "w", encoding="utf-8") as f:
                     f.write(html_content)
                 
-                QMessageBox.information(
-                    self, 
-                    "エクスポート完了", 
-                    f"HTMLファイルとして保存しました:\n{save_path}"
-                )
+                show_export_html_notification(Path(save_path).name, self)
                 
         except Exception as e:
-            QMessageBox.critical(self, "エクスポートエラー", f"HTMLエクスポートに失敗しました:\n{str(e)}")
+            show_export_error_notification(str(e), self)
     #  private helpers
     # ==============================================================
     def _scroll_to_start_marker(self):
@@ -2488,8 +2495,8 @@ class MainWindow(QMainWindow):
                 # 編集モードに切り替え
                 self._set_mode(edit=True)
                 
-                QMessageBox.information(self, "読み込み完了", 
-                                      f"プロジェクト '{project_name}' を読み込み、{len(loaded_items)}個のアイテムをグループ化しました。")
+                show_project_load_notification(project_name, len(loaded_items), self)
+
             elif len(loaded_items) == 1:
                 # 単一アイテムの場合はそのまま選択
                 for item in self.scene.selectedItems():
@@ -2497,14 +2504,12 @@ class MainWindow(QMainWindow):
                 loaded_items[0].setSelected(True)
                 self._set_mode(edit=True)
                 
-                QMessageBox.information(self, "読み込み完了", 
-                                      f"プロジェクトからアイテムを1個読み込みました。")
+                show_project_load_notification("", 1, self)
             else:
-                QMessageBox.information(self, "読み込み完了", 
-                                      "アイテムが読み込まれませんでした。")
+                show_project_load_notification("", 0, self)
             
         except Exception as e:
-            QMessageBox.critical(self, "エラー", f"プロジェクトの読み込みに失敗しました：{str(e)}")
+            show_error_notification(f"プロジェクトの読み込みに失敗しました: {str(e)}", self)
             import traceback
             traceback.print_exc()
 # ==============================================================
