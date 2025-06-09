@@ -868,7 +868,11 @@ class LauncherItem(GifMixin, CanvasItem):
     def _refresh_icon(self):
         """アイコン画像を更新（GIF対応）"""
         try:
-            # GIF処理を最初に試行
+            # ★修正点：まず既存のGIFアニメーションを停止する
+            # 新しいアイコンがGIFでない場合でも、前のアニメーションが確実に停止される
+            self._stop_movie()
+            
+            # GIF処理を試行
             if self._try_load_gif():
                 self._update_caption_and_grip()
                 return
@@ -1107,6 +1111,9 @@ class LauncherItem(GifMixin, CanvasItem):
         from DPyL_classes import LauncherEditDialog
         dlg = LauncherEditDialog(self.d, win)
         if dlg.exec() == QDialog.DialogCode.Accepted:
+            # ★修正点：編集結果を反映する前に既存のGIFアニメーションを停止
+            self._stop_movie()
+            
             self.embed   = self.d.get("icon_embed")   # 更新された可能性
             self.workdir = self.d.get("workdir", "")
             # 一時プレビューのサイズで width/height を保存
