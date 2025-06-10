@@ -11,6 +11,7 @@ from base64 import b64decode
 from shlex import split as shlex_split
 from win32com.client import Dispatch
 import subprocess
+
 from PyQt6.QtCore import (
     Qt, QPointF, QRectF, QSizeF, QTimer, QSize, QFileInfo, QBuffer, QByteArray, QIODevice, QProcess, QCoreApplication
 )
@@ -254,56 +255,70 @@ class CanvasItem(QGraphicsItemGroup):
     def _apply_pixmap(self) -> None:
         """
         ImageItem/JSONItem共通：ピクスマップ表示＋枠サイズ設定
-          - self.pathやself.embedから画像取得
-          - d['width'],d['height']でスケーリング
-          - 明るさ補正
-          - 子の_pix_item/_rect_item更新
+        - 新フィールドから画像取得
+        - d['width'],d['height']でスケーリング
+        - 明るさ補正
+        - 子の_pix_item/_rect_item更新
         """
         # 1) ピクスマップ取得
         pix = QPixmap()
-        if my_has_attr(self, "embed") and self.embed:
-            pix.loadFromData(b64decode(self.embed))
-        #elif my_has_attr(self, "path") and self.path:
-        #    pix = QPixmap(self.path)
+        
+        # 新フィールドから埋め込みデータを取得
+        if self.d.get("image_embedded") and self.d.get("image_embedded_data"):
+            try:
+                pix.loadFromData(b64decode(self.d["image_embedded_data"]))
+            except Exception as e:
+                warn(f"[CanvasItem] Failed to load embed data: {e}")
+                pix = None
         else:
-            icon_path = getattr(self, "icon", None) or getattr(self, "path", "")
+            # パスから画像を取得
+            icon_path = self.d.get("icon") or self.d.get("path", "")
             if icon_path:
                 pix = QPixmap(icon_path)
                 
         # 2) 代替アイコン
         if pix.isNull():
-            pix = _icon_pixmap(getattr(self, "path", "") or "", 0, ICON_SIZE)
+            path = self.d.get("path", "")
+            idx = self.d.get("icon_index", 0)
+            pix = _icon_pixmap(path, idx, ICON_SIZE)
 
         # オリジナルを保持
         self._src_pixmap = pix.copy()
 
         # 3) サイズ指定でスケーリング（cover）
-        tgt_w = int(self.d.get("width",  pix.width()))
+        tgt_w = int(self.d.get("width", pix.width()))
         tgt_h = int(self.d.get("height", pix.height()))
-        scaled = self._src_pixmap.scaled(tgt_w, tgt_h,
-                            Qt.AspectRatioMode.KeepAspectRatioByExpanding,
-                            Qt.TransformationMode.SmoothTransformation)
-        crop_x = max(0, (scaled.width()  - tgt_w) // 2)
+        scaled = self._src_pixmap.scaled(
+            tgt_w, tgt_h,
+            Qt.AspectRatioMode.KeepAspectRatioByExpanding,
+            Qt.TransformationMode.SmoothTransformation
+        )
+        crop_x = max(0, (scaled.width() - tgt_w) // 2)
         crop_y = max(0, (scaled.height() - tgt_h) // 2)
         pix = scaled.copy(crop_x, crop_y, tgt_w, tgt_h)
 
-        # 4) 明るさ補正
-        bri = getattr(self, "brightness", None)
+        # 4) 明るさ補正（brightnessがある場合のみ）
+        bri = self.d.get("brightness")
         if bri is not None and bri != 50:
             level = bri - 50
             alpha = int(abs(level) / 50 * 255)
             overlay = QPixmap(pix.size())
             overlay.fill(Qt.GlobalColor.transparent)
             painter = QPainter(overlay)
-            col = QColor(255,255,255,alpha) if level>0 else QColor(0,0,0,alpha)
+            col = QColor(255, 255, 255, alpha) if level > 0 else QColor(0, 0, 0, alpha)
             painter.fillRect(overlay.rect(), col)
             painter.end()
+            
             result = QPixmap(pix.size())
             result.fill(Qt.GlobalColor.transparent)
-            p2 = QPainter(result)
-            p2.drawPixmap(0,0,pix)
-            p2.drawPixmap(0,0,overlay)
-            p2.end()
+            painter = QPainter(result)
+            painter.drawPixmap(0, 0, pix)
+            painter.setCompositionMode(
+                QPainter.CompositionMode.CompositionMode_SourceOver if level > 0
+                else QPainter.CompositionMode.CompositionMode_Multiply
+            )
+            painter.drawPixmap(0, 0, overlay)
+            painter.end()
             pix = result
 
         # 5) ピクスマップ反映
@@ -316,7 +331,8 @@ class CanvasItem(QGraphicsItemGroup):
         caption_h = 0
         if "caption" in self.d:
             self.init_caption()
-            caption_h = self.cap_item.boundingRect().height()
+            if hasattr(self, "cap_item") and self.cap_item:
+                caption_h = self.cap_item.boundingRect().height()
 
         self._rect_item.setRect(0, 0, pix.width(), pix.height() + caption_h)
 
@@ -762,7 +778,7 @@ class LauncherItem(GifMixin, CanvasItem):
     # 実行系拡張子
     SCRIPT_LIKE = (".bat", ".cmd", ".ps1", ".py", ".js", ".vbs", ".wsf")
     EXE_LIKE    = (".exe", ".com", ".jar", ".msi")
-    EDITABLE_LIKE = (".txt", ".json", ".yaml", ".yml", ".md")
+    EDITABLE_LIKE = (".txt", ".json", ".yaml", ".yml", ".md", ".bat", ".ini")
     SHORTCUT_LIKE = (".lnk", ".url")
 
     @classmethod
@@ -844,7 +860,6 @@ class LauncherItem(GifMixin, CanvasItem):
         # 基本属性
         self.icon = self.d.get("icon", "")
         self.workdir = self.d.get("workdir", "")
-        self.embed = self.d.get("icon_embed")
         self.is_editable = self.d.get("is_editable", False)
         self.runas = self.d.get("runas", False)
         self.brightness = self.d.get("brightness", 50)
@@ -862,16 +877,14 @@ class LauncherItem(GifMixin, CanvasItem):
         # ピクスマップアイテム
         self._pix_item = QGraphicsPixmapItem(parent=self)
         self._refresh_icon()
-
+        
     @property
     def path(self):
         return self.d.get("path", "")
 
     def _refresh_icon(self):
-        """アイコン画像を更新（GIF対応）"""
+        """アイコン画像を更新（GIF対応）- 新フィールド版"""
         try:
-            # ★修正点：まず既存のGIFアニメーションを停止する
-            # 新しいアイコンがGIFでない場合でも、前のアニメーションが確実に停止される
             self._stop_movie()
             
             # GIF処理を試行
@@ -888,6 +901,7 @@ class LauncherItem(GifMixin, CanvasItem):
             self._load_fallback_icon()
             self._update_caption_and_grip()
 
+
     def _update_caption_and_grip(self):
         """キャプションとグリップ位置を更新"""
         # キャプション位置を更新
@@ -902,43 +916,78 @@ class LauncherItem(GifMixin, CanvasItem):
             self._edit_label.setPos(2, 2)
 
     def _try_load_gif(self) -> bool:
-        """GIFの読み込みを試行"""
+        """GIFの読み込みを試行 - 詳細なエラーログ付き"""
         tgt_w = int(self.d.get("width", ICON_SIZE))
         tgt_h = int(self.d.get("height", ICON_SIZE))
         
-        # embed データからGIF読み込み
-        if self.embed:
+        # デバッグ情報を出力
+        caption = self.d.get("caption", "<no caption>")
+        item_type = self.d.get("type", "<no type>")
+        
+        # 新フィールドから埋め込みデータを取得
+        if self.d.get("image_embedded") and self.d.get("image_embedded_data"):
             try:
-                raw = base64.b64decode(self.embed)
-                if self.load_gif(raw=raw):  # スケーリングパラメータを削除
+                embed_data = self.d.get("image_embedded_data")
+                
+                # データ型をチェック
+                if not isinstance(embed_data, str):
+                    warn(f"[GIF] Invalid embed data type for '{caption}' (type={item_type}): "
+                         f"expected str, got {type(embed_data).__name__} = {repr(embed_data)[:50]}")
+                    return False
+                    
+                raw = base64.b64decode(embed_data)
+                if self.load_gif(raw=raw):
                     self.d["width"], self.d["height"] = tgt_w, tgt_h
                     return True
+                    
             except Exception as e:
-                warn(f"GIF embed load failed: {e}")
+                warn(f"[GIF] Embed load failed for '{caption}' (type={item_type}): {e}")
+                warn(f"      embed_data type: {type(self.d.get('image_embedded_data')).__name__}")
+                warn(f"      image_embedded: {self.d.get('image_embedded')}")
+                warn(f"      image_format: {self.d.get('image_format', 'not set')}")
         
         # ファイルパスからGIF読み込み
         src_path = self.d.get("icon") or self.path
         if src_path and src_path.lower().endswith(".gif"):
-            if self.load_gif(path=src_path):  # スケーリングパラメータを削除
+            if self.load_gif(path=src_path):
                 self.d["width"], self.d["height"] = tgt_w, tgt_h
                 return True
+            else:
+                warn(f"[GIF] File load failed for '{caption}' (path={src_path})")
                 
         return False
 
     def _load_static_image(self):
-        """静止画の読み込み処理"""
+        """静止画の読み込み処理 - 詳細なエラーログ付き"""
         tgt_w = int(self.d.get("width", ICON_SIZE))
         tgt_h = int(self.d.get("height", ICON_SIZE))
         
+        caption = self.d.get("caption", "<no caption>")
+        item_type = self.d.get("type", "<no type>")
+        
         pix = None
         
-        # embed データから読み込み
-        if self.embed:
+        # 新フィールドから埋め込みデータを取得
+        if self.d.get("image_embedded") and self.d.get("image_embedded_data"):
             pix = QPixmap()
             try:
-                pix.loadFromData(base64.b64decode(self.embed))
+                embed_data = self.d.get("image_embedded_data")
+                
+                # データ型をチェック
+                if not isinstance(embed_data, str):
+                    warn(f"[STATIC] Invalid embed data type for '{caption}' (type={item_type}): "
+                         f"expected str, got {type(embed_data).__name__} = {repr(embed_data)[:50]}")
+                    pix = None
+                else:
+                    pix.loadFromData(base64.b64decode(embed_data))
+                    if pix.isNull():
+                        warn(f"[STATIC] Pixmap load returned null for '{caption}'")
+                        
             except Exception as e:
-                warn(f"Static image embed load failed: {e}")
+                warn(f"[STATIC] Embed load failed for '{caption}' (type={item_type}): {e}")
+                warn(f"         embed_data type: {type(self.d.get('image_embedded_data')).__name__}")
+                warn(f"         image_embedded: {self.d.get('image_embedded')}")
+                warn(f"         image_format: {self.d.get('image_format', 'not set')}")
                 pix = None
         
         # ファイルパスから読み込み
@@ -947,12 +996,19 @@ class LauncherItem(GifMixin, CanvasItem):
             if src:
                 idx = self.d.get("icon_index", 0)
                 pix = _icon_pixmap(src, idx, max(tgt_w, tgt_h, ICON_SIZE))
+                if pix.isNull():
+                    warn(f"[STATIC] Failed to load from path for '{caption}': {src}")
+            else:
+                warn(f"[STATIC] No path available for '{caption}' (type={item_type})")
+                warn(f"         path: {self.path}")
+                warn(f"         icon: {self.d.get('icon', 'not set')}")
         
         # フォールバック
         if not pix or pix.isNull():
+            warn(f"[STATIC] Using fallback icon for '{caption}'")
             pix = _icon_pixmap("", 0, ICON_SIZE)
             
-        # スケーリングと明るさ調整
+        # 以下既存の処理...
         self._src_pixmap = pix.copy()
         scaled = self._apply_scaling_and_crop(pix, tgt_w, tgt_h)
         final_pix = self._apply_brightness_to_pixmap(scaled)
@@ -961,7 +1017,6 @@ class LauncherItem(GifMixin, CanvasItem):
         self._rect_item.setRect(0, 0, tgt_w, tgt_h)
         self.d["width"], self.d["height"] = tgt_w, tgt_h
         
-        # キャプション位置を手動設定（静止画の場合）
         if hasattr(self, "cap_item") and self.cap_item:
             self.cap_item.setPos(0, tgt_h)
 
@@ -969,31 +1024,38 @@ class LauncherItem(GifMixin, CanvasItem):
         """フォールバックアイコン読み込み"""
         tgt_w = int(self.d.get("width", ICON_SIZE))
         tgt_h = int(self.d.get("height", ICON_SIZE))
+        
         pix = _icon_pixmap("", 0, ICON_SIZE)
-        self._pix_item.setPixmap(pix)
+        self._src_pixmap = pix.copy()
+        scaled = self._apply_scaling_and_crop(pix, tgt_w, tgt_h)
+        final_pix = self._apply_brightness_to_pixmap(scaled)
+        
+        self._pix_item.setPixmap(final_pix)
         self._rect_item.setRect(0, 0, tgt_w, tgt_h)
+        self.d["width"], self.d["height"] = tgt_w, tgt_h
 
-    def _apply_scaling_and_crop(self, pix: QPixmap, w: int, h: int) -> QPixmap:
-        """スケーリングとクロップを適用"""
+    def _apply_scaling_and_crop(self, pix: QPixmap, tgt_w: int, tgt_h: int) -> QPixmap:
+        """スケーリングとクロップ処理"""
         scaled = pix.scaled(
-            w, h,
+            tgt_w, tgt_h,
             Qt.AspectRatioMode.KeepAspectRatioByExpanding,
-            Qt.TransformationMode.SmoothTransformation,
+            Qt.TransformationMode.SmoothTransformation
         )
-        cx = max(0, (scaled.width() - w) // 2)
-        cy = max(0, (scaled.height() - h) // 2)
-        return scaled.copy(cx, cy, w, h)
+        crop_x = max(0, (scaled.width() - tgt_w) // 2)
+        crop_y = max(0, (scaled.height() - tgt_h) // 2)
+        return scaled.copy(crop_x, crop_y, tgt_w, tgt_h)
 
     def _apply_brightness_to_pixmap(self, pix: QPixmap) -> QPixmap:
-        """明るさ補正を適用"""
-        if self.brightness == 50 or pix.isNull():
+        """明るさ調整を適用"""
+        bri = self.brightness
+        if bri is None or bri == 50:
             return pix
             
-        level = self.brightness - 50
+        level = bri - 50
         alpha = int(abs(level) / 50 * 255)
-        
         overlay = QPixmap(pix.size())
         overlay.fill(Qt.GlobalColor.transparent)
+        
         painter = QPainter(overlay)
         col = QColor(255, 255, 255, alpha) if level > 0 else QColor(0, 0, 0, alpha)
         painter.fillRect(overlay.rect(), col)
@@ -1001,10 +1063,16 @@ class LauncherItem(GifMixin, CanvasItem):
         
         result = QPixmap(pix.size())
         result.fill(Qt.GlobalColor.transparent)
-        p2 = QPainter(result)
-        p2.drawPixmap(0, 0, pix)
-        p2.drawPixmap(0, 0, overlay)
-        p2.end()
+        
+        painter = QPainter(result)
+        painter.drawPixmap(0, 0, pix)
+        painter.setCompositionMode(
+            QPainter.CompositionMode.CompositionMode_SourceOver if level > 0
+            else QPainter.CompositionMode.CompositionMode_Multiply
+        )
+        painter.drawPixmap(0, 0, overlay)
+        painter.end()
+        
         return result
 
     def resize_content(self, w: int, h: int):
@@ -1103,7 +1171,7 @@ class LauncherItem(GifMixin, CanvasItem):
             return None, None, None
 
     def _update_edit_label_pos(self):
-        """EDITラベルの位置更新"""
+        """EDITラベルの位置を更新"""
         if hasattr(self, "_edit_label") and self._edit_label:
             self._edit_label.setPos(2, 2)
 
@@ -1116,21 +1184,31 @@ class LauncherItem(GifMixin, CanvasItem):
             # ★修正点：編集結果を反映する前に既存のGIFアニメーションを停止
             self._stop_movie()
             
-            self.embed   = self.d.get("icon_embed")   # 更新された可能性
+            # 新フィールドでの更新チェック
             self.workdir = self.d.get("workdir", "")
-            # 一時プレビューのサイズで width/height を保存
-            if hasattr(dlg, "preview") and isinstance(dlg.preview, QGraphicsPixmapItem):
-                pix = dlg.preview.pixmap()
-                if not pix.isNull():
+            
+            # プレビューのサイズで width/height を保存
+            # LauncherEditDialogのプレビューはQLabelの lbl_prev
+            r"""
+            if hasattr(dlg, "lbl_prev") and dlg.lbl_prev:
+                pix = dlg.lbl_prev.pixmap()
+                if pix and not pix.isNull():
                     self.d["width"], self.d["height"] = pix.width(), pix.height()
-
+            """        
+            # アイコンを再読み込み
             self._refresh_icon()
+            
+            # キャプションを更新
             if hasattr(self, "cap_item") and self.cap_item:
                 self.cap_item.setPlainText(self.d.get("caption", ""))
+                
+        # 編集可能フラグの更新
         self.is_editable = self.d.get("is_editable", False)
         if hasattr(self, "_edit_label"):
             self._edit_label.setVisible(self.is_editable)
             self._update_edit_label_pos()
+            
+        # 実行モードの設定
         self.set_run_mode(not win.a_edit.isChecked())
 
     def on_activate(self):
@@ -1139,18 +1217,14 @@ class LauncherItem(GifMixin, CanvasItem):
         フォルダ → エクスプローラーで開く  
         拡張子に応じて subprocess / QProcess / os.startfile を使い分け
         """
-        import os
-        import sys
-        import subprocess
-        from pathlib import Path
-        from shlex import split as shlex_split
-        from PyQt6.QtCore import QProcess
-        
+       
         path = self.d.get("path", "")
         if not path:
             warn("[LauncherItem] path が設定されていません")
             return
-
+        
+        warn(f"on_activate: {path}")
+        
         # --- フォルダなら explorer で開く ---
         if os.path.isdir(path):
             try:
@@ -1160,6 +1234,26 @@ class LauncherItem(GifMixin, CanvasItem):
             return
 
         ext = Path(path).suffix.lower()
+        
+        # ------------------------------------------------------
+        # 編集可能フラグ付きテキスト系ファイルは OS の編集モードで開く (仮)
+        # ------------------------------------------------------
+        is_edit = self.d.get("is_editable", False)
+        if is_edit and ext in self.EDITABLE_LIKE:
+            import ctypes #ここでいい
+            # Windows ShellExecute の "edit" 動詞で既定のエディタを起動
+            try:
+                # 第5引数はウィンドウ表示モード(1=標準ウィンドウ)
+                ctypes.windll.shell32.ShellExecuteW(None, "edit", path, None, None, 1)
+            except Exception as e:
+                warn(f"[LauncherItem] 編集モード起動失敗: {e}")
+                # フォールバックで通常の open
+                try:
+                    os.startfile(path)
+                except Exception as e2:
+                    warn(f"[LauncherItem] フォールバック起動失敗: {e2}")
+            return
+        # ------------------------------------------------------
         
         # --- URL ならブラウザで開く（例: https://example.com/ など） ---
         if isinstance(path, str) and path.lower().startswith(("http://", "https://")):
@@ -1274,10 +1368,145 @@ class LauncherItem(GifMixin, CanvasItem):
             pass  # 多重継承時の安全性確保
 
 
+# ==================================================================
+#  ImageItem
+# ==================================================================
+
+class ImageItem(CanvasItem):
+    TYPE_NAME = "image"
+    IMAGE_EXTS = (".png", ".jpg", ".jpeg", ".bmp", ".webp", ".ico")
+
+    @classmethod
+    def supports_path(cls, path: str) -> bool:
+        suffix = Path(path).suffix.lower()
+        return suffix in cls.IMAGE_EXTS
+
+    @classmethod
+    def create_from_path(cls, path: str, sp, win):
+        d = {
+            "type": "image",
+            "path": path,
+            "image_embedded": False,  # 新フィールド：デフォルトは参照
+            "brightness": 50,
+            "x": sp.x(), "y": sp.y(),
+            "width": 200, "height": 200
+        }
+        return cls(d, win.text_color), d
+
+    def __init__(
+        self,
+        d: dict[str, Any] | None = None,
+        cb_resize: Callable[[int,int],None] | None = None,
+        text_color: QColor | None = None
+    ):
+        super().__init__(d, cb_resize, text_color)
+        self.brightness = self.d.get("brightness", 50)
+        self.path = self.d.get("path", "")
+        # 古いembedフィールドは使用しない
+        self._pix_item = QGraphicsPixmapItem(parent=self)
+        self._apply_pixmap()
+        self._orig_pixmap = self._src_pixmap
+        self._update_grip_pos()
+
+    def _apply_pixmap(self):
+        """画像を適用 - 新フィールド対応"""
+        pix = QPixmap()
+        
+        # 新フィールドから埋め込みデータを取得
+        if self.d.get("image_embedded") and self.d.get("image_embedded_data"):
+            try:
+                pix.loadFromData(b64decode(self.d["image_embedded_data"]))
+            except Exception as e:
+                warn(f"[IMAGE] Failed to load embed data: {e}")
+                pix = None
+        elif self.path:
+            pix = QPixmap(self.path)
+
+        if pix.isNull():
+            pix = _icon_pixmap(self.path or "", 0, ICON_SIZE)
+
+        self._src_pixmap = pix.copy()
+        tgt_w = int(self.d.get("width", pix.width()))
+        tgt_h = int(self.d.get("height", pix.height()))
+        
+        # スケーリング処理
+        scaled = self._src_pixmap.scaled(
+            tgt_w, tgt_h,
+            Qt.AspectRatioMode.KeepAspectRatioByExpanding,
+            Qt.TransformationMode.SmoothTransformation
+        )
+        crop_x = max(0, (scaled.width()  - tgt_w) // 2)
+        crop_y = max(0, (scaled.height() - tgt_h) // 2)
+        pix = scaled.copy(crop_x, crop_y, tgt_w, tgt_h)
+
+        # 明るさ調整
+        bri = self.brightness
+        if bri is not None and bri != 50:
+            level = bri - 50
+            alpha = int(abs(level) / 50 * 255)
+            overlay = QPixmap(pix.size())
+            overlay.fill(Qt.GlobalColor.transparent)
+            painter = QPainter(overlay)
+            col = QColor(255,255,255,alpha) if level>0 else QColor(0,0,0,alpha)
+            painter.fillRect(overlay.rect(), col)
+            painter.end()
+            
+            result = QPixmap(pix.size())
+            result.fill(Qt.GlobalColor.transparent)
+            painter = QPainter(result)
+            painter.drawPixmap(0, 0, pix)
+            painter.setCompositionMode(
+                QPainter.CompositionMode.CompositionMode_SourceOver if level > 0
+                else QPainter.CompositionMode.CompositionMode_Multiply
+            )
+            painter.drawPixmap(0, 0, overlay)
+            painter.end()
+            pix = result
+
+        self._pix_item.setPixmap(pix)
+        self._rect_item.setRect(0, 0, tgt_w, tgt_h)
+
+    def resize_content(self, w: int, h: int):
+        src = getattr(self, "_src_pixmap", None)
+        if not src or src.isNull():
+            return
+        scaled = src.scaled(
+            w, h,
+            Qt.AspectRatioMode.KeepAspectRatioByExpanding,
+            Qt.TransformationMode.SmoothTransformation
+        )
+        cx = max(0, (scaled.width()  - w) // 2)
+        cy = max(0, (scaled.height() - h) // 2)
+        pm = scaled.copy(cx, cy, w, h)
+        self._pix_item.setPixmap(pm)
+
+    def on_edit(self):
+        """編集ダイアログ起動"""
+        dlg = ImageEditDialog(self)
+        if dlg.exec() == QDialog.DialogCode.Accepted:
+            # 更新された値を反映
+            self.caption = self.d.get("caption", "")
+            self.brightness = int(self.d.get("brightness", 50))
+            self.path = self.d.get("path", "")
+            
+            self.init_caption()  # _apply_caption() → init_caption()に修正
+            self._apply_pixmap()
+            
+        # 編集モード判定をメインウィンドウと同期
+        win = self.scene().views()[0].window()
+        self.set_run_mode(not win.a_edit.isChecked())
+
+    def on_activate(self):
+        try:
+            if self.path:
+                os.startfile(self.path)
+        except Exception:
+            warn("Exception at on_activate")
+            pass
 # --------------------------------------------------
-#  改良された GifItem (GifMixin + CanvasItem)
+#  GifItem (GifMixin + ImageItem)
 # --------------------------------------------------
-class GifItem(GifMixin, CanvasItem):
+class GifItem(GifMixin, ImageItem):
     TYPE_NAME = "gif"
 
     @classmethod
@@ -1290,32 +1519,89 @@ class GifItem(GifMixin, CanvasItem):
             "type": cls.TYPE_NAME,
             "caption": Path(path).stem,
             "path": path,
+            "image_embedded": False,  # 新フィールド
             "x": sp.x(),
             "y": sp.y(),
             "width": 200,
             "height": 200,
             "brightness": 50,
         }
-        item = cls(d)
+        item = cls(d, win.text_color)
         return item, d
 
-    def __init__(self, d):
-        super().__init__(d)
-        self.path = d.get("path")
-        self.brightness = int(d.get("brightness", 50))
+    def __init__(self, d, cb_resize=None, text_color=None):
+        # ImageItemの__init__を呼ぶ前に必要な初期化
+        self._movie = None
+        self._gif_buffer = None
         
-        # ピクスマップアイテム
-        self._pix_item = QGraphicsPixmapItem(parent=self)
+        super().__init__(d, cb_resize, text_color)
         
         # GIF読み込みと開始
-        tgt_w = d.get("width", 200)
-        tgt_h = d.get("height", 200)
+        self._load_gif_content()
+
+    def _load_gif_content(self):
+        """GIFコンテンツの読み込み"""
+        tgt_w = int(self.d.get("width", 200))
+        tgt_h = int(self.d.get("height", 200))
         
+        # 埋め込みデータから読み込み
+        if self.d.get("image_embedded") and self.d.get("image_embedded_data"):
+            try:
+                raw = base64.b64decode(self.d["image_embedded_data"])
+                if self.load_gif(raw=raw):
+                    self.d["width"], self.d["height"] = tgt_w, tgt_h
+                    return
+            except Exception as e:
+                warn(f"[GIF] Failed to load embed data: {e}")
+        
+        # ファイルから読み込み
         if self.path and Path(self.path).exists():
-            if not self.load_gif(path=self.path):  # スケーリングパラメータを削除
+            if self.load_gif(path=self.path):
+                self.d["width"], self.d["height"] = tgt_w, tgt_h
+            else:
                 warn(f"Failed to load GIF: {self.path}")
-        
-        self.resize_to(tgt_w, tgt_h)
+
+    def _apply_pixmap(self):
+        """GifItemでは_on_movie_frameで処理するのでオーバーライド"""
+        if not self._movie:
+            # GIFとして読み込めなかった場合は親クラスの処理を使用
+            super()._apply_pixmap()
+
+    def on_edit(self):
+        """編集ダイアログ起動 - 新フィールド対応"""
+        # ダイアログ実行前の状態を記憶
+        old_path = self.path
+        old_embedded = self.d.get("image_embedded", False)
+        old_data = self.d.get("image_embedded_data")
+
+        dlg = ImageEditDialog(self)
+        if dlg.exec() == QDialog.DialogCode.Accepted:
+            # メタ情報を反映
+            self.caption = self.d.get("caption", "")
+            self.brightness = int(self.d.get("brightness", 50))
+            self.init_caption()  # _apply_caption() → init_caption()に修正
+
+            # パス／埋め込み状態の更新チェック
+            new_path = self.d.get("path", "")
+            new_embedded = self.d.get("image_embedded", False)
+            new_data = self.d.get("image_embedded_data")
+
+            # 変更があればGIFを再読み込み
+            if (new_path != old_path or 
+                new_embedded != old_embedded or 
+                new_data != old_data):
+                
+                self.path = new_path
+                self._stop_movie()
+                self._load_gif_content()
+
+            # 再描画 & 明るさ補正
+            self._update_frame_display()
+            self._apply_brightness()
+
+        # 編集モード判定をメインウィンドウと同期
+        win = self.scene().views()[0].window()
+        self.set_run_mode(not win.a_edit.isChecked())
 
     def resize_to(self, w, h):
         """サイズ変更"""
@@ -1323,12 +1609,11 @@ class GifItem(GifMixin, CanvasItem):
         self.d["height"] = h
         
         if self._movie:
-            # GIFの場合は手動でリサイズ（QMovieのスケーリングは使用しない）
+            # GIFの場合は手動でリサイズ
             self._on_movie_frame()
         else:
-            # 静止画の場合はキャプション位置を手動更新
-            if hasattr(self, "cap_item") and self.cap_item:
-                self.cap_item.setPos(0, h)
+            # 静止画の場合は親クラスの処理
+            super().resize_content(w, h)
             
         self._update_grip_pos()
         self.init_caption()
@@ -1354,224 +1639,28 @@ class GifItem(GifMixin, CanvasItem):
         
         result = QPixmap(pix.size())
         result.fill(Qt.GlobalColor.transparent)
-        p2 = QPainter(result)
-        p2.drawPixmap(0, 0, pix)
-        p2.drawPixmap(0, 0, overlay)
-        p2.end()
+        painter = QPainter(result)
+        painter.drawPixmap(0, 0, pix)
+        painter.setCompositionMode(
+            QPainter.CompositionMode.CompositionMode_SourceOver if level > 0
+            else QPainter.CompositionMode.CompositionMode_Multiply
+        )
+        painter.drawPixmap(0, 0, overlay)
+        painter.end()
+        
         return result
 
-    def mousePressEvent(self, ev):
-        """クリックでGIFのトグル再生"""
-        if ev.button() == Qt.MouseButton.LeftButton:
-            self.toggle_gif_playback()
-            ev.accept()
-        else:
-            super().mousePressEvent(ev)
+    def _update_frame_display(self):
+        """現在のフレームを再描画（明るさ適用なし）"""
+        if self._movie:
+            self._on_movie_frame()
 
-    def on_activate(self):
-        """ダブルクリックでファイルを開く"""
-        try:
-            import os
-            if self.path:
-                os.startfile(self.path)
-        except Exception as e:
-            warn(f"Failed to open file: {e}")
-
-    def on_edit(self):
-        """編集ダイアログを開く"""
-        from DPyL_classes import ImageEditDialog
-        dlg = ImageEditDialog(self)
-        if dlg.exec() == QDialog.DialogCode.Accepted:
-            self.caption = self.d.get("caption", "")
-            self.brightness = int(self.d.get("brightness", 50))
+    def _apply_brightness(self):
+        """明るさのみを更新"""
+        if self._movie:
+            # 現在のフレームに明るさを適用して再描画
+            self._on_movie_frame()
             
-            # パスが変更された場合、GIFを再読み込み
-            new_path = self.d.get("path", "")
-            if new_path and new_path != self.path:
-                self.path = new_path
-                tgt_w = int(self.d.get("width", 200))
-                tgt_h = int(self.d.get("height", 200))
-                self.load_gif(path=self.path)  # スケーリングパラメータを削除
-                
-            self.init_caption()
-            
-        # モード切替
-        win = self.scene().views()[0].window()
-        self.set_run_mode(not win.a_edit.isChecked())
-
-    def __del__(self):
-        """デストラクタでGIFリソースをクリーンアップ"""
-        try:
-            self._stop_movie()
-        except Exception:
-            pass  # デストラクタでは例外を抑制
-        try:
-            super().__del__()
-        except Exception:
-            pass  # 多重継承時の安全性確保
-# ==================================================================
-#  ImageItem
-# ==================================================================
-
-class ImageItem(CanvasItem):
-    TYPE_NAME = "image"
-    @classmethod
-    def supports_path(cls, path: str) -> bool:
-        return Path(path).suffix.lower() in IMAGE_EXTS
-
-    @classmethod
-    def create_from_path(cls, path: str, sp, win):
-        d = {
-            "type": "image",
-            "path": path,
-            "store": "reference",
-            "brightness": 50,
-            "x": sp.x(), "y": sp.y(),
-            "width": 200, "height": 200
-        }
-        return cls(d, win.text_color), d
-
-    def __init__(
-        self,
-        d: dict[str, Any] | None = None,
-        cb_resize: Callable[[int,int],None] | None = None,
-        text_color: QColor | None = None
-    ):
-        super().__init__(d, cb_resize, text_color)
-        self.brightness = self.d.get("brightness", 50)
-        self.path = self.d.get("path", "")
-        self.embed = self.d.get("embed")
-        self._pix_item = QGraphicsPixmapItem(parent=self)
-        self._apply_pixmap()
-        self._orig_pixmap = self._src_pixmap
-        self._update_grip_pos()
-
-    def resize_content(self, w: int, h: int):
-        src = getattr(self, "_src_pixmap", None)
-        if not src or src.isNull():
-            return
-        scaled = src.scaled(
-            w, h,
-            Qt.AspectRatioMode.KeepAspectRatioByExpanding,
-            Qt.TransformationMode.SmoothTransformation
-        )
-        cx = max(0, (scaled.width()  - w) // 2)
-        cy = max(0, (scaled.height() - h) // 2)
-        pm = scaled.copy(cx, cy, w, h)
-        self._pix_item.setPixmap(pm)
-
-    def on_edit(self):
-        """
-        編集ダイアログでキャプション／パス／明るさを編集後、
-        新しい GIF を再ロードして表示を更新するっす！
-        """
-        # ダイアログ実行前のソースを記憶
-        old_path  = getattr(self, "path", "")
-        old_embed = getattr(self, "embed", None)
-
-        dlg = ImageEditDialog(self)                     # 既存ダイアログを再利用
-        if dlg.exec() == QDialog.DialogCode.Accepted:
-
-            # 1) メタ情報（caption / brightness）を反映
-            self.caption         = self.d.get("caption", "")
-            self.brightness      = int(self.d.get("brightness", 50))
-            self._apply_caption()                       # ← 既存ヘルパー
-            #   ※ ここではまだフレーム再描画しない
-
-            # 2) パス／Embed 更新チェック
-            new_path  = self.d.get("path", "")
-            new_embed = self.d.get("embed", None)       # store == "embed" のときのみ存在
-
-            # 変更があれば QMovie を作り直す
-            if (new_path != old_path) or (new_embed != old_embed):
-                self.path  = new_path
-                self.embed = new_embed
-
-                if self.embed:                          # embed 優先
-                    raw = base64.b64decode(self.embed)
-                    self._setup_movie(raw=raw)          # ← mixin API
-                else:
-                    self._setup_movie(path=self.path)
-
-            # 3) 再描画 & 明るさ補正
-            self._update_frame_display()                # 現在フレームを再描画
-            self._apply_brightness()                    # 明るさだけ単独変更もある
-
-        # 4) 編集モード判定をメインウィンドウと同期
-        win = self.scene().views()[0].window()
-        self.set_run_mode(not win.a_edit.isChecked())
-
-        
-    def on_activate(self):
-        try:
-            if self.path:
-                os.startfile(self.path)
-        except Exception:
-            warn("Exception at on_activate")
-            pass
-
-    # ImageItem _apply_pixmap
-    def _apply_pixmap(self):
-        pix = QPixmap()
-        if self.embed:
-            pix.loadFromData(b64decode(self.embed))
-        elif self.path:
-            pix = QPixmap(self.path)
-
-        if pix.isNull():
-            pix = _icon_pixmap(getattr(self, "path", "") or "", 0, ICON_SIZE)
-
-        self._src_pixmap = pix.copy()
-        tgt_w = int(self.d.get("width", pix.width()))
-        tgt_h = int(self.d.get("height", pix.height()))
-        scaled = self._src_pixmap.scaled(
-            tgt_w, tgt_h,
-            Qt.AspectRatioMode.KeepAspectRatioByExpanding,
-            Qt.TransformationMode.SmoothTransformation
-        )
-        crop_x = max(0, (scaled.width()  - tgt_w) // 2)
-        crop_y = max(0, (scaled.height() - tgt_h) // 2)
-        pix = scaled.copy(crop_x, crop_y, tgt_w, tgt_h)
-
-        bri = getattr(self, "brightness", None)
-        if bri is not None and bri != 50:
-            level = bri - 50
-            alpha = int(abs(level) / 50 * 255)
-            overlay = QPixmap(pix.size())
-            overlay.fill(Qt.GlobalColor.transparent)
-            painter = QPainter(overlay)
-            col = QColor(255,255,255,alpha) if level>0 else QColor(0,0,0,alpha)
-            painter.fillRect(overlay.rect(), col)
-            painter.end()
-            result = QPixmap(pix.size())
-            result.fill(Qt.GlobalColor.transparent)
-            p2 = QPainter(result)
-            p2.drawPixmap(0,0,pix)
-            p2.drawPixmap(0,0,overlay)
-            p2.end()
-            pix = result
-
-        self._pix_item.setPixmap(pix)
-        self._rect_item.setRect(0, 0, pix.width(), pix.height())
-        self._orig_pixmap = self._src_pixmap
-
-        cap = self.d.get("caption", "")
-        caption_h = 0
-        if cap:
-            self.init_caption()
-            caption_h = self.cap_item.boundingRect().height()
-        else:
-            if my_has_attr(self, "cap_item"):
-                self.cap_item.setPlainText("")
-                self.cap_item.setPos(0, 0)
-
-        self._rect_item.setRect(0, 0, pix.width(), pix.height() + caption_h)
-        if cap:
-            self.init_caption()
-
-        self.prepareGeometryChange()
-        self.update()
-
 # ==================================================================
 #  JSONItem
 # ==================================================================
@@ -1630,28 +1719,35 @@ class JSONItem(LauncherItem):
     # ダブルクリック時動作
     # --------------------------------------------------------------
     def on_activate(self):
+        """
+        ・desktopPyLauncher プロジェクトならロード
+        ・それ以外の JSON は、編集フラグに応じて OS の編集モード or 通常オープン
+        """
+        import ctypes
         win = self.scene().views()[0].window()
         p = Path(self.path)
+
+        # 通常の JSON ファイルは is_editable フラグで編集モード or オープン
+        if self.d.get("is_editable", False):
+            try:
+                # ShellExecute の "edit" で既定エディタを「編集モード」で起動したいが
+                # .json の verb は "open"
+                ctypes.windll.shell32.ShellExecuteW(None, "open", str(p), None, None, 1)
+                return
+            except Exception as e:
+                warn(f"[JSONItem] 編集モード起動失敗: {e}")
+
+        # プロジェクトファイルなら内部ロード
         if self._is_launcher_project():
             win._load_json(p)
             return
+
+        # フォールバック：通常オープン
         try:
             os.startfile(str(p))
         except Exception:
-            warn("Exception at on_activate")
-            pass
+            warn("[JSONItem] on_activate 失敗")
 
-
-    def on_edit(self):
-        # 編集ダイアログ起動・編集結果反映
-        win = self.scene().views()[0].window()
-        dlg = LauncherEditDialog(self.d, win)
-        if dlg.exec() == QDialog.DialogCode.Accepted:
-            self.embed = self.d.get("icon_embed")
-            self._refresh_icon()
-            if my_has_attr(self, "cap_item"):
-                self.cap_item.setPlainText(self.d.get("caption", ""))
-        self.set_run_mode(not win.a_edit.isChecked())
 
 # ==================================================================        
 #  GenericFileItem
@@ -1789,11 +1885,12 @@ class ImageEditDialog(QDialog):
         h1.addWidget(QLabel("Path:")); h1.addWidget(self.ed_path, 1); h1.addWidget(btn_b)
         v.addLayout(h1)
 
-        # Embed/参照切替（プルダウン）
+        # 埋め込み(image_embedded)／参照 切替プルダウン
         h2 = QHBoxLayout()
         self.combo_mode = QComboBox()
-        self.combo_mode.addItems(["参照", "Embed"])
-        mode = "Embed" if self.item.d.get("store") == "embed" else "参照"
+        self.combo_mode.addItems(["Reference", "Embed"])
+        is_embedded = self.item.d.get("image_embedded", False)
+        mode = "Embed" if is_embedded else "Reference"
         self.combo_mode.setCurrentText(mode)
         h2.addWidget(QLabel("保存方法:"))
         h2.addWidget(self.combo_mode)
@@ -1836,32 +1933,46 @@ class ImageEditDialog(QDialog):
         cap = self.ed_caption.text()
         self.item.d["caption"] = cap
 
-        self.item.brightness = self.spin_bri.value()
-        self.item.d["brightness"] = self.item.brightness
+        self.item.d["brightness"] = self.spin_bri.value()
 
         mode = self.combo_mode.currentText()
-        self.item.d["store"] = "embed" if mode == "Embed" else "reference"
-
         path = self.ed_path.text().strip()
         self.item.d["path"] = path
-        self.item.path = path
 
-        if self.item.d["store"] == "embed":
+        if mode == "Embed":
+            self.item.d["image_embedded"] = True
             if path:  # パスが空でなければ再取得
                 try:
                     with open(path, "rb") as fp:
-                        self.item.embed = base64.b64encode(fp.read()).decode("ascii")
-                        self.item.d["embed"] = self.item.embed
-                        self.item.d["path_last_embedded"] = path
+                        raw_data = fp.read()
+                    
+                    self.item.d["image_embedded_data"] = base64.b64encode(raw_data).decode("ascii")
+                    self.item.d["image_path_last_embedded"] = path
+                    
+                    # バイナリデータから実際のフォーマットを検出
+                    self.item.d["image_format"] = detect_image_format(raw_data)
+                    
+                    # 静止画の場合は寸法情報も保存
+                    pm = QPixmap(path)
+                    if not pm.isNull():
+                        self.item.d["image_width"] = pm.width()
+                        self.item.d["image_height"] = pm.height()
+                        self.item.d["image_bits"] = pm.depth()
+                    
                 except Exception as e:
                     warn(f"embed failed: {e}")
-                    self.item.embed = None
-                    self.item.d.pop("embed", None)
-            # パスが空ならembedは変更しない（何もしない）
+                    self.item.d["image_embedded"] = False
+                    self.item.d.pop("image_embedded_data", None)
+            # パスが空でも既存の埋め込みデータは保持
         else:
-            self.item.embed = None
-            self.item.d.pop("embed", None)
-            self.item.d.pop("path_last_embedded", None)
+            # 参照モード - 埋め込み関連フィールドをすべて削除
+            self.item.d["image_embedded"] = False
+            self.item.d.pop("image_embedded_data", None)
+            self.item.d.pop("image_format", None)
+            self.item.d.pop("image_path_last_embedded", None)
+            self.item.d.pop("image_width", None)
+            self.item.d.pop("image_height", None)
+            self.item.d.pop("image_bits", None)
 
         super().accept()
         
@@ -1950,12 +2061,14 @@ class LauncherEditDialog(QDialog):
         h.addWidget(btn_wd)
         layout.addLayout(h)
 
-        # -- Icon Type --
+        # -- Icon Type (Default/Embed) --
         h = QHBoxLayout()
         h.addWidget(QLabel("Icon Type"))
         self.combo_icon_type = QComboBox()
         self.combo_icon_type.addItems(["Default", "Embed"])
-        self.combo_icon_type.setCurrentIndex(0 if not data.get("icon_embed") else 1)
+        # JSON に icon_embed または icon_embed_data があれば Embed を選択
+        is_embedded = data.get("image_embedded", False) or data.get("icon_embed", False)
+        self.combo_icon_type.setCurrentIndex(0 if not is_embedded else 1)
         self.combo_icon_type.currentIndexChanged.connect(self._update_preview)
         h.addWidget(self.combo_icon_type)
         layout.addLayout(h)
@@ -2046,13 +2159,25 @@ class LauncherEditDialog(QDialog):
         """
         self.le_icon.clear()
         self.data.pop("icon", None)
-        self.data.pop("icon_embed", None)
+        self.data["image_embedded"] = False
+        self.data.pop("image_embedded_data", None)
+        self.data.pop("image_format", None)
+        self.data.pop("image_path_last_embedded", None)
 
         path = self.le_path.text().strip().lower()
         if path.startswith("http://") or path.startswith("https://"):
             fav = fetch_favicon_base64(path) or None
             if fav:
-                self.data["icon_embed"] = fav
+                self.data["image_embedded"] = True
+                self.data["image_embedded_data"] = fav
+                
+                # faviconのフォーマットを検出
+                try:
+                    raw = base64.b64decode(fav)
+                    self.data["image_format"] = detect_image_format(raw)
+                except:
+                    self.data["image_format"] = "data:image/png;base64,"
+                    
                 self.combo_icon_type.setCurrentText("Embed")
             else:
                 self.combo_icon_type.setCurrentText("Default")
@@ -2076,10 +2201,14 @@ class LauncherEditDialog(QDialog):
         path_txt  = self.le_icon.text().strip() 
 
         # --- Embed (base64) ---
-        if icon_type == "Embed" and not path_txt and self.data.get("icon_embed"):
+        if icon_type == "Embed" and not path_txt and self.data.get("image_embedded_data"):
             pm = QPixmap()
-            pm.loadFromData(b64decode(self.data["icon_embed"]))
-
+            try:
+                pm.loadFromData(b64decode(self.data["image_embedded_data"]))
+            except Exception as e:
+                warn(f"[PREVIEW] Failed to decode embed data: {e}")
+                pm = QPixmap()
+                    
         # --- Default / Embed(まだ未保存) ---
         else:
             path = (path_txt
@@ -2106,9 +2235,9 @@ class LauncherEditDialog(QDialog):
 
     # LauncherEditDialog accept
     def accept(self):
-        # -------- 基本フィールド --------
+        # 基本フィールド
         self.data["caption"] = self.le_caption.text()
-        self.data["path"]    = self.le_path.text()
+        self.data["path"] = self.le_path.text()
         self.data["workdir"] = self.le_workdir.text()
         self.data["icon_index"] = self.spin_index.value()
         self.data["runas"] = self.chk_runas.isChecked()
@@ -2118,57 +2247,88 @@ class LauncherEditDialog(QDialog):
         icon_path = self.le_icon.text().strip()
 
         if icon_type == "Default":
-            # --- Default モード ---
-            self.data.pop("icon_embed", None)
+            # Default モード - 埋め込みをクリア
+            self.data["image_embedded"] = False
+            self.data.pop("image_embedded_data", None)
+            self.data.pop("image_format", None)
+            self.data.pop("image_path_last_embedded", None)
+            self.data.pop("image_width", None)
+            self.data.pop("image_height", None)
+            self.data.pop("image_bits", None)
+            
             if icon_path:
                 self.data["icon"] = icon_path
             else:
                 self.data.pop("icon", None)
 
-        else:  # ---------- Embed モード ----------
-            # 参照パスは使わない
+        else:  # Embed モード
             self.data.pop("icon", None)
-
-            # １）既存 embed を仮保持
-            embed_b64 = self.data.get("icon_embed", "")
-
-            # ２）ユーザーが Browse で新規指定した場合
+            self.data["image_embedded"] = True
+            
+            # 既存の埋め込みデータを仮保持
+            embed_b64 = self.data.get("image_embedded_data", "")
+            
+            # ユーザーが新規指定した場合
             if icon_path:
-                suffix = Path(icon_path).suffix.lower()
-                if suffix == ".gif":
-                    # GIF は生バイトをそのまま埋め込む
+                try:
                     with open(icon_path, "rb") as fp:
                         raw = fp.read()
                     embed_b64 = base64.b64encode(raw).decode("ascii")
-                else:
-                    # 静止画は従来どおり PNG 変換
+                    
+                    # バイナリデータから実際のフォーマットを検出
+                    image_format = detect_image_format(raw)
+                    self.data["image_format"] = image_format
+                    
+                    # 画像情報を取得
                     pm = QPixmap(icon_path)
                     if not pm.isNull():
-                        buf = QBuffer()
-                        buf.open(QIODevice.OpenModeFlag.WriteOnly)
-                        if pm.save(buf, "PNG"):
-                            embed_b64 = base64.b64encode(buf.data()).decode("ascii")
+                        self.data["image_width"] = pm.width()
+                        self.data["image_height"] = pm.height()
+                        self.data["image_bits"] = pm.depth()
+                        
+                except Exception as e:
+                    warn(f"[EMBED] Failed to read file '{icon_path}': {e}")
+                    
+                self.data["image_path_last_embedded"] = icon_path
 
-            # ３）まだ embed_b64 が空なら、プレビュー画像からキャプチャ
-            if not embed_b64:
+            # プレビュー画像からキャプチャ
+            elif not embed_b64:
                 pm = self.lbl_prev.pixmap()
                 if pm and not pm.isNull():
                     buf = QBuffer()
                     buf.open(QIODevice.OpenModeFlag.WriteOnly)
                     pm.save(buf, "PNG")
-                    embed_b64 = base64.b64encode(buf.data()).decode("ascii")
+                    raw_data = buf.data()
+                    embed_b64 = base64.b64encode(raw_data).decode("ascii")
+                    
+                    # PNG形式で保存されるのでPNGフォーマット
+                    self.data["image_format"] = "data:image/png;base64,"
+                    
+                    # 画像情報を保存
+                    self.data["image_width"] = pm.width()
+                    self.data["image_height"] = pm.height()
+                    self.data["image_bits"] = pm.depth()
 
-            # ４）最終決定：embed_b64 があればセット、なければ削除
+            # 最終決定
             if embed_b64:
-                self.data["icon_embed"] = embed_b64
+                self.data["image_embedded_data"] = embed_b64
+                # image_formatが設定されていない場合のフォールバック
+                if "image_format" not in self.data:
+                    try:
+                        raw = base64.b64decode(embed_b64)
+                        self.data["image_format"] = detect_image_format(raw)
+                    except:
+                        self.data["image_format"] = "data:image/png;base64,"
             else:
-                self.data.pop("icon_embed", None)
+                self.data["image_embedded"] = False
+                self.data.pop("image_embedded_data", None)
+                self.data.pop("image_format", None)
 
         super().accept()
 
 
-    def SIMPLE_VER_paste_icon(self):
-        """GIFのアニメーションを維持しつつ縦横比クロップで貼り付け"""
+    def _paste_icon(self):
+        """GIFアニメーションを維持しつつ貼り付け - 新フィールド対応"""
         cb = QApplication.clipboard()
         mime = cb.mimeData()
 
@@ -2178,129 +2338,61 @@ class LauncherEditDialog(QDialog):
         if mime.hasUrls():
             for qurl in mime.urls():
                 path = qurl.toLocalFile()
-                if path.lower().endswith(".gif") and Path(path).exists():
-                    with open(path, "rb") as f:
-                        gif_data = f.read()
-
-                    # 保存対象は元のGIF（アニメーション維持）
-                    b64 = base64.b64encode(gif_data).decode("ascii")
-
-                    # モデルに埋め込み
-                    self.data["icon_embed"] = b64
+                if path.lower().endswith(".gif"):
+                    # GIF処理
+                    with open(path, "rb") as fp:
+                        gif_data = fp.read()
+                    
+                    # ★修正: 新フィールドのみを使用
+                    self.data["image_embedded"] = True
+                    self.data["image_embedded_data"] = base64.b64encode(gif_data).decode("ascii")
+                    self.data["image_format"] = detect_image_format(gif_data)
+                    self.data["image_path_last_embedded"] = path
+                    
                     self.combo_icon_type.setCurrentText("Embed")
                     self.le_icon.clear()
-                    self.spin_index.setValue(0)
-
-                    # 表示はクロップ＆縦横比維持で
-                    self._update_preview()
-                    return
-
-
-        # 画像
-        if mime.hasImage():
-            img = cb.image()
-            if img.isNull():
-                return
-            pix = QPixmap.fromImage(img)
-            buf = QBuffer()
-            buf.open(QIODevice.OpenModeFlag.WriteOnly)
-            pix.save(buf, "PNG")
-            self.data["icon_embed"] = base64.b64encode(buf.data()).decode("ascii")
-            self.combo_icon_type.setCurrentText("Embed")
-            self.le_icon.clear()
-            self._update_preview()
-            return
-            
-            
-    def _paste_icon(self):
-        """クリップボードから画像 or GIFファイルを貼り付け（中央クロップ＋cover対応）"""
-        cb = QApplication.clipboard()
-        mime = cb.mimeData()
-
-        # GIFファイルの場合
-        if mime.hasUrls():
-            for qurl in mime.urls():
-                path = qurl.toLocalFile()
-                if path.lower().endswith(".gif") and Path(path).exists():
-                    with open(path, "rb") as f:
-                        gif_data = f.read()
-
-                    gif_bytes = QByteArray(gif_data)
-                    gif_buffer = QBuffer(gif_bytes)
-                    gif_buffer.open(QIODevice.OpenModeFlag.ReadOnly)
-
-                    movie = QMovie()
-                    movie.setDevice(gif_buffer)
-                    movie.start()
-                    movie.jumpToFrame(0)
-                    orig_pix = movie.currentPixmap()
-                    movie.stop()
-
-                    current_w = int(self.data.get("width", ICON_SIZE))
-                    current_h = int(self.data.get("height", ICON_SIZE))
-
-                    # 中央クロップ＋cover
-                    scaled = orig_pix.scaled(
-                        current_w, current_h,
-                        Qt.AspectRatioMode.KeepAspectRatioByExpanding,
-                        Qt.TransformationMode.SmoothTransformation
-                    )
-                    cx = max(0, (scaled.width() - current_w) // 2)
-                    cy = max(0, (scaled.height() - current_h) // 2)
-                    cropped = scaled.copy(cx, cy, current_w, current_h)
-
-                    # 埋め込むのは元データだが、プレビューにはcover表示
-                    buf = QBuffer()
-                    buf.open(QIODevice.OpenModeFlag.WriteOnly)
-                    cropped.save(buf, "PNG")
-                    preview_b64 = base64.b64encode(buf.data()).decode("ascii")
-
-                    self.data["icon_embed"] = base64.b64encode(gif_data).decode("ascii")
-                    self.combo_icon_type.setCurrentText("Embed")
-                    self.le_icon.clear()
-
-                    # Previewを「coverクロップ版」に置き換え
-                    self._preview_override_pixmap = QPixmap()
-                    self._preview_override_pixmap.loadFromData(base64.b64decode(preview_b64))
+                    
+                    # プレビュー更新
                     self._update_preview()
                     self.data["width"], self.data["height"] = current_w, current_h
-
                     return
 
         # 静止画の場合
         if mime.hasImage():
             img = cb.image()
-            if img.isNull():
-                warn("Clipboardに有効な画像がありません")
-                return
-
-            pix = QPixmap.fromImage(img)
-            current_w = int(self.data.get("width", ICON_SIZE))
-            current_h = int(self.data.get("height", ICON_SIZE))
-
-            scaled = pix.scaled(
-                current_w, current_h,
-                Qt.AspectRatioMode.KeepAspectRatioByExpanding,
-                Qt.TransformationMode.SmoothTransformation
-            )
-            cx = max(0, (scaled.width() - current_w) // 2)
-            cy = max(0, (scaled.height() - current_h) // 2)
-            cropped = scaled.copy(cx, cy, current_w, current_h)
-
-            buf = QBuffer()
-            buf.open(QIODevice.OpenModeFlag.WriteOnly)
-            cropped.save(buf, "PNG")
-            b64 = base64.b64encode(buf.data()).decode("ascii")
-
-            self.data["icon_embed"] = b64
-            self.combo_icon_type.setCurrentText("Embed")
-            self.le_icon.clear()
-
-            # Previewもクロップ版
-            self._preview_override_pixmap = QPixmap()
-            self._preview_override_pixmap.loadFromData(buf.data())
-            self._update_preview()
-            return
+            if not img.isNull():
+                pix = QPixmap.fromImage(img)
+                
+                # クロップ処理
+                scaled = pix.scaled(
+                    current_w, current_h,
+                    Qt.AspectRatioMode.KeepAspectRatioByExpanding,
+                    Qt.TransformationMode.SmoothTransformation
+                )
+                cx = max(0, (scaled.width() - current_w) // 2)
+                cy = max(0, (scaled.height() - current_h) // 2)
+                cropped = scaled.copy(cx, cy, current_w, current_h)
+                
+                buf = QBuffer()
+                buf.open(QIODevice.OpenModeFlag.WriteOnly)
+                cropped.save(buf, "PNG")
+                raw_data = buf.data()
+                b64 = base64.b64encode(raw_data).decode("ascii")
+                
+                # ★修正: 新フィールドのみを使用
+                self.data["image_embedded"] = True
+                self.data["image_embedded_data"] = b64
+                self.data["image_format"] = "data:image/png;base64,"
+                self.data["image_width"] = cropped.width()
+                self.data["image_height"] = cropped.height()
+                self.data["image_bits"] = cropped.depth()
+                
+                self.combo_icon_type.setCurrentText("Embed")
+                self.le_icon.clear()
+                
+                # プレビュー更新
+                self._preview_override_pixmap = cropped
+                self._update_preview()
 
         warn("Clipboardに画像またはGIFファイルが見つかりません")
 

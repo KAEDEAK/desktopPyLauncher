@@ -62,7 +62,130 @@ EXPAND_STEP = 500  # 端に到達したときに拡張する幅・高さ（px）
 SHOW_MINIMAP = True
 
 # ==============================================================
-# Water Effect Classes（既存のクラス定義の前に追加）
+# migration 関数
+# ==============================================================
+def extract_image_info_from_base64(base64_data: str, format_hint: str = None) -> dict:
+    """Base64データから画像情報を抽出"""
+    try:
+        pix = QPixmap()
+        pix.loadFromData(base64.b64decode(base64_data))
+        if not pix.isNull():
+            return {
+                "image_width": pix.width(),
+                "image_height": pix.height(),
+                "image_bits": pix.depth()
+            }
+    except:
+        pass
+    
+    return {}
+
+def detect_image_format(data: bytes) -> str:
+    """
+    バイナリデータから画像フォーマットを検出してData URLのプレフィックスを返す
+    """
+    if data.startswith(b'\x89PNG\r\n\x1a\n'):
+        return "data:image/png;base64,"
+    elif data.startswith(b'\xff\xd8\xff'):
+        return "data:image/jpeg;base64,"
+    elif data.startswith(b'GIF87a') or data.startswith(b'GIF89a'):
+        return "data:image/gif;base64,"
+    elif data.startswith(b'<svg') or b'<svg' in data[:100]:
+        return "data:image/svg+xml;base64,"
+    else:
+        # デフォルトはPNG
+        return "data:image/png;base64,"
+        
+def migrate_item_to_v1_1(item_data: dict) -> dict:
+    """
+    version 1.0 のアイテムデータを version 1.1 に移行
+    """
+    # コピーを作成
+    data = item_data.copy()
+    
+    caption = data.get("caption", "<no caption>")
+    item_type = data.get("type", "<no type>")
+    
+    # LauncherItem の icon_embed
+    if "icon_embed" in data:
+        warn(f"[MIGRATE] Converting icon_embed for '{caption}' (type={item_type})")
+        
+        # icon_embedがbool型の場合のチェック
+        if isinstance(data["icon_embed"], bool):
+            warn(f"[MIGRATE] WARNING: icon_embed is bool for '{caption}': {data['icon_embed']}")
+            # boolの場合は埋め込みフラグとして扱い、データは削除
+            data["image_embedded"] = data.pop("icon_embed")
+        else:
+            # 正常な文字列データの場合
+            data["image_embedded"] = True
+            embed_str = data.pop("icon_embed")
+            data["image_embedded_data"] = embed_str
+            
+            # バイナリデータから実際のフォーマットを検出
+            try:
+                raw_data = base64.b64decode(embed_str)
+                data["image_format"] = detect_image_format(raw_data)
+                warn(f"[MIGRATE] Detected format: {data['image_format']}")
+            except Exception as e:
+                warn(f"[MIGRATE] Failed to detect format for '{caption}': {e}")
+                data["image_format"] = "data:image/png;base64,"
+    
+    # ImageItem/GifItem の embed と store
+    if "embed" in data:
+        warn(f"[MIGRATE] Converting embed for '{caption}' (type={item_type})")
+        
+        # embedがbool型の場合のチェック
+        if isinstance(data["embed"], bool):
+            warn(f"[MIGRATE] WARNING: embed is bool for '{caption}': {data['embed']}")
+            # boolの場合は埋め込みフラグとして扱い、データは削除
+            data["image_embedded"] = data.pop("embed")
+        else:
+            # 正常な文字列データの場合
+            data["image_embedded"] = True
+            embed_str = data.pop("embed")
+            data["image_embedded_data"] = embed_str
+            
+            # バイナリデータから実際のフォーマットを検出
+            try:
+                raw_data = base64.b64decode(embed_str)
+                data["image_format"] = detect_image_format(raw_data)
+                warn(f"[MIGRATE] Detected format: {data['image_format']}")
+            except Exception as e:
+                warn(f"[MIGRATE] Failed to detect format for '{caption}': {e}")
+                # フォールバック：拡張子から判定
+                path = data.get("path", "").lower()
+                if data.get("type") == "gif" or path.endswith(".gif"):
+                    data["image_format"] = "data:image/gif;base64,"
+                else:
+                    data["image_format"] = "data:image/png;base64,"
+        
+        # path_last_embedded の移行
+        for old in ("path_last_embedded", "path_last_embeded"):
+            if old in data:
+                data["image_path_last_embedded"] = data.pop(old)
+                break
+            elif data.get("store") == "embed" and "path" in data:
+                data["image_path_last_embedded"] = data["path"]
+    
+    # store フィールドの処理
+    if "store" in data:
+        if data["store"] in ("embed", "embeded") and "image_embedded" not in data:
+            data["image_embedded"] = True
+        data.pop("store")
+    
+    # 埋め込みでない場合のデフォルト値
+    if "image_embedded" not in data:
+        data["image_embedded"] = False
+    
+    # デバッグ：最終的なデータ状態を確認
+    if data.get("image_embedded"):
+        has_data = "image_embedded_data" in data
+        warn(f"[MIGRATE] Result for '{caption}': embedded=True, has_data={has_data}")
+    
+    return data
+
+# ==============================================================
+# Water Effect Classes
 # ==============================================================
 
 class WaterRipple:
@@ -1301,14 +1424,17 @@ class MainWindow(QMainWindow):
 
             pixmap = QPixmap.fromImage(img)
             # base64エンコードして保存用に変換
-            embed = b64encode_pixmap(pixmap)
+            embed_data = b64encode_pixmap(pixmap)
             now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
             d = {
                 "type": "image",
                 "caption": now_str,
-                "embed": embed,
-                "store": "embed",
+                # --- 新フォーマット: 埋め込み情報 ---
+                "image_embedded": True,
+                "image_embedded_data": embed_data,
+                "image_format": "data:image/png;base64",
+                # --- 座標・サイズ情報 ---
                 "x": int(scene_pos.x()),
                 "y": int(scene_pos.y()),
                 "width": pixmap.width(),
@@ -1326,41 +1452,7 @@ class MainWindow(QMainWindow):
             
         else:
             warn("画像データがクリップボードにありません")
-            
-            
-    # --- アイテム削除とJSON同期 ---
-    r"""
-    def remove_item(self, item: QGraphicsItem):
-        #VideoItem.delete_self() 互換API
-        #_remove_item()の安全ラッパー
-        #現状つかってない
-        self._remove_item(item)
-    """  
-    r"""
-    def _remove_item(self, item: QGraphicsItem):
-        # VideoItemなら後始末
-        if isinstance(item, VideoItem):
-            item.delete_self()
-            if item.video_resize_dots.scene():
-                item.video_resize_dots.scene().removeItem(item.video_resize_dots)
-            item.video_resize_dots = None
-
-        # 関連Gripを削除
-        if isinstance(item, CanvasItem):
-            if item.grip.scene():
-                item.grip.scene().removeItem(item.grip)
-            item.grip = None
-            
-        # シーンから本体除去
-        # VideoItem は delete_self() 内で自分を removeItem 済み。
-        # CanvasItem だけ個別に除去する。
-        if not isinstance(item, VideoItem) and item.scene():
-            item.scene().removeItem(item)
-            
-        # JSONから辞書データ削除
-        if my_has_attr(item, "d") and item.d in self.data.get("items", []):
-            self.data["items"].remove(item.d)
-    """
+ 
     # TODO: 様子見
     def _remove_item(self, item: QGraphicsItem):
         """
@@ -1370,18 +1462,38 @@ class MainWindow(QMainWindow):
         ③ その他はシーン除去＋ data["items"] から辞書削除
         """
         # ① VideoItem はこれまでどおり deleteLater() も呼ぶ
+        r"""
         if isinstance(item, VideoItem):
             item.delete_self()
             if item.video_resize_dots and item.video_resize_dots.scene():
                 item.video_resize_dots.scene().removeItem(item.video_resize_dots)
             item.video_resize_dots = None
             return
+        """
+        if isinstance(item, VideoItem):
+            item.delete_self()
+            if item.video_resize_dots and item.video_resize_dots.scene():
+                item.video_resize_dots.scene().removeItem(item.video_resize_dots)
+            item.video_resize_dots = None
+            # JSONから辞書を削除
+            if hasattr(item, "d") and item.d in self.data.get("items", []):
+                self.data["items"].remove(item.d)
+            return            
 
         # ② CanvasItem 派生は自身の delete_self() に委譲
-        from DPyL_classes import CanvasItem
+        r"""
         if isinstance(item, CanvasItem):
             item.delete_self()
             return
+        """
+            
+        if isinstance(item, CanvasItem):
+            # シーンからの各種後始末
+            item.delete_self()
+            # JSONから辞書も削除
+            if hasattr(item, "d") and item.d in self.data.get("items", []):
+                self.data["items"].remove(item.d)
+            return            
 
         # ③ それ以外
         if item.scene():
@@ -1862,19 +1974,20 @@ class MainWindow(QMainWindow):
         )
 
     # --- データ読み込み ---
-    # ---------- 
+    
     def _load(self, on_finished=None):
         self._show_loading(True)
         self._on_load_finished = on_finished  # ← 後で呼ぶ
         QTimer.singleShot(50, self._do_load_actual)
-
 
     def _show_loading(self, show: bool):
         self.loading_label.setGeometry(self.rect())
         self.loading_label.setVisible(show)
         self.loading_label.raise_()
 
+
     def _do_load_actual(self):
+        """実際のロード処理（マイグレーション付き）"""
         # ロード中フラグを設定してスナップを無効化
         self._loading_in_progress = True
         
@@ -1895,8 +2008,7 @@ class MainWindow(QMainWindow):
             self._remove_item(it)
 
         # 背景画像付きの空のプロジェクトを読み込むとクラッシュする件の仮の対策
-        # setSceneRect()をするだけだが、現状これが一番安定する
-        self.scene.setSceneRect(QRectF(0, 0, 1,1)) 
+        self.scene.setSceneRect(QRectF(0, 0, 1, 1)) 
         
         # 背景削除
         self.data.pop("background", None)
@@ -1909,6 +2021,34 @@ class MainWindow(QMainWindow):
         try:
             with open(self.json_path, "r", encoding="utf-8") as f:
                 self.data = json.load(f)
+                
+            # ===== マイグレーション処理を追加 =====
+            fileinfo = self.data.get("fileinfo", {})
+            version = fileinfo.get("version", "1.0")
+            
+            if version == "1.0":
+                warn(f"[LOAD] Migrating project from version {version} to 1.1")
+                items = self.data.get("items", [])
+                migrated_items = []
+                
+                for item in items:
+                    migrated_item = migrate_item_to_v1_1(item)
+                    
+                    # 画像情報を補完
+                    if migrated_item.get("image_embedded") and migrated_item.get("image_embedded_data"):
+                        info = extract_image_info_from_base64(
+                            migrated_item["image_embedded_data"],
+                            migrated_item.get("image_format")
+                        )
+                        migrated_item.update(info)
+                    
+                    migrated_items.append(migrated_item)
+                
+                self.data["items"] = migrated_items
+                # バージョンは保存時に1.1に更新される
+                warn(f"[LOAD] Migration completed for {len(migrated_items)} items")
+            # =====================================
+                
         except Exception as e:
             warn(f"LOAD failed: {e}")
             QMessageBox.critical(self, "Error", str(e))
@@ -1949,7 +2089,6 @@ class MainWindow(QMainWindow):
                 kwargs["text_color"] = self.text_color
 
             try:
-                # it = cls(d, **kwargs)  # ← これで GifItem も OK！
                 # MarkerItem と GroupItem は win を受け取らないため、text_color のみ指定する
                 if cls is MarkerItem:
                     it = cls(d, text_color=self.text_color)
@@ -1993,7 +2132,6 @@ class MainWindow(QMainWindow):
             except Exception as e:
                 warn(f"Geometry restore failed: {e}")
 
-        #self._apply_background()
         self._apply_scene_padding()
         
         # GroupItem の子アイテム関係を復元（少し遅延させて確実に）
@@ -2001,7 +2139,6 @@ class MainWindow(QMainWindow):
         
         self._scroll_to_start_marker()
         self._apply_background()
-        #QTimer.singleShot(100, self._scroll_to_start_marker) #遅延処理 (今は必要ない)
 
         self._show_loading(False)
 
@@ -2061,28 +2198,26 @@ class MainWindow(QMainWindow):
         self._load(on_finished=after_load)
 
 
-    # --- セーブ処理 ---
     def _save(self, *, auto=False):
+        """プロジェクトファイルの保存（version 1.1）"""
         # 保存時に座標系を正規化
         items_list = [it for it in self.scene.items() if isinstance(it, (CanvasItem, VideoItem))]
         
         if items_list:
-            # 1. 現在の全アイテムの座標を取得
-            current_positions = []
-            for it in items_list:
-                pos = it.pos()
-                current_positions.append((it, pos.x(), pos.y()))
+            # 1. 現在の座標を記録
+            current_positions = [(it, it.pos().x(), it.pos().y()) for it in items_list]
             
-            # 2. 最小のx, yを求める
-            min_x = min((x for _, x, y in current_positions), default=0)
-            min_y = min((y for _, x, y in current_positions), default=0)
+            # 2. 最小x, yを見つける
+            min_x = min(x for _, x, _ in current_positions)
+            min_y = min(y for _, _, y in current_positions)
             
-            # 3. 負の座標がある場合、全アイテムを正の座標系にシフト
+            # 3. 正規化が必要な場合（負の座標がある場合）のみ処理
             if min_x < 0 or min_y < 0:
-                dx = 50 - min_x if min_x < 0 else 0
-                dy = 50 - min_y if min_y < 0 else 0
+                warn(f"[SAVE] Normalizing coordinates (min_x={min_x}, min_y={min_y})")
                 
-                warn(f"[SAVE] Normalizing coordinates: shifting by dx={dx}, dy={dy}")
+                # オフセットを計算（最小座標を0にする）
+                dx = -min_x if min_x < 0 else 0
+                dy = -min_y if min_y < 0 else 0
                 
                 # 4. 全アイテムを一律にシフト
                 for it, old_x, old_y in current_positions:
@@ -2091,6 +2226,15 @@ class MainWindow(QMainWindow):
                     it.setPos(new_x, new_y)
             else:
                 warn(f"[SAVE] No coordinate normalization needed (min_x={min_x}, min_y={min_y})")
+        
+        # ===== バージョンを1.1に更新 =====
+        if "fileinfo" not in self.data:
+            self.data["fileinfo"] = {}
+        
+        self.data["fileinfo"]["version"] = "1.1"
+        self.data["fileinfo"]["name"] = "desktopPyLauncher.py"
+        self.data["fileinfo"]["info"] = "project data file"
+        # ================================
         
         # 5. シフト後の座標をJSONに保存
         for it in self.scene.items():
@@ -2123,6 +2267,7 @@ class MainWindow(QMainWindow):
                 show_save_notification(self)
         except Exception as e:
             show_error_notification(f"保存エラー: {str(e)}", self)
+            
     # ==============================================================
     #  export
     # ==============================================================
@@ -2195,7 +2340,7 @@ class MainWindow(QMainWindow):
             json_str = json.dumps(export_data, ensure_ascii=False, indent=2)
             
             # テンプレートの置換マーカーを実際のJSONデータに置き換え
-            html_content = template_html.replace('<!-- embeded_json_data//-->', json_str)
+            html_content = template_html.replace('<!-- embedded_json_data//-->', json_str)
             
             # 保存先ファイルダイアログ
             default_name = self.json_path.stem + ".html"
