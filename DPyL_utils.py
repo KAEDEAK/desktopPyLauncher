@@ -36,10 +36,12 @@ ICON_PROVIDER = QFileIconProvider()
 
 # ------------------------------ 基本ユーティリティ ------------------------------
 def warn(msg: str) -> None:
-    """-debug指定時のみstderrへ警告出力"""
-    if DEBUG_MODE:
-        print(f"[WARN] {msg}", file=sys.stderr)
-        
+    if not DEBUG_MODE:
+        return
+    if msg.startswith(("[LOAD]", "[SCROLL]")):
+        return
+    print(f"[WARN] {msg}", file=sys.stderr)
+
 def debug_print(msg: str) -> None:
     """-debug指定時のみstderrへ警告出力"""
     if DEBUG_MODE:

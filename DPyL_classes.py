@@ -24,7 +24,7 @@ from PyQt6.QtWidgets import (
     QFileDialog, QSpinBox, QLineEdit, QColorDialog, QComboBox, QCheckBox,
     QGraphicsProxyWidget, QGraphicsColorizeEffect
 )
-        
+
 # ---------------------------------------------------------------------------------------------------- internal util -------------------------------------------------
 from DPyL_utils import (
     warn, b64e, ICON_SIZE,IMAGE_EXTS,
@@ -40,6 +40,8 @@ def movie_debug_print(msg: str) -> None:
     global log_cnt
     log_cnt+=1
     print(f"[MOVIE_DEBUG] {log_cnt} {msg}", file=sys.stderr)
+def movie_debug_print(msg: str) -> None:
+    pass
 # ==================================================================
 #  CanvasItem（基底クラス）
 # ==================================================================
@@ -1136,8 +1138,13 @@ class LauncherItem(GifMixin, CanvasItem):
         実行モード時のダブルクリック起動処理  
         フォルダ → エクスプローラーで開く  
         拡張子に応じて subprocess / QProcess / os.startfile を使い分け
-        is_editable フラグが True の場合は編集モードで開く
         """
+        import os
+        import sys
+        import subprocess
+        from pathlib import Path
+        from shlex import split as shlex_split
+        from PyQt6.QtCore import QProcess
         
         path = self.d.get("path", "")
         if not path:
@@ -1181,72 +1188,8 @@ class LauncherItem(GifMixin, CanvasItem):
         try:
             is_edit = self.d.get("is_editable", False)
 
-            # --- 編集モードで開く処理 ---
-            if is_edit:
-                # 編集可能なファイルタイプのチェック
-                if ext not in self.EDITABLE_LIKE:
-                    warn(f"[LauncherItem] {ext} は編集可能な拡張子リストに含まれていません")
-                
-                # エディタで開く処理
-                editor_opened = False
-                
-                # 1. 環境変数 EDITOR を確認
-                editor = os.environ.get("EDITOR")
-                if editor and os.path.exists(editor):
-                    try:
-                        ok = QProcess.startDetached(editor, [path], workdir)
-                        if ok:
-                            editor_opened = True
-                    except Exception as e:
-                        warn(f"[LauncherItem] EDITOR 起動失敗: {e}")
-                
-                # 2. VS Code を試す
-                if not editor_opened:
-                    vscode_paths = [
-                        r"C:\Program Files\Microsoft VS Code\Code.exe",
-                        r"C:\Program Files (x86)\Microsoft VS Code\Code.exe",
-                        os.path.expanduser(r"~\AppData\Local\Programs\Microsoft VS Code\Code.exe")
-                    ]
-                    for vscode in vscode_paths:
-                        if os.path.exists(vscode):
-                            try:
-                                ok = QProcess.startDetached(vscode, [path], workdir)
-                                if ok:
-                                    editor_opened = True
-                                    break
-                            except Exception as e:
-                                warn(f"[LauncherItem] VS Code 起動失敗: {e}")
-                
-                # 3. メモ帳で開く（最終手段）
-                if not editor_opened:
-                    try:
-                        ok = QProcess.startDetached("notepad.exe", [path], workdir)
-                        if ok:
-                            editor_opened = True
-                        else:
-                            # QProcess が失敗した場合は os.startfile を試す
-                            os.startfile(path, "edit")
-                            editor_opened = True
-                    except Exception as e:
-                        # 最後の手段として通常の os.startfile
-                        try:
-                            os.startfile(path)
-                            editor_opened = True
-                        except Exception as e2:
-                            # 完全に失敗した場合
-                            QMessageBox.warning(
-                                None, 
-                                "編集エラー", 
-                                f"編集モードで開けませんでした。\n\nファイル: {path}\nエラー: {e2}"
-                            )
-                            warn(f"[LauncherItem] 編集モードで開けませんでした: {e2}")
-                
-                return  # 編集モードの処理はここで終了
-
-            # --- 以下、通常の実行モード処理 ---
-            
             # --- Pythonスクリプト ---
-            if ext == ".py":
+            if ext == ".py" and not is_edit:
                 try:
                     py_exec = sys.executable
                     ok = QProcess.startDetached(py_exec, [path], workdir)
@@ -1258,7 +1201,7 @@ class LauncherItem(GifMixin, CanvasItem):
                     return
 
             # --- Node.js スクリプト ---
-            if ext == ".js":
+            if ext == ".js" and not is_edit:
                 try:
                     ok = QProcess.startDetached("node", [path], workdir)
                     if not ok:
@@ -1309,7 +1252,7 @@ class LauncherItem(GifMixin, CanvasItem):
                     warn(f"[LauncherItem.on_activate] 起動エラー: {e}")
                 return
 
-            # --- その他（通常のファイル） ---
+            # --- その他（is_editableなファイル等） ---
             try:
                 os.startfile(path)
             except Exception as e:
@@ -1428,6 +1371,7 @@ class GifItem(GifMixin, CanvasItem):
     def on_activate(self):
         """ダブルクリックでファイルを開く"""
         try:
+            import os
             if self.path:
                 os.startfile(self.path)
         except Exception as e:

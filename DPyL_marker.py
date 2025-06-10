@@ -74,7 +74,12 @@ class MarkerItem(CanvasItem):
     def boundingRect(self) -> QRectF:
         w = int(self.d.get("width", 32))
         h = int(self.d.get("height", 32))
-        cap_h = self.cap_item.boundingRect().height() if hasattr(self, "cap_item") else 0
+        cap_item = getattr(self, "cap_item", None)
+        if isinstance(cap_item, QGraphicsItem):
+            cap_h = cap_item.boundingRect().height()
+        else:
+            cap_h = 0
+
         return QRectF(0, 0, w, h + cap_h)
 
     def resize_content(self, w: int, h: int):
