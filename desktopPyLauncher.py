@@ -56,6 +56,7 @@ from configparser import ConfigParser
 from urllib.parse import urlparse
 
 from DPyL_debug import (my_has_attr,dump_missing_attrs,trace_this)
+from DPyL_shapes import RectItem, ArrowItem
 
 EXPAND_STEP = 500  # 端に到達したときに拡張する幅・高さ（px）
 
@@ -967,6 +968,16 @@ class MainWindow(QMainWindow):
             from DPyL_video import VideoItem
             return VideoItem
 
+    
+        # === DPyL_shapes のクラス対応 ===
+        if t == "rect":
+            from DPyL_shapes import RectItem
+            return RectItem
+        elif t == "arrow":
+            from DPyL_shapes import ArrowItem
+            return ArrowItem
+        # ==========================================
+
         return None
 
     def _new_project(self):
@@ -1041,8 +1052,14 @@ class MainWindow(QMainWindow):
         menu_obj = QMenu(self)
         act_marker = menu_obj.addAction("マーカー追加")
         act_note   = menu_obj.addAction("ノート追加")
+        menu_obj.addSeparator()  # セパレータで分ける
+        act_rect   = menu_obj.addAction("矩形追加")
+        act_arrow  = menu_obj.addAction("矢印追加")
+    
         act_marker.triggered.connect(self._add_marker)
         act_note.triggered.connect(self._add_note)
+        act_rect.triggered.connect(self._add_rect)
+        act_arrow.triggered.connect(self._add_arrow)
 
         btn_obj  = QToolButton(self)
         btn_obj.setText("オブジェクト追加")
@@ -1093,6 +1110,110 @@ class MainWindow(QMainWindow):
         spacer.setFixedWidth(width)
         tb.addWidget(spacer)
         tb.addSeparator()
+    # --- 3. 新規追加メソッド ---
+    def _add_rect(self):
+        """
+        シーンの中央付近に新規 RectItem を追加する。
+        """
+        # 画面中心位置を取得
+        sp = self.view.mapToScene(self.view.viewport().rect().center())
+
+        # 既存の図形IDを調べ、最大ID + 10 を新規IDとする
+        existing_ids = []
+        for it in self.scene.items():
+            if hasattr(it, 'd') and it.d.get("type") in ("rect", "arrow", "marker"):
+                try:
+                    existing_ids.append(int(it.d.get("id", 0)))
+                except (TypeError, ValueError):
+                    continue
+        
+        if existing_ids:
+            new_id = max(existing_ids) + 10
+        else:
+            new_id = 1000
+
+        # デフォルトの辞書を構築
+        d = {
+            "type": "rect",
+            "id": new_id,
+            "caption": f"RECT-{new_id}",
+            "x": sp.x(),
+            "y": sp.y(),
+            "width": 100,
+            "height": 60,
+            "frame_color": "#FF0000",
+            "frame_width": 2,
+            "background_color": "#FFFFFF",
+            "background_transparent": True,
+            "corner_radius": 0,
+            "jump_id": None,
+            "show_caption": True,
+            "z": 0,
+        }
+
+        # RectItem インスタンスを生成してシーンに追加
+        item = RectItem(d, text_color=self.text_color)
+        self.scene.addItem(item)
+        item.setZValue(d["z"])
+        self.data.setdefault("items", []).append(d)
+
+        # 追加直後は編集モードにする
+        item.set_run_mode(False)
+        item.setFlag(item.GraphicsItemFlag.ItemIsSelectable, True)
+        item.setFlag(item.GraphicsItemFlag.ItemIsMovable, True)
+
+    def _add_arrow(self):
+        """
+        シーンの中央付近に新規 ArrowItem を追加する。
+        """
+        # 画面中心位置を取得
+        sp = self.view.mapToScene(self.view.viewport().rect().center())
+
+        # 既存の図形IDを調べ、最大ID + 10 を新規IDとする
+        existing_ids = []
+        for it in self.scene.items():
+            if hasattr(it, 'd') and it.d.get("type") in ("rect", "arrow", "marker"):
+                try:
+                    existing_ids.append(int(it.d.get("id", 0)))
+                except (TypeError, ValueError):
+                    continue
+        
+        if existing_ids:
+            new_id = max(existing_ids) + 10
+        else:
+            new_id = 1000
+
+        # デフォルトの辞書を構築
+        d = {
+            "type": "arrow",
+            "id": new_id,
+            "caption": f"ARROW-{new_id}",
+            "x": sp.x(),
+            "y": sp.y(),
+            "width": 80,
+            "height": 40,
+            "frame_color": "#FF0000",
+            "frame_width": 2,
+            "background_color": "#FFFFFF",
+            "background_transparent": True,
+            "corner_radius": 0,
+            "angle": 0,  # 右向き
+            "is_line": False,  # ポリゴンスタイル
+            "jump_id": None,
+            "show_caption": True,
+            "z": 0,
+        }
+
+        # ArrowItem インスタンスを生成してシーンに追加
+        item = ArrowItem(d, text_color=self.text_color)
+        self.scene.addItem(item)
+        item.setZValue(d["z"])
+        self.data.setdefault("items", []).append(d)
+
+        # 追加直後は編集モードにする
+        item.set_run_mode(False)
+        item.setFlag(item.GraphicsItemFlag.ItemIsSelectable, True)
+        item.setFlag(item.GraphicsItemFlag.ItemIsMovable, True)
 
     # --- 編集モード限定の共通コンテキストメニュー ---
     def show_context_menu(self, item: QGraphicsItem, ev):
