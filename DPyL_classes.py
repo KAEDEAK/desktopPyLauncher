@@ -34,7 +34,7 @@ from DPyL_utils import (
     fetch_favicon_base64
 )
 
-from DPyL_debug import (my_has_attr,dump_missing_attrs,trace_this)
+from DPyL_debug import my_has_attr,dump_missing_attrs,trace_this
 
 log_cnt=0
 def movie_debug_print(msg: str) -> None:
@@ -121,6 +121,26 @@ class CanvasItem(QGraphicsItemGroup):
         self.setPos(d.get("x", 0), d.get("y", 0))
         self.set_editable(False)
         self._update_grip_pos()
+        
+    r"""
+    def hoverEnterEvent(self, event):
+        super().hoverEnterEvent(event)
+        main_window = self.scene().views()[0].window()
+        if hasattr(main_window, 'effect_manager'):
+            main_window.effect_manager.enable_hover_effects(self)
+
+    def hoverLeaveEvent(self, event):
+        super().hoverLeaveEvent(event)
+        main_window = self.scene().views()[0].window()
+        if hasattr(main_window, 'effect_manager'):
+            main_window.effect_manager.disable_hover_effects(self)
+
+    def mousePressEvent(self, event):
+        super().mousePressEvent(event)
+        main_window = self.scene().views()[0].window()
+        if hasattr(main_window, 'effect_manager'):
+            main_window.effect_manager.trigger_click_effect(self)
+    """    
 
     def init_mouse_passthrough(self):
         # 子アイテムのマウス透過（グリップ除く）
@@ -1503,6 +1523,7 @@ class ImageItem(CanvasItem):
         except Exception:
             warn("Exception at on_activate")
             pass
+
 # --------------------------------------------------
 #  GifItem (GifMixin + ImageItem)
 # --------------------------------------------------

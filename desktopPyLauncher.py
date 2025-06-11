@@ -39,7 +39,8 @@ from DPyL_utils   import (
     is_network_drive, _icon_pixmap, _default_icon, _load_pix_or_icon, ICON_SIZE
 )
 from DPyL_classes import (
-    LauncherItem, JSONItem, ImageItem, GifItem,
+    LauncherItem, JSONItem, 
+    ImageItem, GifItem,
     CanvasItem, CanvasResizeGrip,
     BackgroundDialog
 )
@@ -55,9 +56,11 @@ from DPyL_group import GroupItem
 from configparser import ConfigParser
 from urllib.parse import urlparse
 
-from DPyL_debug import (my_has_attr,dump_missing_attrs,trace_this)
+from DPyL_debug import my_has_attr,dump_missing_attrs,trace_this
 from DPyL_shapes import RectItem, ArrowItem
+#from DPyL_effects import EffectManager
 
+    
 EXPAND_STEP = 500  # 端に到達したときに拡張する幅・高さ（px）
 
 SHOW_MINIMAP = True
@@ -881,7 +884,10 @@ class MainWindow(QMainWindow):
 
             # --- アプリ起動直後に一度、ミニマップの表示判定を実行 ---
             QTimer.singleShot(0, self.minimap.updateVisibility)
-
+        
+        # エフェクトマネージャーを作成
+        #self.effect_manager = EffectManager(parent=self)
+        
     def _position_minimap(self):
         """
         ミニマップを常にウィンドウの右上に配置する。
@@ -2461,7 +2467,8 @@ class MainWindow(QMainWindow):
             json_str = json.dumps(export_data, ensure_ascii=False, indent=2)
             
             # テンプレートの置換マーカーを実際のJSONデータに置き換え
-            html_content = template_html.replace('<!-- embedded_json_data//-->', json_str)
+            html_content = template_html.replace('<!-- title -->', self.json_path.stem)
+            html_content = html_content.replace('<!-- embedded_json_data//-->', json_str)
             
             # 保存先ファイルダイアログ
             default_name = self.json_path.stem + ".html"

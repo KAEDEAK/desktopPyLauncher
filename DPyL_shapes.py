@@ -62,6 +62,7 @@ class CustomDrawingItem(MarkerItem):
     def resize_content(self, w: int, h: int):
         """リサイズ時の処理"""
         super().resize_content(w, h)
+        # リサイズ後に境界矩形と矢印を再描画
         self._update_drawing()
 
     def on_edit(self):
@@ -129,6 +130,17 @@ class RectItem(CustomDrawingItem):
         else:
             brush = QBrush(QColor(self.background_color))
             self._rect_item.setBrush(brush)
+
+    def _update_frame_visibility(self):
+        """
+        枠線表示・非表示の制御
+        RectItemは実行モードでも常に表示する
+        """
+        if not hasattr(self, "_rect_item"):
+            return
+
+        # RectItemは常に矩形を表示（実行モード・編集モード問わず）
+        self._rect_item.setVisible(True)
 
 
 # ==============================================================
@@ -205,10 +217,20 @@ class ArrowItem(CustomDrawingItem):
         w = int(self.d.get("width", 32))
         h = int(self.d.get("height", 32))
         
-        # 背景矩形は透明に設定
+        # 背景矩形の設定（編集モードでは境界を表示）
         self._rect_item.setRect(0, 0, w, h)
-        self._rect_item.setPen(QPen(Qt.PenStyle.NoPen))
-        self._rect_item.setBrush(QBrush(Qt.BrushStyle.NoBrush))
+        if hasattr(self, 'run_mode') and not self.run_mode:
+            # 編集モード：点線で境界矩形を表示
+            pen = QPen()
+            pen.setColor(QColor("#888888"))  # グレー
+            pen.setWidth(1)
+            pen.setStyle(Qt.PenStyle.DashLine)  # 点線
+            self._rect_item.setPen(pen)
+            self._rect_item.setBrush(QBrush(Qt.BrushStyle.NoBrush))  # 透明
+        else:
+            # 実行モード：境界矩形を非表示
+            self._rect_item.setPen(QPen(Qt.PenStyle.NoPen))
+            self._rect_item.setBrush(QBrush(Qt.BrushStyle.NoBrush))
         
         # 既存の矢印アイテムを削除
         for child in self.childItems():
@@ -386,6 +408,31 @@ class ArrowItem(CustomDrawingItem):
         if self.scene() and self.scene().views():
             mw = self.scene().views()[0].window()
             self.set_run_mode(not mw.a_edit.isChecked())
+
+    def _update_frame_visibility(self):
+        """
+        枠線表示・非表示の制御
+        ArrowItemは実行モードでも常に表示する
+        （矢印パスアイテムは_update_drawing()で管理されるため、ここでは何もしない）
+        """
+        # ArrowItemでは矢印自体が_rect_itemではなく、
+        # _draw_line_arrow()や_draw_polygon_arrow()で作成されるパスアイテムなので、
+        # 特別な処理は不要（常に表示される）
+        pass
+
+    def set_run_mode(self, run: bool):
+        """
+        実行(True)/編集(False)モード切替
+        ArrowTipGripの表示制御と境界矩形の表示制御を含む
+        """
+        super().set_run_mode(run)
+        
+        # ドラッグポイントは編集モードでのみ表示
+        if hasattr(self, '_arrow_tip') and self._arrow_tip:
+            self._arrow_tip.setVisible(not run)
+        
+        # 境界矩形の表示を更新（編集モードでは点線表示、実行モードでは非表示）
+        self._update_drawing()
 
 
 # ==============================================================
