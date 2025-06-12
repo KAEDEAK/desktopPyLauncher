@@ -40,7 +40,7 @@ from DPyL_utils   import (
 )
 from DPyL_classes import (
     LauncherItem, JSONItem, 
-    ImageItem, GifItem,
+    ImageItem, GifItem, GifMixin,
     CanvasItem, CanvasResizeGrip,
     BackgroundDialog
 )
@@ -1228,6 +1228,7 @@ class MainWindow(QMainWindow):
             
         is_vid = isinstance(item, VideoItem)
         is_pix = isinstance(item, (ImageItem, GifItem, JSONItem, LauncherItem))
+        is_shape = isinstance(item, (RectItem, ArrowItem))
         is_group = isinstance(item, GroupItem)
         
         menu = QMenu(self)
@@ -1258,17 +1259,21 @@ class MainWindow(QMainWindow):
         menu.addSeparator()
         # ==========================================
 
-        act_fit_orig = act_fit_inside_v = act_fit_inside_h = None
-        if is_pix or is_vid:
-            act_fit_orig   = menu.addAction("元のサイズに合わせる")
-            act_fit_inside_v = menu.addAction("内側（上下）にフィット")
-            act_fit_inside_h = menu.addAction("内側（左右）にフィット")
+        act_fit_orig = act_fit_inside_v = act_fit_inside_h = act_reset_size = None
+        
+        if is_pix or is_vid or is_shape:
+            if is_pix or is_vid:
+                act_fit_orig   = menu.addAction("元のサイズに合わせる")
+                act_fit_inside_v = menu.addAction("内側（上下）にフィット")
+                act_fit_inside_h = menu.addAction("内側（左右）にフィット")
+            elif is_shape:  # 図形用のメニュー項目
+                act_reset_size = menu.addAction("標準サイズにリセット")
             menu.addSeparator()
 
         act_del = menu.addAction("Delete")
         sel = menu.exec(ev.screenPos())
 
-        # === グループ化メニューの処理を追加 ===
+        # === グループ化メニューの処理 ===
         if sel == act_group:
             self._group_selected_items()
             ev.accept()
@@ -1297,43 +1302,146 @@ class MainWindow(QMainWindow):
             item.setZValue(max((i.zValue() for i in self.scene.items()), default=0) + 1)
         elif sel == act_back:
             item.setZValue(min((i.zValue() for i in self.scene.items()), default=0) - 1)
-
+            
+        # --- 図形用の標準サイズリセット ---
+        elif sel == act_reset_size and is_shape:
+            if isinstance(item, RectItem):
+                # 矩形の標準サイズ：100x60
+                standard_w, standard_h = 100, 60
+            elif isinstance(item, ArrowItem):
+                # 矢印の標準サイズ：80x40
+                standard_w, standard_h = 80, 40
+            else:
+                standard_w, standard_h = 64, 64
+                
+            item.prepareGeometryChange()
+            item.d["width"], item.d["height"] = standard_w, standard_h
+            item.resize_content(standard_w, standard_h)
+            item._update_grip_pos()
+            item.init_caption()
         # --- 元のサイズに合わせる 
-        elif sel == act_fit_orig:
+        elif sel == act_fit_orig and not is_shape:
+        #elif sel == act_fit_orig:
             if is_pix:
                 if isinstance(item, GifItem):
-                    pix = item.movie.currentPixmap()
-                    if pix.isNull():
+                    # GifItemの場合：現在のフレームから取得
+                    pix = item._movie.currentPixmap() if item._movie else None
+                    if not pix or pix.isNull():
                         warn("GIFフレーム取得失敗")
                         return
                     w = pix.width()
                     h = pix.height()
                     item._pix_item.setPixmap(pix)
                 else:
-                    # ▷ あらゆるソースからピクスマップを復元（順に検査）
+                    # ImageItem, LauncherItem, JSONItem の場合
                     pix = None
                     src_pix = None
 
-                    # 1) embed: icon_embed or embed
-                    embed_data = item.d.get("icon_embed") or item.d.get("embed")
-                    if embed_data:
-                        pix = QPixmap()
-                        try:
-                            pix.loadFromData(base64.b64decode(embed_data))
-                        except Exception as e:
-                            warn(f"Base64デコード失敗: {e}")
-                            pix = None
+                    # === 新フィールド構造に対応した取得処理 ===
+                    if isinstance(item, ImageItem):
+                        # ImageItem用のフォールバック順序
+                        # 1) image_embedded_data (埋め込みデータ)
+                        # 2) image_path_last_embedded (最後に埋め込んだファイルのパス)
+                        # 3) path (現在のパス)
+                        
+                        if item.d.get("image_embedded") and item.d.get("image_embedded_data"):
+                            # 埋め込みデータから取得
+                            pix = QPixmap()
+                            try:
+                                pix.loadFromData(base64.b64decode(item.d["image_embedded_data"]))
+                                warn(f"[FIT_ORIG] ImageItem: 埋め込みデータから取得 ({pix.width()}x{pix.height()})")
+                            except Exception as e:
+                                warn(f"[FIT_ORIG] 埋め込みデータデコード失敗: {e}")
+                                pix = None
+                        
+                        if (not pix or pix.isNull()) and item.d.get("image_path_last_embedded"):
+                            # 最後に埋め込んだファイルのパスから取得
+                            try:
+                                pix = QPixmap(item.d["image_path_last_embedded"])
+                                if not pix.isNull():
+                                    warn(f"[FIT_ORIG] ImageItem: image_path_last_embeddedから取得 ({pix.width()}x{pix.height()})")
+                            except Exception as e:
+                                warn(f"[FIT_ORIG] image_path_last_embedded読み込み失敗: {e}")
+                                pix = None
+                        
+                        if (not pix or pix.isNull()) and item.d.get("path"):
+                            # 通常のパスから取得
+                            try:
+                                pix = QPixmap(item.d["path"])
+                                if not pix.isNull():
+                                    warn(f"[FIT_ORIG] ImageItem: pathから取得 ({pix.width()}x{pix.height()})")
+                            except Exception as e:
+                                warn(f"[FIT_ORIG] path読み込み失敗: {e}")
+                                pix = None
+                                
+                    else:
+                        # LauncherItem, JSONItem用のフォールバック順序
+                        if item.d.get("image_embedded"):
+                            # 埋め込みモード
+                            # 1) image_embedded_data (新フィールド)
+                            # 2) image_path_last_embedded (最後に埋め込んだファイルのパス)
+                            # 3) path (現在のパス)
+                            
+                            if item.d.get("image_embedded_data"):
+                                pix = QPixmap()
+                                try:
+                                    pix.loadFromData(base64.b64decode(item.d["image_embedded_data"]))
+                                    warn(f"[FIT_ORIG] LauncherItem: 新埋め込みデータから取得 ({pix.width()}x{pix.height()})")
+                                except Exception as e:
+                                    warn(f"[FIT_ORIG] 新埋め込みデータデコード失敗: {e}")
+                                    pix = None
+                            
+                            if (not pix or pix.isNull()) and item.d.get("image_path_last_embedded"):
+                                try:
+                                    pix = QPixmap(item.d["image_path_last_embedded"])
+                                    if not pix.isNull():
+                                        warn(f"[FIT_ORIG] LauncherItem: image_path_last_embeddedから取得 ({pix.width()}x{pix.height()})")
+                                except Exception as e:
+                                    warn(f"[FIT_ORIG] image_path_last_embedded読み込み失敗: {e}")
+                                    pix = None
+                            
+                            if (not pix or pix.isNull()) and item.d.get("path"):
+                                try:
+                                    pix = QPixmap(item.d["path"])
+                                    if not pix.isNull():
+                                        warn(f"[FIT_ORIG] LauncherItem: pathから取得 ({pix.width()}x{pix.height()})")
+                                except Exception as e:
+                                    warn(f"[FIT_ORIG] path読み込み失敗: {e}")
+                                    pix = None
+                        else:
+                            # 非埋め込みモード：icon/icon_index使用
+                            src = item.d.get("icon") or item.d.get("path") or ""
+                            idx = item.d.get("icon_index", 0)
+                            if src:
+                                pix = _load_pix_or_icon(src, idx, ICON_SIZE)
+                                if not pix.isNull():
+                                    warn(f"[FIT_ORIG] LauncherItem: icon/pathから取得 ({pix.width()}x{pix.height()})")
 
-                    # 2) icon/path から取得（embed なければ）
+                    # === 旧フィールドサポート（後方互換性） ===
+                    # 新フィールドで取得できなかった場合のフォールバック
                     if not pix or pix.isNull():
+                        # 旧フィールド: icon_embed or embed
+                        embed_data = item.d.get("icon_embed") or item.d.get("embed")
+                        if embed_data:
+                            pix = QPixmap()
+                            try:
+                                pix.loadFromData(base64.b64decode(embed_data))
+                                warn(f"[FIT_ORIG] 旧埋め込みデータから取得 ({pix.width()}x{pix.height()})")
+                            except Exception as e:
+                                warn(f"[FIT_ORIG] 旧埋め込みデータデコード失敗: {e}")
+                                pix = None
+
+                    # === 最終フォールバック ===
+                    if not pix or pix.isNull():
+                        # icon/path から取得を再試行
                         src = item.d.get("icon") or item.d.get("path") or ""
                         idx = item.d.get("icon_index", 0)
                         if src:
                             pix = _load_pix_or_icon(src, idx, ICON_SIZE)
 
-                    # 3) 最終手段: _default_icon
+                    # 最終手段: デフォルトアイコン
                     if not pix or pix.isNull():
-                        warn("画像ソース取得に失敗（embed/icon/path 無効）")
+                        warn("[FIT_ORIG] 全ての画像ソース取得に失敗、デフォルトアイコンを使用")
                         pix = _default_icon(ICON_SIZE)
 
                     # --- サイズ判定 ---
@@ -1481,10 +1589,20 @@ class MainWindow(QMainWindow):
 
     # --- 選択アイテムのコピー／カット ---
     def copy_or_cut_selected_items(self, cut=False):
+        """
+        選択されたアイテムをコピーまたはカットする
+        RectItem と ArrowItem にも対応
+        """
         items = self.scene.selectedItems()
-        ds = [it.d for it in items if isinstance(it, (CanvasItem, VideoItem))]
+        
+        # === 修正：図形アイテムも含める ===
+        from DPyL_shapes import RectItem, ArrowItem
+        ds = [it.d for it in items if isinstance(it, (CanvasItem, VideoItem, RectItem, ArrowItem))]
+        # ===============================
+        
         if not ds:
             return
+            
         min_x = min(d.get("x", 0) for d in ds)
         min_y = min(d.get("y", 0) for d in ds)
         clipboard_data = {
@@ -1492,9 +1610,13 @@ class MainWindow(QMainWindow):
             "items": ds
         }
         QApplication.clipboard().setText(json.dumps(clipboard_data, ensure_ascii=False, indent=2))
+        
         if cut:
             for it in items:
-                self._remove_item(it)
+                # === 修正：図形アイテムも削除対象に含める ===
+                if isinstance(it, (CanvasItem, VideoItem, RectItem, ArrowItem)):
+                    self._remove_item(it)
+                # =======================================
 
     # --- 指定座標へペースト ---
     def _paste_items_at(self, scene_pos):
@@ -1523,11 +1645,21 @@ class MainWindow(QMainWindow):
                 if cls is None:
                     warn(f"[paste] unknown type: {d.get('type')}")
                     continue
-                d_new      = d.copy()
+                    
+                d_new = d.copy()
                 d_new["x"] = int(scene_pos.x()) + dx
                 d_new["y"] = int(scene_pos.y()) + dy
 
-                item = cls(d_new, self.text_color) if cls.TYPE_NAME != "video" else cls(d_new, win=self)
+                # === 修正：図形アイテムのコンストラクタ対応 ===
+                if d.get("type") in ("rect", "arrow"):
+                    # RectItem と ArrowItem は text_color のみを受け取る
+                    item = cls(d_new, text_color=self.text_color)
+                elif cls.TYPE_NAME != "video":
+                    item = cls(d_new, self.text_color)
+                else:
+                    item = cls(d_new, win=self)
+                # ================================================
+                
                 self.scene.addItem(item)
                 self.data["items"].append(d_new)
                 pasted_items.append(item)
@@ -1581,7 +1713,7 @@ class MainWindow(QMainWindow):
             warn("画像データがクリップボードにありません")
  
     # TODO: 様子見
-    def _remove_item(self, item: QGraphicsItem):
+    def REPLACED_remove_item(self, item: QGraphicsItem):
         """
         アイテムを安全に削除
         ① VideoItem は専用後始末
@@ -1625,11 +1757,63 @@ class MainWindow(QMainWindow):
         # ③ それ以外
         if item.scene():
             item.scene().removeItem(item)
+            
         if hasattr(item, "d") and item.d in self.data.get("items", []):
             self.data["items"].remove(item.d)
 
-
+    def _remove_item(self, item: QGraphicsItem):
+        """
+        アイテムを安全に削除
+        ① VideoItem は専用後始末
+        ② CanvasItem 派生は delete_self() 呼び出し
+        ③ RectItem/ArrowItem は専用処理（CanvasItemを継承していないため）
+        ④ その他はシーン除去＋ data["items"] から辞書削除
+        """
+        # ① VideoItem はこれまでどおり deleteLater() も呼ぶ
+        if isinstance(item, VideoItem):
+            item.delete_self()
+            if item.video_resize_dots and item.video_resize_dots.scene():
+                item.video_resize_dots.scene().removeItem(item.video_resize_dots)
+            item.video_resize_dots = None
+            # JSONから辞書を削除
+            if hasattr(item, "d") and item.d in self.data.get("items", []):
+                self.data["items"].remove(item.d)
+            return
+            
+        # ② CanvasItem 派生は自身の delete_self() に委譲
+        if isinstance(item, CanvasItem):
+            # シーンからの各種後始末
+            item.delete_self()
+            # JSONから辞書も削除
+            if hasattr(item, "d") and item.d in self.data.get("items", []):
+                self.data["items"].remove(item.d)
+            return
+            
+        # === ③ 新規追加：RectItem/ArrowItem の専用処理 ===
+        from DPyL_shapes import RectItem, ArrowItem
+        if isinstance(item, (RectItem, ArrowItem)):
+            # ArrowItemの場合はドラッグポイントも削除
+            if isinstance(item, ArrowItem):
+                if hasattr(item, '_arrow_tip') and item._arrow_tip and item._arrow_tip.scene():
+                    item._arrow_tip.scene().removeItem(item._arrow_tip)
+                    item._arrow_tip = None
+            
+            # グリップがある場合は削除
+            if hasattr(item, 'grip') and item.grip and item.grip.scene():
+                item.grip.scene().removeItem(item.grip)
+                item.grip = None
+                
+            # シーンから削除
+            if item.scene():
+                item.scene().removeItem(item)
+                
+            # JSONから辞書を削除
+            if hasattr(item, "d") and item.d in self.data.get("items", []):
+                self.data["items"].remove(item.d)
+            return
     # --- 動画一括操作 ---
+    r"""
+    # old version
     def _play_all_videos(self):
         for it in self.scene.items():
             if isinstance(it, VideoItem):
@@ -1648,8 +1832,40 @@ class MainWindow(QMainWindow):
                 it.btn_play.setText("▶")
                 it.active_point_index = None
             elif isinstance(it, GifItem):
-                it.pause() 
+                it.pause()     
+    """
+    def _play_all_videos(self):
+        """すべての動画とGIFアニメーションを一括再生"""
+        for it in self.scene.items():
+            if isinstance(it, VideoItem):
+                # VideoItem の再生制御
+                it.player.play()
+                it.btn_play.setChecked(True)
+                it.btn_play.setText("⏸")
+            elif isinstance(it, GifMixin):
+                # GifMixin を継承している全てのアイテム（GifItem, LauncherItem など）
+                # _movie.start() でGIF再生開始（一時停止状態からでも再開可能）
+                if hasattr(it, '_movie') and it._movie:
+                    it._movie.start()
 
+    def _pause_all_videos(self):
+        """すべての動画とGIFアニメーションを一括停止"""
+        for it in self.scene.items():
+            if isinstance(it, VideoItem):
+                # VideoItem の停止制御
+                # 再生中のときだけ Pause（Stopped への余計な遷移を防止）
+                if it.player.playbackState() == QMediaPlayer.PlaybackState.PlayingState:
+                    it.player.pause()
+                # ▶/⏸ ボタンと内部フラグを同期
+                it.btn_play.setChecked(False)
+                it.btn_play.setText("▶")
+                it.active_point_index = None
+            elif isinstance(it, GifMixin):
+                # GifMixin を継承している全てのアイテム（GifItem, LauncherItem など）
+                # setPaused(True) を使用して一時停止（完全停止ではない）
+                if hasattr(it, '_movie') and it._movie:
+                    it._movie.setPaused(True)
+                
     def _mute_all_videos(self):
         for it in self.scene.items():
             if isinstance(it, VideoItem):
