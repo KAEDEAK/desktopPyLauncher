@@ -4,274 +4,347 @@
 <meta charset="utf-8">
 <title><!-- title --></title>
 <!-- Google Fonts: Noto Sans JP -->
+<!--
+  データフォーマット version 1.1 用のテンプレートです。
+  長いノートには対応していません。line-heightなどが異なるためです。
+  一応表示はできますが、枠でテキストを囲んだり、矢印で単語等を示してもずれます。
+  ずれないようにするには、短いノートを作って、そのノート自体を枠で囲ったりしてください。
+//-->
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;700&display=swap" rel="stylesheet">
 <style>
-    /* グローバルフォント設定 - Noto Sans JPで統一 */
-    html,body{
-        margin:0;
-        padding:0;
-        height:100%;
-        overflow:hidden;
-        /* Noto Sans JPを最優先、フォールバックも指定 */
-        font-family: 'Noto Sans JP', 'Hiragino Kaku Gothic ProN', 'ヒラギノ角ゴ ProN W3', sans-serif;
-        background:#1e1e1e;
-        color:#eee;
-        /* フォントレンダリングを統一 */
-        -webkit-font-smoothing: antialiased;
-        -moz-osx-font-smoothing: grayscale;
-        text-rendering: optimizeLegibility;
-    }
-    
-    #canvasWrapper{position: relative;width: 100%;height: 100%;overflow: hidden; cursor: grab;background: #2b2b2b;}
-    #canvas{position:relative;min-width:2000px;min-height:2000px;}
-    .item{position:absolute;box-sizing:border-box;border-radius:4px;overflow:hidden;}
-    .launcher img{width:100%;height:100%;object-fit:contain;display:block;}
-    
-    /* ノートのスタイルを改善（フォント統一版） */
-    .note{
-        padding:0;
-        margin:0;
-        overflow:auto;
-        white-space:pre-wrap;
-        word-wrap:break-word;
-        /* 明示的にNoto Sans JPを指定 */
-        font-family: 'Noto Sans JP', 'Hiragino Kaku Gothic ProN', sans-serif;
-        line-height: 1.3; /* Noto Sans JP用に微調整 */
-        /* Webkitブラウザ対応 */
-        -webkit-text-size-adjust: 100%;
-        -webkit-font-smoothing: antialiased;
-        /* フォントメトリクスの統一 */
-        font-feature-settings: "palt" 1; /* プロポーショナルメトリクス */
-    }
-    
-    /* ノートコンテンツのリセット */
-    .note-content {
-        margin: 0;
-        padding: 5px; /* 6px→5pxに微調整 */
-        box-sizing: border-box;
-        /* 行の高さを厳密に指定 */
-        line-height: 1.3;
-    }
-    
-    /* Markdown要素の厳密なリセット（Chrome対応） */
-    .note-content * {
-        /* デフォルトマージン/パディングを完全リセット */
-        margin: 0;
-        padding: 0;
-        /* 親要素のフォントサイズと色を継承 */
-        font-size: inherit;
-        color: inherit;
-        line-height: 1.3;
-        /* フォントファミリーも継承 */
-        font-family: inherit;
-        /* Webkitのデフォルトスタイルを上書き */
-        -webkit-margin-before: 0;
-        -webkit-margin-after: 0;
-        -webkit-margin-start: 0;
-        -webkit-margin-end: 0;
-        -webkit-padding-before: 0;
-        -webkit-padding-after: 0;
-        -webkit-padding-start: 0;
-        -webkit-padding-end: 0;
-    }
-    
-    /* Markdown の見出し（Python版に合わせて調整） */
-    .note-content h1 { 
-        font-size: 2em; 
-        margin: 0.67em 0; 
-        font-weight: 700; 
-        line-height: 1.2;
-        border-bottom: 1px solid #666;
-        padding-bottom: 0.3em;
-    }
-    .note-content h2 { 
-        font-size: 1.5em; 
-        margin: 0.75em 0; 
-        font-weight: 700; 
-        line-height: 1.2;
-        border-bottom: 1px solid #555;
-        padding-bottom: 0.2em;
-    }
-    .note-content h3 { 
-        font-size: 1.25em; 
-        margin: 0.83em 0; 
-        font-weight: 700; 
-        line-height: 1.2; 
-    }
-    .note-content h4 { 
-        font-size: 1em; 
-        margin: 1.12em 0; 
-        font-weight: 700; 
-        line-height: 1.2; 
-    }
-    .note-content h5 { 
-        font-size: 0.83em; 
-        margin: 1.5em 0; 
-        font-weight: 700; 
-        line-height: 1.2; 
-    }
-    .note-content h6 { 
-        font-size: 0.75em; 
-        margin: 1.67em 0; 
-        font-weight: 700; 
-        line-height: 1.2; 
-    }
-    
-    /* Markdown の段落（Python版のように適度な間隔） */
-    .note-content p { 
-        margin: 1em 0;
-        line-height: 1.6;
-    }
-    .note-content p:first-child { margin-top: 0; }
-    .note-content p:last-child { margin-bottom: 0; }
-    
-    /* リストの調整（Python版のスタイル） */
-    .note-content ul, .note-content ol { 
-        margin: 1em 0; 
-        padding-left: 2em;
-        /* Chromeのデフォルトリストスタイルを上書き */
-        -webkit-padding-start: 2em;
-        list-style-position: outside;
-    }
-    .note-content ul { list-style-type: disc; }
-    .note-content ol { list-style-type: decimal; }
-    
-    .note-content li { 
-        margin: 0.25em 0;
-        line-height: 1.6;
-        /* Chromeのリストアイテムのデフォルトマージンを除去 */
-        display: list-item;
-    }
-    .note-content ul:first-child, .note-content ol:first-child { margin-top: 0; }
-    .note-content ul:last-child, .note-content ol:last-child { margin-bottom: 0; }
-    
-    /* ネストしたリストの調整 */
-    .note-content li > ul, .note-content li > ol {
-        margin-top: 0.25em;
-        margin-bottom: 0.25em;
-    }
-    .note-content li > ul { list-style-type: circle; }
-    .note-content li > ul > li > ul { list-style-type: square; }
-    
-    /* Markdown のテーブルスタイル（Python版風） */
-    .note-content table{
-        border-collapse: collapse;
-        width: 100%;
-        margin: 1em 0;
-        /* テーブルのボックスモデルを統一 */
-        box-sizing: border-box;
-        line-height: 1.4;
-    }
-    .note-content table:first-child { margin-top: 0; }
-    .note-content table:last-child { margin-bottom: 0; }
-    .note-content table, .note-content th, .note-content td{
-        border: 1px solid #666;
-    }
-    .note-content th {
-        padding: 6px 13px;
-        background: rgba(255,255,255,0.1);
-        font-weight: 700;
-        text-align: left;
-    }
-    .note-content td {
-        padding: 6px 13px;
-    }
-    .note-content tr:nth-child(even) {
-        background: rgba(255,255,255,0.02);
-    }
-    
-    /* コードブロックとインラインコード（Python版風） */
-    .note-content code {
-        background: rgba(0,0,0,0.4);
-        padding: 0.2em 0.4em;
-        border-radius: 3px;
-        font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
-        font-size: 0.9em;
-        /* インラインコードの行高を調整 */
-        line-height: 1;
-        color: #f8f8f2;
-    }
-    .note-content pre {
-        background: rgba(0,0,0,0.4);
-        padding: 1em;
-        border-radius: 5px;
-        overflow-x: auto;
-        margin: 1em 0;
-        /* preタグ内の空白を保持 */
-        white-space: pre;
-        line-height: 1.4;
-        border: 1px solid #555;
-    }
-    .note-content pre:first-child { margin-top: 0; }
-    .note-content pre:last-child { margin-bottom: 0; }
-    .note-content pre code {
-        background: none;
-        padding: 0;
-        font-size: inherit;
-        border-radius: 0;
-    }
-    
-    /* 水平線（Python版風） */
-    .note-content hr {
-        border: none;
-        border-top: 2px solid #666;
-        margin: 2em 0;
-        /* Chromeのhrデフォルトスタイルを上書き */
-        height: 0;
-        box-sizing: content-box;
-    }
-    
-    /* リンク（Python版風） */
-    .note-content a {
-        color: #69b7ff;
-        text-decoration: none;
-        border-bottom: 1px solid #69b7ff;
-    }
-    .note-content a:hover {
-        color: #ffcc66;
-        border-bottom-color: #ffcc66;
-    }
-    
-    /* 引用（Python版風） */
-    .note-content blockquote {
-        border-left: 4px solid #666;
-        margin: 1em 0;
-        padding-left: 1em;
-        color: #ccc;
-        font-style: italic;
-    }
-    .note-content blockquote:first-child { margin-top: 0; }
-    .note-content blockquote:last-child { margin-bottom: 0; }
-    
-    /* 強調・斜体 */
-    .note-content strong, .note-content b { 
-        font-weight: 700; 
-        color: #fff;
-    }
-    .note-content em, .note-content i { 
-        font-style: italic; 
-    }
-    
-    /* 画像 */
-    .note-content img {
-        max-width: 100%;
-        height: auto;
-        vertical-align: middle;
-        border-radius: 4px;
-        margin: 0.5em 0;
-    }
-    
-    .launcher{border:2px solid #6b6b6b;background-color:#333;}
-    .image{border:2px solid #4a8f4a;background-color:#333;}
-    .note{background-color:#323334;border:2px solid #5b5b5b;color:#CCCACD;}
-    .marker{border:2px solid #d4842e;background-color:#444;color:#CCCACD;}
-    .video{border:2px solid #ff6b6b;background-color:#333;}
-    .caption{position:absolute;font-size:12px;color:#ccc;text-align:center;background:rgba(0,0,0,0.8);padding:2px 4px;border-radius:3px;white-space:nowrap;max-width:200px;}
-    .marker-caption{color:#d4842e;}
-    .videoPlaceholder{display:flex;align-items:center;justify-content:center;width:100%;height:100%;background:#444;color:#ccc;font-size:14px;text-align:center;}
-    #minimapCanvas{position:absolute;top:10px;right:10px;border:2px solid #666;background:rgba(0,0,0,0.8);cursor:pointer;}
+/* グローバルフォント設定 - Noto Sans JPで統一 */
+html, body {
+    margin: 0;
+    padding: 0;
+    height: 100%;
+    overflow: hidden;
+    /* Noto Sans JPを最優先、フォールバックも指定 */
+    font-family: 'Noto Sans JP', 'Hiragino Kaku Gothic ProN', 'ヒラギノ角ゴ ProN W3', sans-serif;
+    background: #1e1e1e;
+    color: #eee;
+    /* フォントレンダリングを統一 */
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    text-rendering: optimizeLegibility;
+}
+
+#canvasWrapper {
+    position: relative;
+    width: 100%;
+    height: 100%;
+    overflow: hidden;
+    cursor: grab;
+    background: #2b2b2b;
+}
+
+#canvas {
+    position: relative;
+    min-width: 2000px;
+    min-height: 2000px;
+    /* 拡大縮小の原点を左上に固定 */
+    transform-origin: 0 0;
+}
+
+.item {
+    position: absolute;
+    box-sizing: border-box;
+    border-radius: 4px;
+    overflow: hidden;
+}
+
+.launcher img {
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+    display: block;
+}
+
+/* ノートのスタイルを改善（フォント統一版 + スクロールバー対策） */
+.note {
+    padding: 0;
+    margin: 0;
+    /* スクロールバー対策：overflowをhiddenに変更し、縦余裕を5px追加 */
+    overflow: hidden;
+    white-space: pre-wrap;
+    word-wrap: break-word;
+    /* 明示的にNoto Sans JPを指定 */
+    font-family: 'Noto Sans JP', 'Hiragino Kaku Gothic ProN', sans-serif;
+    line-height: 1.3; /* Noto Sans JP用に微調整 */
+    /* Webkitブラウザ対応 */
+    -webkit-text-size-adjust: 100%;
+    -webkit-font-smoothing: antialiased;
+    /* フォントメトリクスの統一 */
+    font-feature-settings: "palt" 1; /* プロポーショナルメトリクス */
+}
+
+/* ノートコンテンツのリセット */
+.note-content {
+    margin: 0;
+    padding: 4px; /* 5px→4pxに微調整してスクロールバー対策 */
+    box-sizing: border-box;
+    /* 行の高さを厳密に指定 */
+    line-height: 1.3;
+    /* 内部コンテンツのサイズ計算を調整 */
+    height: calc(100% - 2px); /* 親の高さから微調整 */
+    overflow-y: auto; /* 必要時のみスクロール */
+    overflow-x: hidden;
+}
+
+/* Markdown要素の厳密なリセット（Chrome対応） */
+.note-content * {
+    /* デフォルトマージン/パディングを完全リセット */
+    margin: 0;
+    padding: 0;
+    /* 親要素のフォントサイズと色を継承 */
+    font-size: inherit;
+    color: inherit;
+    line-height: 1.3;
+    /* フォントファミリーも継承 */
+    font-family: inherit;
+    /* Webkitのデフォルトスタイルを上書き */
+    -webkit-margin-before: 0;
+    -webkit-margin-after: 0;
+    -webkit-margin-start: 0;
+    -webkit-margin-end: 0;
+    -webkit-padding-before: 0;
+    -webkit-padding-after: 0;
+    -webkit-padding-start: 0;
+    -webkit-padding-end: 0;
+}
+
+/* Markdown の見出し（Python版に合わせて調整） */
+.note-content h1 { 
+    font-size: 1.8em; 
+    margin: 0.5em 0 0.3em 0; 
+    font-weight: 700; 
+    line-height: 1.2;
+    border-bottom: 1px solid #666;
+    padding-bottom: 0.2em;
+}
+.note-content h2 { 
+    font-size: 1.4em; 
+    margin: 0.4em 0 0.25em 0; 
+    font-weight: 700; 
+    line-height: 1.2;
+    border-bottom: 1px solid #555;
+    padding-bottom: 0.15em;
+}
+.note-content h3 { 
+    font-size: 1.2em; 
+    margin: 0.35em 0 0.2em 0; 
+    font-weight: 700; 
+    line-height: 1.2; 
+}
+.note-content h4 { 
+    font-size: 1.1em; 
+    margin: 0.3em 0 0.15em 0; 
+    font-weight: 700; 
+    line-height: 1.2; 
+}
+.note-content h5 { 
+    font-size: 1em; 
+    margin: 0.25em 0 0.1em 0; 
+    font-weight: 700; 
+    line-height: 1.2; 
+}
+.note-content h6 { 
+    font-size: 0.9em; 
+    margin: 0.2em 0 0.1em 0; 
+    font-weight: 700; 
+    line-height: 1.2; 
+}
+
+/* Markdown の段落（Python版のように適度な間隔だが、よりコンパクト） */
+.note-content p { 
+    margin: 0.6em 0;
+    line-height: 1.4;
+}
+.note-content p:first-child { margin-top: 0; }
+.note-content p:last-child { margin-bottom: 0; }
+
+/* リストの調整（Python版のスタイルだが、よりコンパクト） */
+.note-content ul, .note-content ol { 
+    margin: 0.6em 0; 
+    padding-left: 1.5em;
+    /* Chromeのデフォルトリストスタイルを上書き */
+    -webkit-padding-start: 1.5em;
+    list-style-position: outside;
+}
+.note-content ul { list-style-type: disc; }
+.note-content ol { list-style-type: decimal; }
+
+.note-content li { 
+    margin: 0.15em 0;
+    line-height: 1.4;
+    /* Chromeのリストアイテムのデフォルトマージンを除去 */
+    display: list-item;
+}
+.note-content ul:first-child, .note-content ol:first-child { margin-top: 0; }
+.note-content ul:last-child, .note-content ol:last-child { margin-bottom: 0; }
+
+/* ネストしたリストの調整 */
+.note-content li > ul, .note-content li > ol {
+    margin-top: 0.15em;
+    margin-bottom: 0.15em;
+}
+.note-content li > ul { list-style-type: circle; }
+.note-content li > ul > li > ul { list-style-type: square; }
+
+/* Markdown のテーブルスタイル（Python版風だが、よりコンパクト） */
+.note-content table {
+    border-collapse: collapse;
+    width: 100%;
+    margin: 0.6em 0;
+    /* テーブルのボックスモデルを統一 */
+    box-sizing: border-box;
+    line-height: 1.3;
+}
+.note-content table:first-child { margin-top: 0; }
+.note-content table:last-child { margin-bottom: 0; }
+.note-content table, .note-content th, .note-content td {
+    border: 1px solid #666;
+}
+.note-content th {
+    padding: 4px 8px;
+    background: rgba(255,255,255,0.1);
+    font-weight: 700;
+    text-align: left;
+}
+.note-content td {
+    padding: 4px 8px;
+}
+.note-content tr:nth-child(even) {
+    background: rgba(255,255,255,0.02);
+}
+
+/* コードブロックとインラインコード（Python版風だが、よりコンパクト） */
+.note-content code {
+    background: rgba(0,0,0,0.4);
+    padding: 0.1em 0.3em;
+    border-radius: 3px;
+    font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
+    font-size: 0.85em;
+    /* インラインコードの行高を調整 */
+    line-height: 1;
+    color: #f8f8f2;
+}
+.note-content pre {
+    background: rgba(0,0,0,0.4);
+    padding: 0.6em;
+    border-radius: 5px;
+    overflow-x: auto;
+    margin: 0.6em 0;
+    /* preタグ内の空白を保持 */
+    white-space: pre;
+    line-height: 1.3;
+    border: 1px solid #555;
+}
+.note-content pre:first-child { margin-top: 0; }
+.note-content pre:last-child { margin-bottom: 0; }
+.note-content pre code {
+    background: none;
+    padding: 0;
+    font-size: inherit;
+    border-radius: 0;
+}
+
+/* 水平線（Python版風） */
+.note-content hr {
+    border: none;
+    border-top: 2px solid #666;
+    margin: 1.2em 0;
+    /* Chromeのhrデフォルトスタイルを上書き */
+    height: 0;
+    box-sizing: content-box;
+}
+
+/* リンク（Python版風） */
+.note-content a {
+    color: #69b7ff;
+    text-decoration: none;
+    border-bottom: 1px solid #69b7ff;
+}
+.note-content a:hover {
+    color: #ffcc66;
+    border-bottom-color: #ffcc66;
+}
+
+/* 引用（Python版風だが、よりコンパクト） */
+.note-content blockquote {
+    border-left: 4px solid #666;
+    margin: 0.6em 0;
+    padding-left: 0.8em;
+    color: #ccc;
+    font-style: italic;
+}
+.note-content blockquote:first-child { margin-top: 0; }
+.note-content blockquote:last-child { margin-bottom: 0; }
+
+/* 強調・斜体 */
+.note-content strong, .note-content b { 
+    font-weight: 700; 
+    color: #fff;
+}
+.note-content em, .note-content i { 
+    font-style: italic; 
+}
+
+/* 画像 */
+.note-content img {
+    max-width: 100%;
+    height: auto;
+    vertical-align: middle;
+    border-radius: 4px;
+    margin: 0.3em 0;
+}
+
+/* アイテムタイプ別のスタイル */
+.launcher { border: 2px solid #6b6b6b; background-color: #333; }
+.image { border: 2px solid #4a8f4a; background-color: #333; }
+.note { background-color: #323334; border: 2px solid #5b5b5b; color: #CCCACD; }
+.marker { border: 2px solid #d4842e; background-color: #444; color: #CCCACD; }
+.video { border: 2px solid #ff6b6b; background-color: #333; }
+
+/* キャプション */
+.caption {
+    position: absolute;
+    font-size: 12px;
+    color: #ccc;
+    text-align: center;
+    background: rgba(0,0,0,0.8);
+    padding: 2px 4px;
+    border-radius: 3px;
+    white-space: nowrap;
+    max-width: 200px;
+}
+.marker-caption {
+    color: #d4842e;
+}
+
+/* ビデオプレースホルダー */
+.videoPlaceholder {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 100%;
+    height: 100%;
+    background: #444;
+    color: #ccc;
+    font-size: 14px;
+    text-align: center;
+}
+
+/* ミニマップ */
+#minimapCanvas {
+    position: absolute;
+    top: 10px;
+    right: 10px;
+    border: 2px solid #666;
+    background: rgba(0,0,0,0.8);
+    cursor: pointer;
+}
 </style>
 </head>
 
@@ -287,178 +360,38 @@
 
 <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
 <script>
+// アイコン定義
 const definedIcons = {
   ".bat":"res/batch-file.png", ".cmd":"res/batch-file.png", ".py":"res/python-file.png",
   ".exe":"res/exe-file.png", ".url":"res/url-file.png", ".lnk":"res/shortcut-file.png",
   ".txt":"res/text-file.png", ".md":"res/markdown-file.png", ".json":"res/json-file.png"
 };
 
+// DOM要素の参照
 const wrapper = document.getElementById("canvasWrapper");
-// スクロールバーを消してホイールイベントを確実にキャッチ
-wrapper.style.overflow = "hidden";
-
 const canvas = document.getElementById("canvas");
-// 拡大縮小の原点を左上に固定
-canvas.style.transformOrigin = "0 0";
-
 const mini = document.getElementById("minimapCanvas");
 const mCtx = mini.getContext("2d");
 
+// スクロールバーを消してホイールイベントを確実にキャッチ
+wrapper.style.overflow = "hidden";
+
 // グローバル状態
-let zoom        = 1.0;
-let translateX  = 0;
-let translateY  = 0;
-const MIN_ZOOM  = 0.2;
-const MAX_ZOOM  = 5.0;
-let isDragging  = false;
-let dragStartX  = 0;
-let dragStartY  = 0;
-let miniScale   = 1;
-const markers   = new Map();
+let zoom = 1.0;
+let translateX = 0;
+let translateY = 0;
+const MIN_ZOOM = 0.2;
+const MAX_ZOOM = 5.0;
+let isDragging = false;
+let dragStartX = 0;
+let dragStartY = 0;
+let miniScale = 1;
+const markers = new Map();
 
 // Z値の管理用
 let zMin = 0;
 let zMax = 0;
 let zRange = 1;
-
-/** ★ ミニマップクリック機能（新規追加） */
-function onMinimapClick(e) {
-  const rect = mini.getBoundingClientRect();
-  const clickX = e.clientX - rect.left;
-  const clickY = e.clientY - rect.top;
-  
-  // ミニマップ座標をシーン座標に変換
-  const sceneX = clickX / miniScale;
-  const sceneY = clickY / miniScale;
-  
-  // ビューポートの中心がクリック位置になるように移動
-  const centerX = wrapper.clientWidth / 2;
-  const centerY = wrapper.clientHeight / 2;
-  
-  translateX = centerX - sceneX * zoom;
-  translateY = centerY - sceneY * zoom;
-  
-  canvas.style.transform = `translate(${translateX}px, ${translateY}px) scale(${zoom})`;
-  drawMini();
-}
-
-/** ドラッグ開始 */
-function onDragStart(e) {
-  if (e.button !== 0) return;
-  isDragging = true;
-  dragStartX = e.clientX;
-  dragStartY = e.clientY;
-  wrapper.style.cursor = "grabbing";
-  e.preventDefault();
-}
-
-/** ドラッグ中 */
-function onDragMove(e) {
-  if (!isDragging) return;
-  const dx = e.clientX - dragStartX;
-  const dy = e.clientY - dragStartY;
-  translateX += dx;
-  translateY += dy;
-  canvas.style.transform = `translate(${translateX}px, ${translateY}px) scale(${zoom})`;
-  dragStartX = e.clientX;
-  dragStartY = e.clientY;
-  drawMini();
-}
-
-/** ドラッグ終了 */
-function onDragEnd(e) {
-  if (!isDragging) return;
-  isDragging = false;
-  wrapper.style.cursor = "grab";
-  drawMini();
-}
-
-/** ホイールでズーム（中心をラッパー基準で計算） */
-function onWheel(e) {
-  e.preventDefault();
-  const wR = wrapper.getBoundingClientRect();
-  const dx = e.clientX - wR.left;
-  const dy = e.clientY - wR.top;
-  const x  = (dx - translateX) / zoom;
-  const y  = (dy - translateY) / zoom;
-  const factor  = e.deltaY < 0 ? 1.1 : 0.9;
-  const newZoom = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, zoom * factor));
-  translateX = dx - x * newZoom;
-  translateY = dy - y * newZoom;
-  zoom = newZoom;
-  canvas.style.transform = `translate(${translateX}px, ${translateY}px) scale(${zoom})`;
-  drawMini();
-}
-
-/** UI構築 */
-function buildUI(data) {
-  if (!data || !Array.isArray(data.items)) return;
-  canvas.innerHTML = "";
-  
-  // Z値の範囲を計算
-  const zValues = data.items.map(it => it.z || 0).filter(z => typeof z === 'number');
-  if (zValues.length > 0) {
-    zMin = Math.min(...zValues);
-    zMax = Math.max(...zValues);
-    zRange = zMax - zMin;
-    if (zRange === 0) zRange = 1; // 0除算を避ける
-  } else {
-    zMin = 0;
-    zMax = 0;
-    zRange = 1;
-  }
-  
-  let maxX = 0, maxY = 0;
-  data.items.forEach(it => {
-    maxX = Math.max(maxX, it.x + (it.width || 48));
-    maxY = Math.max(maxY, it.y + (it.height|| 48));
-  });
-  canvas.style.minWidth  = (maxX + 400) + "px";
-  canvas.style.minHeight = (maxY + 400) + "px";
-  miniScale = Math.min(mini.width/(maxX+400), mini.height/(maxY+400));
-  data.items.forEach(it => {
-    switch(it.type) {
-      case "launcher":
-      case "json":   addLauncher(it); break;
-      case "image":
-      case "gif":    addImage(it);    break;
-      case "note":   addNote(it);     break;
-      case "video":  addVideo(it);    break;
-      case "marker": addMarker(it);   break;
-      case "rect":   addRect(it);     break;
-      case "arrow":  addArrow(it);    break;
-      default: console.warn("unsupported type", it.type);
-    }
-  });
-  drawMini();
-}
-
-/** ミニマップ再描画 */
-function drawMini(){
-  mCtx.clearRect(0,0,mini.width,mini.height);
-  mCtx.fillStyle="#444"; mCtx.fillRect(0,0,mini.width,mini.height);
-  const rect = canvas.getBoundingClientRect();
-  canvas.querySelectorAll(".item").forEach(el=>{
-    const r = el.getBoundingClientRect();
-    const x = (r.left - rect.left)*miniScale;
-    const y = (r.top  - rect.top )*miniScale;
-    const w = r.width   *miniScale;
-    const h = r.height  *miniScale;
-    mCtx.fillStyle = el.classList.contains("marker")
-      ? "rgba(255,100,100,0.8)"
-      : "rgba(0,200,255,0.5)";
-    mCtx.fillRect(x,y,Math.max(2,w),Math.max(2,h));
-  });
-  // ビューポート矩形（translate/zoom を逆算）
-  const vx = (-translateX/zoom)*miniScale;
-  const vy = (-translateY/zoom)*miniScale;
-  const vw = (wrapper.clientWidth / zoom)*miniScale;
-  const vh = (wrapper.clientHeight/ zoom)*miniScale;
-  mCtx.strokeStyle="#ff0"; mCtx.lineWidth=1;
-  mCtx.strokeRect(vx,vy,vw,vh);
-}
-
-/* -------------------------------- */
 
 /**
  * Z値を適用（0-1000の範囲にマッピング）
@@ -481,8 +414,8 @@ function addCaption(d, text, isMarker = false) {
   const cap = document.createElement("div");
   cap.className = isMarker ? "caption marker-caption" : "caption";
   cap.textContent = text;
-  cap.style.left  = d.x + "px";
-  cap.style.top   = (d.y + d.height + 2) + "px";
+  cap.style.left = d.x + "px";
+  cap.style.top = (d.y + d.height + 2) + "px";
   cap.style.width = d.width + "px";
   
   // キャプションのZ値は親アイテムより少し高く設定
@@ -504,10 +437,179 @@ function attachOpenUrl(el, url) {
   el.addEventListener("dblclick", () => window.open(url, "_blank"));
 }
 
+/**
+ * 明度調整を適用
+ */
 function applyBrightness(imgEl, brightness) {
   brightness = brightness || 100;
   if (brightness !== 100) {
     imgEl.style.filter = `brightness(${brightness}%)`;
+  }
+}
+
+/**
+ * ミニマップクリック機能
+ */
+function onMinimapClick(e) {
+  const rect = mini.getBoundingClientRect();
+  const clickX = e.clientX - rect.left;
+  const clickY = e.clientY - rect.top;
+  
+  // ミニマップ座標をシーン座標に変換
+  const sceneX = clickX / miniScale;
+  const sceneY = clickY / miniScale;
+  
+  // ビューポートの中心がクリック位置になるように移動
+  const centerX = wrapper.clientWidth / 2;
+  const centerY = wrapper.clientHeight / 2;
+  
+  translateX = centerX - sceneX * zoom;
+  translateY = centerY - sceneY * zoom;
+  
+  canvas.style.transform = `translate(${translateX}px, ${translateY}px) scale(${zoom})`;
+  drawMini();
+}
+
+/**
+ * ドラッグ開始
+ */
+function onDragStart(e) {
+  if (e.button !== 0) return;
+  isDragging = true;
+  dragStartX = e.clientX;
+  dragStartY = e.clientY;
+  wrapper.style.cursor = "grabbing";
+  e.preventDefault();
+}
+
+/**
+ * ドラッグ中
+ */
+function onDragMove(e) {
+  if (!isDragging) return;
+  const dx = e.clientX - dragStartX;
+  const dy = e.clientY - dragStartY;
+  translateX += dx;
+  translateY += dy;
+  canvas.style.transform = `translate(${translateX}px, ${translateY}px) scale(${zoom})`;
+  dragStartX = e.clientX;
+  dragStartY = e.clientY;
+  drawMini();
+}
+
+/**
+ * ドラッグ終了
+ */
+function onDragEnd(e) {
+  if (!isDragging) return;
+  isDragging = false;
+  wrapper.style.cursor = "grab";
+  drawMini();
+}
+
+/**
+ * ホイールでズーム（中心をラッパー基準で計算）
+ */
+function onWheel(e) {
+  e.preventDefault();
+  const wR = wrapper.getBoundingClientRect();
+  const dx = e.clientX - wR.left;
+  const dy = e.clientY - wR.top;
+  const x = (dx - translateX) / zoom;
+  const y = (dy - translateY) / zoom;
+  const factor = e.deltaY < 0 ? 1.1 : 0.9;
+  const newZoom = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, zoom * factor));
+  translateX = dx - x * newZoom;
+  translateY = dy - y * newZoom;
+  zoom = newZoom;
+  canvas.style.transform = `translate(${translateX}px, ${translateY}px) scale(${zoom})`;
+  drawMini();
+}
+
+/**
+ * UI構築
+ */
+function buildUI(data) {
+  if (!data || !Array.isArray(data.items)) return;
+  canvas.innerHTML = "";
+  
+  // Z値の範囲を計算
+  const zValues = data.items.map(it => it.z || 0).filter(z => typeof z === 'number');
+  if (zValues.length > 0) {
+    zMin = Math.min(...zValues);
+    zMax = Math.max(...zValues);
+    zRange = zMax - zMin;
+    if (zRange === 0) zRange = 1; // 0除算を避ける
+  } else {
+    zMin = 0;
+    zMax = 0;
+    zRange = 1;
+  }
+  
+  let maxX = 0, maxY = 0;
+  data.items.forEach(it => {
+    maxX = Math.max(maxX, it.x + (it.width || 48));
+    maxY = Math.max(maxY, it.y + (it.height|| 48));
+  });
+  canvas.style.minWidth = (maxX + 400) + "px";
+  canvas.style.minHeight = (maxY + 400) + "px";
+  miniScale = Math.min(mini.width/(maxX+400), mini.height/(maxY+400));
+  
+  data.items.forEach(it => {
+    switch(it.type) {
+      case "launcher":
+      case "json":   addLauncher(it); break;
+      case "image":
+      case "gif":    addImage(it);    break;
+      case "note":   addNote(it);     break;
+      case "video":  addVideo(it);    break;
+      case "marker": addMarker(it);   break;
+      case "rect":   addRect(it);     break;
+      case "arrow":  addArrow(it);    break;
+      default: console.warn("unsupported type", it.type);
+    }
+  });
+  drawMini();
+}
+
+/**
+ * ミニマップ再描画
+ */
+function drawMini() {
+  mCtx.clearRect(0, 0, mini.width, mini.height);
+  mCtx.fillStyle = "#444"; 
+  mCtx.fillRect(0, 0, mini.width, mini.height);
+  
+  const rect = canvas.getBoundingClientRect();
+  canvas.querySelectorAll(".item").forEach(el => {
+    const r = el.getBoundingClientRect();
+    const x = (r.left - rect.left) * miniScale;
+    const y = (r.top - rect.top) * miniScale;
+    const w = r.width * miniScale;
+    const h = r.height * miniScale;
+    mCtx.fillStyle = el.classList.contains("marker")
+      ? "rgba(255,100,100,0.8)"
+      : "rgba(0,200,255,0.5)";
+    mCtx.fillRect(x, y, Math.max(2, w), Math.max(2, h));
+  });
+  
+  // ビューポート矩形（translate/zoom を逆算）
+  const vx = (-translateX / zoom) * miniScale;
+  const vy = (-translateY / zoom) * miniScale;
+  const vw = (wrapper.clientWidth / zoom) * miniScale;
+  const vh = (wrapper.clientHeight / zoom) * miniScale;
+  mCtx.strokeStyle = "#ff0"; 
+  mCtx.lineWidth = 1;
+  mCtx.strokeRect(vx, vy, vw, vh);
+}
+
+/**
+ * MarkerItem ジャンプ
+ */
+function jumpToMarker(id) {
+  const target = markers.get(id);
+  if (target) {
+    target.scrollIntoView({ behavior: "smooth", block: "center" });
   }
 }
 
@@ -518,9 +620,9 @@ function addLauncher(d) {
   const el = document.createElement("div");
   el.className = "item launcher";
   Object.assign(el.style, {
-    left:   d.x + "px",
-    top:    d.y + "px",
-    width:  d.width  + "px",
+    left: d.x + "px",
+    top: d.y + "px",
+    width: d.width + "px",
     height: d.height + "px"
   });
 
@@ -560,7 +662,10 @@ function addLauncher(d) {
 
   const img = new Image();
   img.src = imgSrc;
-  img.onload  = () => { applyBrightness(img, d.brightness); drawMini(); };
+  img.onload = () => { 
+    applyBrightness(img, d.brightness); 
+    drawMini(); 
+  };
   img.onerror = () => {
     console.warn("Launcher icon load error for:", d);
     img.src = "data:image/svg+xml;base64," +
@@ -582,9 +687,9 @@ function addImage(d) {
   const box = document.createElement("div");
   box.className = "item image";
   Object.assign(box.style, {
-    left:   d.x + "px",
-    top:    d.y + "px",
-    width:  d.width  + "px",
+    left: d.x + "px",
+    top: d.y + "px",
+    width: d.width + "px",
     height: d.height + "px"
   });
 
@@ -592,8 +697,8 @@ function addImage(d) {
   applyZIndex(box, d.z);
 
   const img = new Image();
-  img.style.width     = "100%";
-  img.style.height    = "100%";
+  img.style.width = "100%";
+  img.style.height = "100%";
   img.style.objectFit = "contain";
 
   // マイグレーション後の新しいフィールドを優先的にチェック
@@ -632,7 +737,10 @@ function addImage(d) {
       btoa('<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100"><rect width="100" height="100" fill="#333"/><text x="50" y="50" fill="#ccc" font-size="12" text-anchor="middle">画像読み込み失敗</text></svg>');
   }
 
-  img.onload  = () => { applyBrightness(img, d.brightness); drawMini(); };
+  img.onload = () => { 
+    applyBrightness(img, d.brightness); 
+    drawMini(); 
+  };
   img.onerror = () => {
     console.warn("Image load error for:", d);
     img.src = "data:image/svg+xml;base64," +
@@ -654,9 +762,9 @@ function addVideo(d) {
   const box = document.createElement("div");
   box.className = "item video";
   Object.assign(box.style, {
-    left:   d.x + "px",
-    top:    d.y + "px",
-    width:  d.width  + "px",
+    left: d.x + "px",
+    top: d.y + "px",
+    width: d.width + "px",
     height: d.height + "px"
   });
 
@@ -664,21 +772,11 @@ function addVideo(d) {
   applyZIndex(box, d.z);
 
   const ph = document.createElement("div");
-  ph.className   = "videoPlaceholder";
+  ph.className = "videoPlaceholder";
   ph.textContent = "📹 Video (Not Supported)";
   box.appendChild(ph);
   canvas.appendChild(box);
   addCaption(d, d.caption || "Video");
-}
-
-/**
- * MarkerItem ジャンプ
- */
-function jumpToMarker(id) {
-  const target = markers.get(id);
-  if (target) {
-    target.scrollIntoView({ behavior: "smooth", block: "center" });
-  }
 }
 
 /**
@@ -688,9 +786,9 @@ function addMarker(d) {
   const el = document.createElement("div");
   el.className = "item marker" + (d.jump_id != null ? " jump-marker" : "");
   Object.assign(el.style, {
-    left:   d.x + "px",
-    top:    d.y + "px",
-    width:  d.width  + "px",
+    left: d.x + "px",
+    top: d.y + "px",
+    width: d.width + "px",
     height: d.height + "px",
     display: "flex",
     alignItems: "center",
@@ -717,37 +815,55 @@ function addMarker(d) {
 }
 
 /**
- * NoteItem 描画
+ * NoteItem 描画（改善版）
  */
 function addNote(d) {
   const el = document.createElement("div");
   el.className = "item note";
+  
+  // 縦スクロールバー対策：高さを5px余裕を持たせる
+  const adjustedHeight = (d.height || 100) + 5;
+  
   Object.assign(el.style, {
-    left:   d.x + "px",
-    top:    d.y + "px",
-    width:  d.width  + "px",
-    height: d.height + "px"
+    left: d.x + "px",
+    top: d.y + "px",
+    width: d.width + "px",
+    height: adjustedHeight + "px"
   });
 
   // Z値を適用
   applyZIndex(el, d.z);
 
+  // カスタムスタイルの適用（背景色、フォントサイズ、テキスト色）
+  if (d.bgcolor) {
+    el.style.backgroundColor = d.bgcolor;
+  }
+  if (d.color) {
+    el.style.color = d.color;
+  }
+  if (d.fontsize) {
+    el.style.fontSize = d.fontsize + "px";
+  }
+
   const contentDiv = document.createElement("div");
   contentDiv.className = "note-content";
 
+  // 背景の塗りつぶし設定
+  if (d.fill_background === false || d.fill_bg === false) {
+    el.style.background = "transparent";
+    el.style.border = "none";
+  }
+
+  // Markdownまたはテキストの処理
   if (d.format === "markdown") {
     try {
       contentDiv.innerHTML = marked.parse(d.text || "");
     } catch (err) {
+      console.warn("Markdown parsing error:", err);
       contentDiv.textContent = d.text || "";
     }
   } else {
     contentDiv.textContent = d.text || "";
-  }
-
-  if (d.fill_background === false) {
-    el.style.background = "transparent";
-    el.style.border = "none";
   }
 
   el.appendChild(contentDiv);
@@ -792,9 +908,9 @@ function addRect(d) {
   const el = document.createElement("div");
   el.className = "item rect";
   Object.assign(el.style, {
-    left:   d.x + "px",
-    top:    d.y + "px",
-    width:  d.width  + "px",
+    left: d.x + "px",
+    top: d.y + "px",
+    width: d.width + "px",
     height: d.height + "px",
     borderRadius: (d.corner_radius || 0) + "px"
   });
@@ -826,9 +942,9 @@ function addArrow(d) {
   const el = document.createElement("div");
   el.className = "item arrow";
   Object.assign(el.style, {
-    left:   d.x + "px",
-    top:    d.y + "px",
-    width:  d.width  + "px",
+    left: d.x + "px",
+    top: d.y + "px",
+    width: d.width + "px",
     height: d.height + "px",
     position: "absolute"
   });
@@ -909,14 +1025,15 @@ function addArrow(d) {
   attachOpenUrl(el, d.path);
 }
 
+// イベントリスナーの設定
 document.addEventListener("DOMContentLoaded", () => {
-  wrapper.addEventListener("mousedown",  onDragStart);
-  wrapper.addEventListener("mousemove",  onDragMove);
-  wrapper.addEventListener("mouseup",    onDragEnd);
+  wrapper.addEventListener("mousedown", onDragStart);
+  wrapper.addEventListener("mousemove", onDragMove);
+  wrapper.addEventListener("mouseup", onDragEnd);
   wrapper.addEventListener("mouseleave", onDragEnd);
-  wrapper.addEventListener("wheel",      onWheel);
+  wrapper.addEventListener("wheel", onWheel);
 
-  // ★ ミニマップクリックイベントを追加
+  // ミニマップクリックイベントを追加
   mini.addEventListener("click", onMinimapClick);
 
   try {
