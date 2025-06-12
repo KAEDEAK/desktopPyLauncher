@@ -565,13 +565,17 @@ class NoteEditDialog(QDialog):
     def _kick_preview_update(self):
         self._prev_timer.start(150)
         
+    def _clean_path(self, path: str) -> str:
+        """strip spaces and surrounding quotes"""
+        return path.strip().strip('"').strip()
+
     def _update_path_buttons(self):
-        has_path = bool(self.ed_path.text().strip())
+        has_path = bool(self._clean_path(self.ed_path.text()))
         self.btn_load.setEnabled(has_path)
         self.btn_save.setEnabled(has_path)
 
     def _load_from_path(self):
-        path = self.ed_path.text().strip()
+        path = self._clean_path(self.ed_path.text())
         if not path:
             return
         try:
@@ -583,7 +587,7 @@ class NoteEditDialog(QDialog):
             warn(f"[NoteEditDialog] load failed: {e}")
 
     def _save_to_path(self):
-        path = self.ed_path.text().strip()
+        path = self._clean_path(self.ed_path.text())
         if not path:
             return
         try:
@@ -639,6 +643,8 @@ class NoteEditDialog(QDialog):
         self.item.text = self.d["text"]
         self.item.fill_bg = self.d["fill_background"]
         self.item.path = self.d["path"]
+        if self.item.path:
+            self.item.save_to_file()
 
         super().accept()
 
