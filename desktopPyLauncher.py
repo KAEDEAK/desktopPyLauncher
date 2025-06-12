@@ -2140,10 +2140,19 @@ class MainWindow(QMainWindow):
     # --- ノート追加 ---
     def _add_note(self):
         sp = self.view.mapToScene(self.view.viewport().rect().center())
-        d = {"type": "note", "x": sp.x(), "y": sp.y(),
-             "width": 200, "height": 120, "note": b64e("New note"),
-             "isLabel": False, "color": NOTE_FG_COLOR, "fontsize": 14,
-             "noteType": "text"}
+        d = {
+            "type": "note",
+            "x": sp.x(),
+            "y": sp.y(),
+            "width": 200,
+            "height": 120,
+            "note": b64e("New note"),
+            "isLabel": False,
+            "color": NOTE_FG_COLOR,
+            "fontsize": 14,
+            "noteType": "text",
+            "path": "",
+        }
         it = NoteItem(d, self.text_color)
         self.scene.addItem(it)
         self.data.setdefault("items", []).append(d)

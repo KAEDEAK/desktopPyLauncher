@@ -84,6 +84,11 @@ class NoteItem(CanvasItem):
         self.format: str = self.d.get("format", "text")
         self.text: str = self.d.get("text", "New Note")
         self.fill_bg: bool = self.d.get("fill_background", True)
+        
+        # ファイル読み込み
+        self.path: str = self.d.get("path", "")
+        if self.path:
+            self.load_from_file()
 
         # スクロール位置
         self.scroll_offset: int = 0
@@ -236,6 +241,26 @@ class NoteItem(CanvasItem):
         offset = max(0, min(offset, getattr(self, "scroll_max", 0)))
         self.scroll_offset = offset
         self.txt_item.setY(-offset)
+
+    # --------------------------------------------------------------
+    #   ファイル読み込み/保存
+    # --------------------------------------------------------------
+    def load_from_file(self):
+        """self.path からテキストを読み込む"""
+        try:
+            with open(self.path, "r", encoding="utf-8") as f:
+                self.text = f.read()
+            self.d["text"] = self.text
+        except Exception as e:
+            warn(f"[NoteItem] load_from_file failed: {e}")
+
+    def save_to_file(self):
+        """self.path にテキストを書き出す"""
+        try:
+            with open(self.path, "w", encoding="utf-8") as f:
+                f.write(self.text)
+        except Exception as e:
+            warn(f"[NoteItem] save_to_file failed: {e}")
 
     # --------------------------------------------------------------
     #   実行モード : マウスハンドリング
@@ -464,6 +489,23 @@ class NoteEditDialog(QDialog):
         self.spin_font.setValue(int(self.d.get("fontsize", 14)))
         vbox.addLayout(_hl("フォントサイズ", self.spin_font))
 
+        # --- ファイルパス欄と読込/保存ボタン ---
+        self.ed_path = QLineEdit(self.d.get("path", ""))
+        btn_load = QPushButton("読み込み")
+        btn_save = QPushButton("保存")
+        btn_load.clicked.connect(self._load_from_path)
+        btn_save.clicked.connect(self._save_to_path)
+        self.ed_path.textChanged.connect(self._update_path_buttons)
+        self.btn_load = btn_load
+        self.btn_save = btn_save
+        path_layout = QHBoxLayout()
+        path_layout.addWidget(QLabel("path"))
+        path_layout.addWidget(self.ed_path, 1)
+        path_layout.addWidget(btn_load)
+        path_layout.addWidget(btn_save)
+        vbox.addLayout(path_layout)
+        self._update_path_buttons()
+
         # --- Splitter: 上部=編集エリア / 下部=プレビュー ---
         splitter = QSplitter(Qt.Orientation.Vertical)
 
@@ -499,6 +541,7 @@ class NoteEditDialog(QDialog):
         #self.chk_md.stateChanged.connect(self._update_preview)
         #self.txt_edit.textChanged.connect(self._update_preview)
         #self._update_preview()
+        
         # -- 150 ms デバウンス -------------------
         self._prev_timer = QTimer(self)
         self._prev_timer.setSingleShot(True)
@@ -521,6 +564,34 @@ class NoteEditDialog(QDialog):
 
     def _kick_preview_update(self):
         self._prev_timer.start(150)
+        
+    def _update_path_buttons(self):
+        has_path = bool(self.ed_path.text().strip())
+        self.btn_load.setEnabled(has_path)
+        self.btn_save.setEnabled(has_path)
+
+    def _load_from_path(self):
+        path = self.ed_path.text().strip()
+        if not path:
+            return
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                txt = f.read()
+            self.txt_edit.setPlainText(txt)
+            self._kick_preview_update()
+        except Exception as e:
+            warn(f"[NoteEditDialog] load failed: {e}")
+
+    def _save_to_path(self):
+        path = self.ed_path.text().strip()
+        if not path:
+            return
+        try:
+            with open(path, "w", encoding="utf-8") as f:
+                f.write(self.txt_edit.toPlainText())
+        except Exception as e:
+            warn(f"[NoteEditDialog] save failed: {e}")
+            
     # --------------------------------------------------------------
     # プレビュー更新処理
     # --------------------------------------------------------------
@@ -561,11 +632,13 @@ class NoteEditDialog(QDialog):
         self.d["bgcolor"] = self.ed_bg.text().strip() or NOTE_BG_COLOR
         self.d["fontsize"] = self.spin_font.value()
         self.d["color"] = self.ed_color.text().strip() or "#ffffff"
+        self.d["path"] = self.ed_path.text().strip()
 
         # NoteItem 側に即時反映
         self.item.format = self.d["format"]
         self.item.text = self.d["text"]
         self.item.fill_bg = self.d["fill_background"]
+        self.item.path = self.d["path"]
 
         super().accept()
 
