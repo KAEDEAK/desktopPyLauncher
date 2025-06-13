@@ -8,7 +8,9 @@ DPyL_note.py ― NoteItem / NoteEditDialog (Qt6 / PyQt6 専用)
     * self.text: 本文
   - Markdown は python-markdown → HTML 変換後に描画
     * インライン CSS（例: <span style="color:#ff0000">）対応
-  - 実行モード: ドラッグでスクロール
+  - 実行モード: ダブルクリックで WALK → SCROLL → EDIT を循環
+  - SCROLL 時はドラッグ/ホイールでスクロール
+  - EDIT 時はノート内容を直接編集
   - 編集モード: ダブルクリックで編集ダイアログを開く
   - CanvasResizeGrip に連動してリサイズ可能
 """
@@ -56,6 +58,13 @@ MD_EXT: List[str] = [
 
 NOTE_BG_COLOR = "#323334"
 NOTE_FG_COLOR = "#CCCACD"
+
+NOTE_MODE_WALK  = 0
+NOTE_MODE_SCROLL= 1 
+NOTE_MODE_EDIT  = 2
+
+
+
 # =====================================================================
 #   NoteItem
 # =====================================================================
@@ -72,12 +81,17 @@ class NoteItem(CanvasItem):
         self._press_scene_pos = None        # 押下座標
         self._CLICK_THRESH    = 4           # px 未満ならクリック        
         
+        # インタラクションモード管理 -------------
+        # 0=WALK, 1=SCROLL, 2=EDIT
+        self._mode: int = NOTE_MODE_WALK
+        self._dragging: bool = False   # 実際にドラッグ中か
+        
         #
         # ★好みに応じて True にするとドラッグスクロールを完全に無効化し
         #   “ホイールのみスクロール” になります。
         self.DISABLE_DRAG_SCROLL: bool = False
 
-        # hoverLeaveEvent で _scroll_ready をクリアするため
+         # hoverLeaveEvent でモードをリセットするため
         self.setAcceptHoverEvents(True)
 
         # JSON → インスタンス変数
@@ -124,17 +138,14 @@ class NoteItem(CanvasItem):
         self._resize_timer.timeout.connect(self._apply_text)
         
         try:
-            # -- 追加: トグルインジケーター -----------------
-            self._IND_SIZE = 8   # px
-            self._indicator = QGraphicsRectItem(
-                0, 0, self._IND_SIZE, self._IND_SIZE, self
-            )
-            #以下コメントアウトしないとノートが消えます
-            #self._indicator.setPen(Qt.PenStyle.NoPen)
-            #self._indicator.setBrush(QColor("#000080"))  # 初期 = OFF
-            #self._indicator.setZValue(9999)              # 最前面
-
-            self._update_indicator_position()
+            # -- モード表示ラベル -----------------
+            self._mode_label = QGraphicsTextItem("", self)
+            font = self._mode_label.font()
+            font.setPointSize(8)
+            self._mode_label.setFont(font)
+            self._mode_label.setZValue(9999)
+            self._mode_label.setVisible(False)
+            self._mode_label.setAcceptedMouseButtons(Qt.MouseButton.NoButton)
         except RuntimeError as e:
             # オブジェクト削除時の例外をキャッチ
             warn(f"[NoteItem] __init__: {e}")
@@ -142,22 +153,48 @@ class NoteItem(CanvasItem):
 
 
     # --------------------------------------------------------------
-    #   インジケーターの描画更新
+    #   モード表示ラベル更新
     # --------------------------------------------------------------
-    def _update_indicator_position(self):
-        """右上に 2px マージンで配置（_indicator 未生成なら無視）"""
-        if not hasattr(self, "_indicator"):
+    def _update_mode_label_position(self):
+        if not hasattr(self, "_mode_label"):
             return
         r = self.boundingRect()
-        # 右上に 2 px マージン
-        self._indicator.setPos(r.width() - self._IND_SIZE - 2, 2)
+        br = self._mode_label.boundingRect()
+        self._mode_label.setPos(r.width() - br.width() - 2, 2)
 
-    def _update_indicator_color(self):
-        """ON/OFF に合わせて塗り替え"""
-        col = QColor("#008000") if self._scroll_ready else QColor("#000080")
-        if hasattr(self,"_indicator"):
-            self._indicator.setBrush(col)
+    def _update_mode_label(self):
+        if not hasattr(self, "_mode_label"):
+            return
+        if self._mode == NOTE_MODE_SCROLL:
+            html = '<span style="background:#ffff00;color:#000000;">SCROLL</span>'
+        elif self._mode == NOTE_MODE_EDIT:
+            html = '<span style="background:#ff0000;color:#ffff00;">EDIT</span>'
+        else:
+            html = ""
+        self._mode_label.setHtml(html)
+        self._mode_label.setVisible(bool(html))
+        self._update_mode_label_position()
 
+    def _enter_edit_mode(self):
+        self.txt_item.setTextInteractionFlags(
+            Qt.TextInteractionFlag.TextEditorInteraction
+        )
+        self.txt_item.setPlainText(self.text)
+        self.txt_item.setFocus()
+
+    def _exit_edit_mode(self):
+        self.text = self.txt_item.toPlainText()
+        self.d["text"] = self.text
+        self.txt_item.setTextInteractionFlags(Qt.TextInteractionFlag.NoTextInteraction)
+        self._apply_text()
+
+    def _cycle_mode(self):
+        if self._mode == NOTE_MODE_EDIT:
+            self._exit_edit_mode()
+        self._mode = (self._mode + 1) % 3
+        if self._mode == NOTE_MODE_EDIT:
+            self._enter_edit_mode()
+        self._update_mode_label()
 
     # --------------------------------------------------------------
     # public helper: サイズ変更通知
@@ -167,7 +204,7 @@ class NoteItem(CanvasItem):
         # クリップ／背景を更新
         self.clip_item.setRect(0, 0, w, h)
         self._rect_item.setRect(0, 0, w, h)
-        self._update_indicator_position() 
+        self._update_mode_label_position() 
         
         self._update_grip_pos()
 
@@ -270,24 +307,19 @@ class NoteItem(CanvasItem):
             return super().mousePressEvent(ev)
 
         if ev.button() == Qt.MouseButton.LeftButton:
-            # ---- ドラッグスクロール完全禁止モード -------------
-            if self.DISABLE_DRAG_SCROLL:
-                return super().mousePressEvent(ev)   # 上位へ任せる
-
-            # ↓ 押下位置だけ記録。Release 時の移動量で
-            #    “クリック or ドラッグ” を判定する
-            self._press_scene_pos = ev.scenePos()
-
-            # 既に _scroll_ready が ON なら「内部スクロール用ドラッグ」
-            if self._scroll_ready:
+            if self._mode == NOTE_MODE_SCROLL:
+                if self.DISABLE_DRAG_SCROLL:
+                    return super().mousePressEvent(ev)
                 self._drag_start_y = ev.scenePos().y()
                 self._start_offset = self.scroll_offset
-                self._dragging     = True
+                self._dragging = True
+                ev.accept()
+                return
+            elif self._mode == NOTE_MODE_EDIT:
+                return super().mousePressEvent(ev)
                 ev.accept()
             else:
-                # まだ武装していない → 通常のクリック扱い
-                super().mousePressEvent(ev)
-            return
+                return super().mousePressEvent(ev)
 
         super().mousePressEvent(ev)
         
@@ -296,11 +328,18 @@ class NoteItem(CanvasItem):
     # --------------------------------------------------------------
     def hoverLeaveEvent(self, ev):
         self._scroll_ready = False
-        self._update_indicator_color()
+        if self._mode == NOTE_MODE_EDIT:
+            self._exit_edit_mode()
+        self._mode = NOTE_MODE_WALK
+        self._update_mode_label()
         return super().hoverLeaveEvent(ev)
 
     def mouseMoveEvent(self, ev: QGraphicsSceneMouseEvent):
-        if getattr(self, "_dragging", False) and getattr(self, "run_mode", False):
+        if (
+            getattr(self, "_dragging", False)
+            and getattr(self, "run_mode", False)
+            and self._mode == NOTE_MODE_SCROLL
+        ):
             # ドラッグ量に応じてスクロール
             dy = ev.scenePos().y() - self._drag_start_y
             self.set_scroll(self._start_offset - int(dy))
@@ -314,21 +353,14 @@ class NoteItem(CanvasItem):
             self._dragging = False
             ev.accept()
             return
-
-        # ---- クリック判定 --------------------------------------
-        if (
-            self._press_scene_pos is not None
-            and ev.button() == Qt.MouseButton.LeftButton
-        ):
-            moved = (ev.scenePos() - self._press_scene_pos).manhattanLength()
-            self._press_scene_pos = None
-
-            if moved < self._CLICK_THRESH:
-                # 「クリック」と認定
-                self._scroll_ready = not self._scroll_ready
-                self._update_indicator_color()
-
         super().mouseReleaseEvent(ev)
+
+    def mouseDoubleClickEvent(self, ev: QGraphicsSceneMouseEvent):
+        if getattr(self, "run_mode", False):
+            self._cycle_mode()
+            ev.accept()
+            return
+        super().mouseDoubleClickEvent(ev)
 
     # --------------------------------------------------------------
     # ダブルクリックで編集ダイアログを開く (編集モードのみ)
@@ -374,9 +406,8 @@ class NoteItem(CanvasItem):
             QGraphicsItem.GraphicsItemChange.ItemScaleHasChanged,
             QGraphicsItem.GraphicsItemChange.ItemSceneHasChanged,
         ):
-            # _indicator が出来ていない早期段階もあるのでガード
-            if hasattr(self, "_indicator"):
-                self._update_indicator_position()
+            if hasattr(self, "_mode_label"):
+                self._update_mode_label_position()
         return super().itemChange(change, value)
 
     # --------------------------------------------------------------
@@ -403,14 +434,15 @@ class NoteItem(CanvasItem):
     """
 
     def wheelEvent(self, ev: QGraphicsSceneWheelEvent):
-        debug_print(f"NoteItem.wheelEvent called: run_mode={getattr(self, 'run_mode', False)}, _scroll_ready={getattr(self, '_scroll_ready', False)}")
-        
-        # --- 編集モードは素通り ---
+        debug_print(
+            f"NoteItem.wheelEvent called: run_mode={getattr(self, 'run_mode', False)}, mode={self._mode}"
+        )
+
         if not getattr(self, "run_mode", False):
             return super().wheelEvent(ev)
 
         # --- _scroll_ready の状態で分岐（ドラッグと同じロジック） ---
-        if self._scroll_ready:
+        if self._mode == NOTE_MODE_SCROLL:
             debug_print("NoteItem: Processing scroll")
             # ノート内容のスクロール
             delta = ev.delta()          # ±120 が 1 ステップ
@@ -423,9 +455,9 @@ class NoteItem(CanvasItem):
             self.set_scroll(new_offset)
             debug_print(f"NoteItem: Scrolled from {old_offset} to {new_offset}")
             ev.accept()
+        elif self._mode == NOTE_MODE_EDIT:
+            return super().wheelEvent(ev)
         else:
-            debug_print("NoteItem: _scroll_ready=False, doing nothing")
-            # _scroll_ready=Falseの時は何もしない（CanvasViewの拡大縮小に任せる）
             return
 # =====================================================================
 #   NoteEditDialog

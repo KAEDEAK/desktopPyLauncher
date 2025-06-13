@@ -142,7 +142,18 @@ class RectItem(CustomDrawingItem):
         # RectItemは常に矩形を表示（実行モード・編集モード問わず）
         self._rect_item.setVisible(True)
 
-
+    def itemChange(self, change, value):
+        result = super().itemChange(change, value)
+        if change == self.GraphicsItemChange.ItemSelectedHasChanged:
+            pen = self._rect_item.pen()
+            if self.isSelected():
+                pen.setColor(QColor("#ff3355"))
+            else:
+                pen.setColor(QColor(self.frame_color))
+            pen.setWidth(self.frame_width)
+            self._rect_item.setPen(pen)
+        return result
+        
 # ==============================================================
 #   ArrowItem（矢印描画クラス）
 # ==============================================================
@@ -176,7 +187,11 @@ class ArrowItem(CustomDrawingItem):
         
         # ドラッグポイントを作成
         self._create_arrow_tip()
-        
+
+        # 初期状態では実行モードなのでドラッグポイントを非表示
+        if self._arrow_tip:
+            self._arrow_tip.setVisible(False)
+
         # 描画を再更新（ドラッグポイント位置含む）
         self._update_drawing()
 
