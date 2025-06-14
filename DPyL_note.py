@@ -773,6 +773,10 @@ class NoteEditDialog(QDialog):
         super().__init__()  # QDialog の初期化
         self.item = item
         self.d = item.d
+        # 現在読み込まれているパスを保持
+        self._orig_path = self.d.get("path", "").strip()
+        self._loaded_path = self._orig_path        
+       
         self.setWindowTitle("Note 設定")
         self._build_ui()    # UI 部品の構築
 
@@ -824,7 +828,7 @@ class NoteEditDialog(QDialog):
         path_layout.addWidget(btn_load)
         path_layout.addWidget(btn_save)
         vbox.addLayout(path_layout)
-        self._update_path_buttons()
+        #self._update_path_buttons()
 
         # --- Splitter: 上部=編集エリア / 下部=プレビュー ---
         splitter = QSplitter(Qt.Orientation.Vertical)
@@ -881,7 +885,10 @@ class NoteEditDialog(QDialog):
         btn_layout.addWidget(btn_ok)
         btn_layout.addWidget(btn_cancel)
         vbox.addLayout(btn_layout)
-
+        self.btn_ok = btn_ok
+        # 初期状態の有効/無効を設定
+        self._update_path_buttons()
+        
     def _kick_preview_update(self):
         self._prev_timer.start(150)
         
@@ -890,9 +897,15 @@ class NoteEditDialog(QDialog):
         return path.strip().strip('"').strip()
 
     def _update_path_buttons(self):
-        has_path = bool(self._clean_path(self.ed_path.text()))
+        path = self._clean_path(self.ed_path.text())
+        has_path = bool(path)        
         self.btn_load.setEnabled(has_path)
-        self.btn_save.setEnabled(has_path)
+        self.btn_ok.setEnabled(path == "" or path == self._loaded_path)
+        enable_ok = (
+            path == "" or path == self._loaded_path or path == self._orig_path
+        )
+        self.btn_ok.setEnabled(enable_ok)
+        self.btn_save.setEnabled(has_path and path == self._loaded_path)
 
     def _load_from_path(self):
         path = self._clean_path(self.ed_path.text())
@@ -902,7 +915,9 @@ class NoteEditDialog(QDialog):
             with open(path, "r", encoding="utf-8") as f:
                 txt = f.read()
             self.txt_edit.setPlainText(txt)
+            self._loaded_path = path
             self._kick_preview_update()
+            self._update_path_buttons()
         except Exception as e:
             warn(f"[NoteEditDialog] load failed: {e}")
 
@@ -913,6 +928,8 @@ class NoteEditDialog(QDialog):
         try:
             with open(path, "w", encoding="utf-8") as f:
                 f.write(self.txt_edit.toPlainText())
+            self._loaded_path = path
+            self._update_path_buttons()
         except Exception as e:
             warn(f"[NoteEditDialog] save failed: {e}")
             
