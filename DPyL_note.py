@@ -85,7 +85,9 @@ class NoteItem(CanvasItem):
         
         # EDITモード遷移中フラグを追加
         self._entering_edit_mode: bool = False
-       
+        # "|" を使った仮キャレットを挿入したかどうか
+        self._temp_caret_added: bool = False
+        
         #
         # ★好みに応じて True にするとドラッグスクロールを完全に無効化し
         #   “ホイールのみスクロール” になります。
@@ -203,6 +205,24 @@ class NoteItem(CanvasItem):
         # EDITモード遷移中フラグを立てる
         self._entering_edit_mode = True
         
+        # 現在の編集状態を確認
+        already_editing = bool(
+            self.txt_item.textInteractionFlags()
+            & Qt.TextInteractionFlag.TextEditorInteraction
+        )
+
+        # 既にEDIT中で仮キャレットが残っている場合は削除
+        insert_placeholder = False
+        if already_editing and self._temp_caret_added:
+            text = self.txt_item.toPlainText()
+            idx = text.find("|")
+            if idx >= 0:
+                cursor_cleanup = self.txt_item.textCursor()
+                cursor_cleanup.setPosition(idx)
+                cursor_cleanup.deleteChar()
+            insert_placeholder = True
+            self._temp_caret_added = False      
+        
         # ★重要：まずGraphicsItemフラグを確認・設定
         self.txt_item.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsFocusable, True)
         
@@ -211,8 +231,9 @@ class NoteItem(CanvasItem):
             Qt.TextInteractionFlag.TextEditorInteraction
         )
         
-        # テキストを設定
-        self.txt_item.setPlainText(self.text)
+        if not already_editing:
+            # テキストを設定（初回のみ）
+            self.txt_item.setPlainText(self.text)
         
         # フォーカスを設定
         self.txt_item.setFocus(Qt.FocusReason.MouseFocusReason)
@@ -291,6 +312,14 @@ class NoteItem(CanvasItem):
         cursor.movePosition(cursor.MoveOperation.Right, cursor.MoveMode.KeepAnchor)
         self.txt_item.setTextCursor(cursor)
         
+        if not already_editing or insert_placeholder:
+            # ★キャレット位置に | を挿入して選択
+            cursor.insertText("|")
+            cursor.movePosition(cursor.MoveOperation.Left, cursor.MoveMode.MoveAnchor)
+            cursor.movePosition(cursor.MoveOperation.Right, cursor.MoveMode.KeepAnchor)
+            self.txt_item.setTextCursor(cursor)
+            self._temp_caret_added = True    
+
         # 選択枠を更新
         self._update_selection_frame()
         
@@ -313,6 +342,7 @@ class NoteItem(CanvasItem):
         elif "|" in text:
             # 選択されていない | がある場合も削除（念のため）
             text = text.replace("|", "")
+        self._temp_caret_added = False
         
         # テキストを保存
         self.text = text
@@ -340,6 +370,8 @@ class NoteItem(CanvasItem):
         """キー入力イベント処理"""
         if self._mode == NOTE_MODE_EDIT:
             # EDITモード時はテキストアイテムにキー入力を転送
+            if self._temp_caret_added:
+                self._temp_caret_added = False            
             self.txt_item.keyPressEvent(event)
         else:
             super().keyPressEvent(event)
@@ -519,6 +551,7 @@ class NoteItem(CanvasItem):
                 if text_rect.contains(local_pos):
                     # テキストエリア内のクリック
                     # 既にEDITモードなので、カーソル位置だけ更新
+                    self._temp_caret_added=True
                     self._enter_edit_mode(ev.scenePos())
                     ev.accept()
                     return
