@@ -2412,6 +2412,12 @@ class MainWindow(QMainWindow):
             warn(f"[LOAD] 'items' が配列ではありません: {type(items).__name__}")
             self._loading_in_progress = False
             return
+            
+        # --- 相対パス補完用ベースディレクトリを決定 ---
+        base_dir = Path(
+            self.data.get("fileinfo", {}).get("path", self.json_path.parent)
+        )
+        base_dir = base_dir.expanduser().resolve()
 
         if len(items) == 0:
             self._show_loading(False)
@@ -2427,6 +2433,16 @@ class MainWindow(QMainWindow):
            
         # アイテム復元
         for d in self.data.get("items", []):
+            
+            # 相対パス補完
+            for k in ("path", "workdir"):
+                v = d.get(k)
+                if isinstance(v, str) and v:
+                    if v.startswith("http://") or v.startswith("https://"):
+                        continue
+                    if not os.path.isabs(v):
+                        d[k] = str((base_dir / v).resolve())
+            
             cls = self._get_item_class_by_type(d.get("type", ""))
             if not cls:
                 warn(f"[LOAD] Unknown item type: {d.get('type')}")
