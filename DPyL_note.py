@@ -45,9 +45,9 @@ from PyQt6.QtWidgets import (
     
 )
 from PyQt6.QtGui import QColor, QBrush, QPainterPath, QPen, QFont, QTextDocument, QKeyEvent, QFontMetrics
-from PyQt6.QtCore import Qt, QPointF, QRectF, QTimer, QEvent
+from PyQt6.QtCore import Qt, QPointF, QRectF, QTimer, QEvent, QFileSystemWatcher
 from PyQt6 import sip
-
+import os
 # ------- internal modules -----------------------------------------
 from DPyL_classes import CanvasItem, CanvasResizeGrip
 from DPyL_utils import warn, b64e, b64d  # 既存ユーティリティ
@@ -72,89 +72,104 @@ NOTE_MODE_EDIT  = 2
 # =====================================================================
 class NoteItem(CanvasItem):
     TYPE_NAME = "note"
+    @property
+    def path(self) -> str:
+        return getattr(self, "_path", "")
+
+    @path.setter
+    def path(self, value: str):
+        self._path = value
+        self.d["path"] = value
 
     def __init__(self, d: dict[str, Any] | None = None, cb_resize=None):
         super().__init__(d, cb_resize)
-        # インタラクションモード管理
-        self._mode: int = NOTE_MODE_WALK    # 0=WALK, 1=SCROLL, 2=EDIT
-        self._scroll_ready: bool  = False   # クリック済みフラグ
-        self._dragging: bool      = False   # 実際にドラッグ中か
-        # 「クリック」とみなす距離判定用
-        self._press_scene_pos = None        # 押下座標
-        self._CLICK_THRESH    = 4           # px 未満ならクリック        
-        
-        # EDITモード遷移中フラグを追加
-        self._entering_edit_mode: bool = False
-        # "|" を使った仮キャレットを挿入したかどうか
-        self._temp_caret_added: bool = False
-        
-        #
-        # ★好みに応じて True にするとドラッグスクロールを完全に無効化し
-        #   “ホイールのみスクロール” になります。
-        self.DISABLE_DRAG_SCROLL: bool = False
-
-         # hoverLeaveEvent でモードをリセットするため
-        self.setAcceptHoverEvents(True)
-
-        # JSON → インスタンス変数
-        self.format: str = self.d.get("format", "text")
-        self.text: str = self.d.get("text", "New Note")
-        self.fill_bg: bool = self.d.get("fill_background", True)
-        
-        # ファイル読み込み
-        self.path: str = self.d.get("path", "")
-        if self.path:
-            self.load_from_file()
-
-        # スクロール位置
-        self.scroll_offset: int = 0
-
-        # 初期サイズ
-        w = int(self.d.get("width", 240))
-        h = int(self.d.get("height", 120))
-
-        # --- クリップ用矩形 (ItemClipsChildrenToShape) ---
-        self.clip_item = QGraphicsRectItem(0, 0, w, h, parent=self)
-        self.clip_item.setFlag(
-            QGraphicsItem.GraphicsItemFlag.ItemClipsChildrenToShape, True
-        )
-        self.clip_item.setPen(QPen(Qt.PenStyle.NoPen))
-
-        # --- テキスト本体 ---
-        self.txt_item = QGraphicsTextItem(parent=self.clip_item)
-        self.txt_item.setPos(0, 0)
-        
-        # ★重要：GraphicsItemフラグを先に設定
-        self.txt_item.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsFocusable, True)
-        self.txt_item.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsSelectable, False)  # 選択は親で制御
-        
-        # ★その後でTextInteractionFlagsを設定
-        self.txt_item.setTextInteractionFlags(Qt.TextInteractionFlag.NoTextInteraction)
-        
-        # ★NoteItem自体もフォーカス可能にする（これも順序重要）
-        self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsFocusable, True)
-        
-        # 初期状態ではテキストアイテムのマウスイベントを無効化
-        self.txt_item.setAcceptedMouseButtons(Qt.MouseButton.NoButton)
-        
-        # 初期状態では選択枠を非表示
-        self._update_selection_frame()
-        
-        # --- 背景矩形 (枠線／塗りつぶし) ---
-        self._rect_item.setRect(0, 0, w, h)
-
-        # 初回描画
-        self._apply_text()
-
-        # モード切替反映
-        self.set_editable(False)
-        
-        # リサイズ遅延タイマー
-        self._resize_timer = QTimer()
-        self._resize_timer.setSingleShot(True)
-        self._resize_timer.timeout.connect(self._apply_text)
-        
         try:
+            # インタラクションモード管理
+            self._mode: int = NOTE_MODE_WALK    # 0=WALK, 1=SCROLL, 2=EDIT
+            self._scroll_ready: bool  = False   # クリック済みフラグ
+            self._dragging: bool      = False   # 実際にドラッグ中か
+            # 「クリック」とみなす距離判定用
+            self._press_scene_pos = None        # 押下座標
+            self._CLICK_THRESH    = 4           # px 未満ならクリック        
+            
+            # EDITモード遷移中フラグを追加
+            self._entering_edit_mode: bool = False
+            # "|" を使った仮キャレットを挿入したかどうか
+            self._temp_caret_added: bool = False
+            
+            #
+            # ★好みに応じて True にするとドラッグスクロールを完全に無効化し
+            #   “ホイールのみスクロール” になります。
+            self.DISABLE_DRAG_SCROLL: bool = False
+
+             # hoverLeaveEvent でモードをリセットするため
+            self.setAcceptHoverEvents(True)
+
+            # JSON → インスタンス変数
+            self.format: str = self.d.get("format", "text")
+            self.text: str = self.d.get("text", "New Note")
+            self.fill_bg: bool = self.d.get("fill_background", True)
+            
+            # ファイル読み込み
+            self._path: str = self.d.get("path", "")
+            self.watch_file: bool = self.d.get("watch_file", False)
+            self._file_watcher: QFileSystemWatcher | None = None
+            # NoteItem is not a QObject, so the timer can't be parented to self
+            self._file_watch_retry_timer = QTimer(None)
+            self._file_watch_retry_timer.setSingleShot(True)
+            self._file_watch_retry_timer.timeout.connect(self._retry_file_watch)
+            
+            if self.path:
+                self.load_from_file()
+            self._setup_file_watcher()
+            # スクロール位置
+            self.scroll_offset: int = 0
+
+            # 初期サイズ
+            w = int(self.d.get("width", 240))
+            h = int(self.d.get("height", 120))
+
+            # --- クリップ用矩形 (ItemClipsChildrenToShape) ---
+            self.clip_item = QGraphicsRectItem(0, 0, w, h, parent=self)
+            self.clip_item.setFlag(
+                QGraphicsItem.GraphicsItemFlag.ItemClipsChildrenToShape, True
+            )
+            self.clip_item.setPen(QPen(Qt.PenStyle.NoPen))
+
+            # --- テキスト本体 ---
+            self.txt_item = QGraphicsTextItem(parent=self.clip_item)
+            self.txt_item.setPos(0, 0)
+            
+            # ★重要：GraphicsItemフラグを先に設定
+            self.txt_item.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsFocusable, True)
+            self.txt_item.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsSelectable, False)  # 選択は親で制御
+            
+            # ★その後でTextInteractionFlagsを設定
+            self.txt_item.setTextInteractionFlags(Qt.TextInteractionFlag.NoTextInteraction)
+            
+            # ★NoteItem自体もフォーカス可能にする（これも順序重要）
+            self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsFocusable, True)
+            
+            # 初期状態ではテキストアイテムのマウスイベントを無効化
+            self.txt_item.setAcceptedMouseButtons(Qt.MouseButton.NoButton)
+            
+            # 初期状態では選択枠を非表示
+            self._update_selection_frame()
+            
+            # --- 背景矩形 (枠線／塗りつぶし) ---
+            self._rect_item.setRect(0, 0, w, h)
+
+            # 初回描画
+            self._apply_text()
+
+            # モード切替反映
+            self.set_editable(False)
+            
+            # リサイズ遅延タイマー
+            self._resize_timer = QTimer()
+            self._resize_timer.setSingleShot(True)
+            self._resize_timer.timeout.connect(self._apply_text)
+
             # -- モード表示ラベル -----------------
             self._mode_label = QGraphicsTextItem("", self)
             font = self._mode_label.font()
@@ -511,6 +526,117 @@ class NoteItem(CanvasItem):
             warn(f"[NoteItem] save_to_file failed: {e}")
 
     # --------------------------------------------------------------
+    #   ファイル監視
+    # --------------------------------------------------------------
+    def _setup_file_watcher(self):
+        """ファイル更新監視を初期化"""
+        if getattr(self, "_file_watcher", None):
+            try:
+                self._file_watcher.fileChanged.disconnect(self._on_file_changed)
+            except Exception:
+                pass
+            try:
+                self._file_watcher.directoryChanged.disconnect(self._on_directory_changed)
+            except Exception:
+                pass
+            self._file_watcher.removePaths(self._file_watcher.files())
+            self._file_watcher.deleteLater()
+            self._file_watcher = None
+
+        self._file_watch_retry_timer.stop()
+        self._watch_dir = None
+
+        if self.watch_file and self.path:
+            dir_path = os.path.dirname(self.path) or "."
+            paths: list[str] = []
+            if os.path.isdir(dir_path):
+                paths.append(dir_path)
+                self._watch_dir = dir_path
+            watch_file = False
+            if os.path.exists(self.path):
+                paths.append(self.path)
+                watch_file = True
+            if paths:
+                try:
+                    self._file_watcher = QFileSystemWatcher()
+                    self._file_watcher.addPaths(paths)
+                    self._file_watcher.fileChanged.connect(self._on_file_changed)
+                    self._file_watcher.directoryChanged.connect(self._on_directory_changed)
+                except Exception as e:
+                    warn(f"[NoteItem] watcher setup failed: {e}")
+                    self._file_watcher = None
+            if not watch_file:
+                self._schedule_watch_retry()
+
+    def _on_file_changed(self, path: str):
+        if path != self.path:
+            return
+        try:
+            self.load_from_file()
+            self._apply_text()
+            if self._file_watcher and self.path not in self._file_watcher.files():
+                self._file_watcher.addPath(self.path)
+        except Exception as e:
+            warn(f"[NoteItem] reload failed: {e}")
+            self._schedule_watch_retry()
+
+    def _on_directory_changed(self, dir_path: str):
+        if not self.watch_file:
+            return
+        if self._watch_dir and dir_path != self._watch_dir:
+            return
+        if os.path.exists(self.path):
+            self._retry_file_watch()
+
+    def set_file_watching(self, enabled: bool):
+        self.watch_file = enabled
+        self.d["watch_file"] = enabled
+        self._setup_file_watcher()
+
+    def _schedule_watch_retry(self):
+        """ファイルが存在しない場合に再試行タイマーを開始"""
+        if self.watch_file:
+            self._file_watch_retry_timer.start(1000)
+
+    def _retry_file_watch(self):
+        """タイマーから呼ばれ、ファイルが復活したら再読込"""
+        if not self.watch_file or not self.path:
+            return
+        if os.path.exists(self.path):
+            try:
+                #self.load_from_file()
+                #self._apply_text()
+                
+                # Delay slightly so apps that recreate the file can finish
+                # writing before we reload. Directly reading right away could
+                # result in an empty file.                
+                QTimer.singleShot(500, lambda: self.load_from_file())
+                QTimer.singleShot(750, lambda: self._apply_text())                
+            except Exception as e:
+                warn(f"[NoteItem] retry load failed: {e}")
+            self._setup_file_watcher()
+        else:
+            self._schedule_watch_retry()
+
+    def delete_self(self):
+        """タイマーやウォッチャを停止してから削除"""
+        self._file_watch_retry_timer.stop()
+        self._file_watch_retry_timer.deleteLater()
+        if self._file_watcher:
+            try:
+                self._file_watcher.fileChanged.disconnect(self._on_file_changed)
+            except Exception:
+                pass
+            try:
+                self._file_watcher.directoryChanged.disconnect(self._on_directory_changed)
+            except Exception:
+                pass
+            self._file_watcher.removePaths(self._file_watcher.files())
+            self._file_watcher.deleteLater()
+            self._file_watcher = None
+        super().delete_self()
+
+    # --------------------------------------------------------------
     #   実行モード : マウスハンドリング
     # --------------------------------------------------------------
     def _update_selection_frame(self):
@@ -830,6 +956,11 @@ class NoteEditDialog(QDialog):
         vbox.addLayout(path_layout)
         #self._update_path_buttons()
 
+        # ファイル監視チェックボックス
+        self.chk_watch = QCheckBox("ファイル更新を監視")
+        self.chk_watch.setChecked(self.d.get("watch_file", False))
+        vbox.addWidget(self.chk_watch)
+
         # --- Splitter: 上部=編集エリア / 下部=プレビュー ---
         splitter = QSplitter(Qt.Orientation.Vertical)
 
@@ -900,13 +1031,18 @@ class NoteEditDialog(QDialog):
         path = self._clean_path(self.ed_path.text())
         has_path = bool(path)        
         self.btn_load.setEnabled(has_path)
-        self.btn_ok.setEnabled(path == "" or path == self._loaded_path)
+        #self.btn_ok.setEnabled(path == "" or path == self._loaded_path)
         enable_ok = (
             path == "" or path == self._loaded_path or path == self._orig_path
         )
         self.btn_ok.setEnabled(enable_ok)
         self.btn_save.setEnabled(has_path and path == self._loaded_path)
 
+        enable_watch = has_path and path == self._loaded_path
+        self.chk_watch.setEnabled(enable_watch)
+        if not enable_watch:
+            self.chk_watch.setChecked(False)
+            
     def _load_from_path(self):
         path = self._clean_path(self.ed_path.text())
         if not path:
@@ -974,12 +1110,15 @@ class NoteEditDialog(QDialog):
         self.d["fontsize"] = self.spin_font.value()
         self.d["color"] = self.ed_color.text().strip() or "#ffffff"
         self.d["path"] = self.ed_path.text().strip()
+        self.d["watch_file"] = self.chk_watch.isChecked()
+
 
         # NoteItem 側に即時反映
         self.item.format = self.d["format"]
         self.item.text = self.d["text"]
         self.item.fill_bg = self.d["fill_background"]
         self.item.path = self.d["path"]
+        self.item.set_file_watching(self.d["watch_file"])
         if self.item.path:
             self.item.save_to_file()
 

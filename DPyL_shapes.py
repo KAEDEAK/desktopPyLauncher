@@ -204,17 +204,19 @@ class ArrowItem(CustomDrawingItem):
         self._update_arrow_tip_position()
 
     def _update_arrow_tip_position(self):
-        """矢印先端のドラッグポイント位置を更新"""
+        """矢印先端のドラッグポイント位置を更新（楕円上に配置）"""
         if not hasattr(self, '_arrow_tip') or not self._arrow_tip:
             return
             
         w = int(self.d.get("width", 32))
         h = int(self.d.get("height", 32))
         
-        # 矢印の先端位置を計算（中心から角度に基づいて）
+        # 矢印の先端位置を計算（楕円との交点）
         center_x = w / 2
         center_y = h / 2
-        radius = min(w, h) / 2
+        
+        # 楕円との交点までの距離を計算（半径）
+        radius = self._calculate_arrow_length(w, h, self.angle) / 2
         
         angle_rad = math.radians(self.angle)
         tip_x = center_x + radius * math.cos(angle_rad)
@@ -273,7 +275,9 @@ class ArrowItem(CustomDrawingItem):
         # 矢印の基本形状（横向き）
         center_x = w / 2
         center_y = h / 2
-        arrow_length = min(w, h) * 0.8
+        
+        # 矢印の長さを楕円との交点で計算
+        arrow_length = self._calculate_arrow_length(w, h, self.angle) * 0.9  # 90%に制限してマージンを確保
         arrow_head_size = arrow_length * 0.3
         
         # 矢印の線
@@ -320,6 +324,44 @@ class ArrowItem(CustomDrawingItem):
         pen.setWidth(self.frame_width)
         path_item.setPen(pen)
 
+    def _calculate_arrow_length(self, w: int, h: int, angle: float) -> float:
+        """
+        矢印の進行方向と四角形に内接する楕円との交点を求めて矢印の長さを計算
+        
+        Args:
+            w: 四角形の幅
+            h: 四角形の高さ  
+            angle: 矢印の角度（度数法）
+            
+        Returns:
+            楕円との交点までの距離（中心からの半径）
+        """
+        if w <= 0 or h <= 0:
+            return min(w, h) * 0.8  # フォールバック
+            
+        # 楕円の半軸（四角形に内接する楕円）
+        a = w / 2  # 横軸の半径
+        b = h / 2  # 縦軸の半径
+        
+        # 角度をラジアンに変換
+        angle_rad = math.radians(angle)
+        cos_theta = math.cos(angle_rad)
+        sin_theta = math.sin(angle_rad)
+        
+        # 楕円の方程式: (x/a)² + (y/b)² = 1
+        # 角度θの直線上の点(r*cos(θ), r*sin(θ))が楕円上にある時のr:
+        # r = 1 / sqrt((cos(θ)/a)² + (sin(θ)/b)²)
+        try:
+            denominator = (cos_theta / a) ** 2 + (sin_theta / b) ** 2
+            if denominator > 0:
+                r = 1.0 / math.sqrt(denominator)
+                # 直径にして返す（中心から両端まで）
+                return r * 2
+            else:
+                return min(w, h) * 0.8  # フォールバック
+        except (ZeroDivisionError, ValueError):
+            return min(w, h) * 0.8  # フォールバック
+
     def _draw_polygon_arrow(self):
         """ポリゴン矢印を描画（⇒）"""
         w = int(self.d.get("width", 32))
@@ -327,7 +369,9 @@ class ArrowItem(CustomDrawingItem):
         
         center_x = w / 2
         center_y = h / 2
-        arrow_length = min(w, h) * 0.8
+        
+        # 矢印の長さを楕円との交点で計算
+        arrow_length = self._calculate_arrow_length(w, h, self.angle) * 0.85  # 85%に制限してマージンを確保
         arrow_width = arrow_length * 0.4
         arrow_head_length = arrow_length * 0.3
         

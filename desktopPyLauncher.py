@@ -316,6 +316,146 @@ class WaterEffectItem(QGraphicsItem):
                     painter.drawEllipse(center, wave_radius * 0.8, wave_radius * 0.8)
 
 # ==============================================================
+# Spark Effect Classes
+# ==============================================================
+
+class SparkParticle:
+    """個々の火花を表現するクラス"""
+    def __init__(self, x, y, start_time):
+        self.start_x = x
+        self.start_y = y
+        self.start_time = start_time
+        
+        # 初期速度（ランダムな方向に飛び散る）
+        import random
+        angle = random.uniform(0, 2 * math.pi)
+        speed = random.uniform(80, 200)  # ピクセル/秒
+        self.velocity_x = math.cos(angle) * speed
+        self.velocity_y = math.sin(angle) * speed - random.uniform(50, 100)  # 上向きの初期速度
+        
+        # 物理パラメータ
+        self.gravity = 300  # 重力加速度 (pixels/second²)
+        self.life_time = random.uniform(1.5, 3.0)  # 生存時間（秒）
+        
+        # 視覚効果パラメータ
+        self.size = random.uniform(2, 5)
+        self.color_hue = random.uniform(0, 60)  # 赤〜黄色の範囲
+        
+    def get_position(self, current_time):
+        """現在時刻での火花の位置を取得"""
+        elapsed = current_time - self.start_time
+        if elapsed < 0:
+            return self.start_x, self.start_y
+            
+        # 物理計算（重力を考慮した放物運動）
+        x = self.start_x + self.velocity_x * elapsed
+        y = self.start_y + self.velocity_y * elapsed + 0.5 * self.gravity * elapsed * elapsed
+        
+        return x, y
+    
+    def get_alpha(self, current_time):
+        """現在時刻での火花の透明度を取得（減衰を考慮）"""
+        elapsed = current_time - self.start_time
+        if elapsed < 0 or elapsed > self.life_time:
+            return 0
+        return max(0, 1 - elapsed / self.life_time)
+    
+    def is_alive(self, current_time):
+        """火花がまだ有効かどうか"""
+        elapsed = current_time - self.start_time
+        return elapsed < self.life_time
+
+
+class SparkEffectItem(QGraphicsItem):
+    """火花エフェクトを描画するQGraphicsItem"""
+    def __init__(self, scene_rect):
+        super().__init__()
+        self.scene_rect = scene_rect
+        self.sparks = []
+        self.setZValue(9999)  # 最前面に表示（Waterより少し後ろ）
+        
+        # アニメーション用タイマー
+        self.timer = QTimer()
+        self.timer.timeout.connect(self.update_animation)
+        self.timer.start(16)  # 約60FPS
+        
+        self.enabled = False
+        
+    def boundingRect(self):
+        return self.scene_rect
+    
+    def add_spark_burst(self, x, y, count=30):
+        """指定座標に火花バーストを追加"""
+        if not self.enabled:
+            return
+        current_time = time.time()
+        
+        # 複数の火花を一度に生成
+        for _ in range(count):
+            self.sparks.append(SparkParticle(x, y, current_time))
+        
+        self.update()
+    
+    def set_enabled(self, enabled):
+        """エフェクトの有効/無効を切り替え"""
+        self.enabled = enabled
+        if not enabled:
+            self.sparks.clear()
+        self.setVisible(enabled)
+        self.update()
+    
+    def update_animation(self):
+        """アニメーションフレームの更新"""
+        if not self.enabled:
+            return
+            
+        current_time = time.time()
+        self.sparks = [s for s in self.sparks if s.is_alive(current_time)]
+        
+        if self.sparks:
+            self.update()
+    
+    def paint(self, painter, option, widget):
+        if not self.enabled or not self.sparks:
+            return
+            
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        current_time = time.time()
+        
+        for spark in self.sparks:
+            x, y = spark.get_position(current_time)
+            alpha = spark.get_alpha(current_time)
+            
+            if alpha <= 0:
+                continue
+            
+            # 火花の色（赤〜黄色〜オレンジ）
+            hue = spark.color_hue
+            saturation = 255
+            value = int(255 * alpha)
+            color = QColor()
+            color.setHsv(int(hue), saturation, value, int(255 * alpha))
+            
+            # 火花を描画（小さな円）
+            painter.setBrush(QBrush(color))
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.drawEllipse(
+                QPointF(x, y), 
+                spark.size * alpha, 
+                spark.size * alpha
+            )
+            
+            # グロー効果（外側の淡い光）
+            glow_color = QColor(color)
+            glow_color.setAlpha(int(100 * alpha))
+            painter.setBrush(QBrush(glow_color))
+            painter.drawEllipse(
+                QPointF(x, y), 
+                spark.size * alpha * 2, 
+                spark.size * alpha * 2
+            )
+
+# ==============================================================
 # ミニマップ
 # ==============================================================
 class MiniMapWidget(QWidget):
@@ -474,6 +614,9 @@ class CanvasView(QGraphicsView):
         self.water_effect = None
         self.water_enabled = False
         
+        # Spark Effect の初期化
+        self.spark_effect = None
+        self.spark_enabled = False
         
         self.setAcceptDrops(True)
         self.viewport().setAcceptDrops(True)
@@ -498,6 +641,21 @@ class CanvasView(QGraphicsView):
             if self.water_effect:
                 self.water_effect.set_enabled(False)
              
+    def toggle_spark_effect(self, enabled):
+        '''Spark エフェクトのオン/オフ切り替え'''
+        self.spark_enabled = enabled
+        
+        if enabled:
+            if not self.spark_effect:
+                # エフェクトアイテムを作成してシーンに追加
+                scene_rect = self.scene().sceneRect()
+                self.spark_effect = SparkEffectItem(scene_rect)
+                self.scene().addItem(self.spark_effect)
+            self.spark_effect.set_enabled(True)
+        else:
+            if self.spark_effect:
+                self.spark_effect.set_enabled(False)
+    
     def clear_water_effect(self):
         """
         WaterEffectItem をタイマー停止＆シーンから削除して破棄する
@@ -514,6 +672,23 @@ class CanvasView(QGraphicsView):
                 self.scene().removeItem(self.water_effect)
             # 参照をクリア
             self.water_effect = None
+            
+    def clear_spark_effect(self):
+        """
+        SparkEffectItem をタイマー停止＆シーンから削除して破棄する
+        """
+        if self.spark_effect:
+            # タイマーを止める
+            try:
+                self.spark_effect.timer.stop()
+            except Exception:
+                warn("Exception at clear_spark_effect")
+                pass
+            # シーンから外す
+            if self.spark_effect.scene():
+                self.scene().removeItem(self.spark_effect)
+            # 参照をクリア
+            self.spark_effect = None
     def dragEnterEvent(self, e): 
         # ファイルやURLドロップの受付
         e.acceptProposedAction() if e.mimeData().hasUrls() else super().dragEnterEvent(e)
@@ -543,6 +718,10 @@ class CanvasView(QGraphicsView):
         if self.water_enabled and ev.button() == Qt.MouseButton.LeftButton and self.water_effect:
             scene_pos = self.mapToScene(ev.position().toPoint())
             self.water_effect.add_ripple(scene_pos.x(), scene_pos.y())
+            
+        if self.spark_enabled and ev.button() == Qt.MouseButton.LeftButton and self.spark_effect:
+            scene_pos = self.mapToScene(ev.position().toPoint())
+            self.spark_effect.add_spark_burst(scene_pos.x(), scene_pos.y())
             
         # 右クリック時、空白エリアならペーストメニュー表示
         if ev.button() == Qt.MouseButton.RightButton:
@@ -1074,7 +1253,22 @@ class MainWindow(QMainWindow):
         tb.addWidget(btn_obj)
 
         act("背景", self._background_dialog)
-        self.a_water = act("🌊Water", self._toggle_water_effect, chk=True)        
+        
+        # === Effects メニューを追加 ===
+        menu_effects = QMenu(self)
+        self.a_water = menu_effects.addAction("🌊Water")
+        self.a_water.setCheckable(True)
+        self.a_water.triggered.connect(self._toggle_water_effect)
+        
+        self.a_spark = menu_effects.addAction("✨Spark")
+        self.a_spark.setCheckable(True)
+        self.a_spark.triggered.connect(self._toggle_spark_effect)
+        
+        btn_effects = QToolButton(self)
+        btn_effects.setText("Effects")
+        btn_effects.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        btn_effects.setMenu(menu_effects)
+        tb.addWidget(btn_effects)
         
         self.add_toolbar_spacer(tb, width=24)
 
@@ -1097,6 +1291,11 @@ class MainWindow(QMainWindow):
     def _toggle_water_effect(self, checked):
         '''Water エフェクトのオン/オフ切り替え'''
         self.view.toggle_water_effect(checked)
+        
+    def _toggle_spark_effect(self, checked):
+        '''Spark エフェクトのオン/オフ切り替え'''
+        self.view.toggle_spark_effect(checked)
+        
     r"""
     def _on_edit_mode_toggled(self, checked: bool):
         print(f"[DEBUG] 編集モード toggled: {checked}")
