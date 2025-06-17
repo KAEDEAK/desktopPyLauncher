@@ -2201,8 +2201,8 @@ class MainWindow(QMainWindow):
         """
         added_any = False
         added_items = []
+        sp = self.view.mapToScene(e.position().toPoint())
         for url in e.mimeData().urls():
-            sp = self.view.mapToScene(e.position().toPoint())
 
             # ① まずは “http/https” を最優先で処理  -----------------
             weburl = url.toString().strip()
@@ -2258,10 +2258,54 @@ class MainWindow(QMainWindow):
         # 別の仕組みにより、編集ウィンドウで編集後 OK または CANCEL後、全体の実行/編集モードに同期します
         for item in added_items:
             item.set_run_mode(False)
-        
-        # もしくは、ドロップ完了後に全体を編集モードへ。　好きなほうをどうぞ。
-        #if added_any:
-        #    self._set_mode(edit=True)
+
+
+
+        self._arrange_new_items(added_items, sp)
+
+    def _arrange_new_items(self, items: list[QGraphicsItem], base_pos: QPointF):
+        """新規追加されたアイテムをグリッド状に並べる"""
+        if not items:
+            return
+
+        # 最大アイテムサイズを取得しスペーシングを計算
+        max_w = max(it.boundingRect().width() for it in items)
+        max_h = max(it.boundingRect().height() for it in items)
+        step_x = max_w + ICON_SIZE
+        step_y = max_h + ICON_SIZE
+
+        # ビューの可視領域サイズをシーン座標で求める
+        view_rect = self.view.viewport().rect()
+        tl = self.view.mapToScene(view_rect.topLeft())
+        br = self.view.mapToScene(view_rect.bottomRight())
+        view_w = br.x() - tl.x()
+        view_h = br.y() - tl.y()
+
+        max_cols = max(1, int(view_w // step_x))
+        max_rows = max(1, int(view_h // step_y))
+
+        n = len(items)
+        cols = max(1, min(max_cols, round(math.sqrt(n))))
+        rows = math.ceil(n / cols)
+        if rows > max_rows:
+            rows = max_rows
+            cols = max(1, math.ceil(n / rows))
+
+        while cols * rows < n:
+            if cols < max_cols:
+                cols += 1
+            else:
+                rows += 1
+
+        for idx, it in enumerate(items):
+            r = idx // cols
+            c = idx % cols
+            x = base_pos.x() + c * step_x
+            y = base_pos.y() + r * step_y
+            it.setPos(x, y)
+            if hasattr(it, "d"):
+                it.d["x"] = int(x)
+                it.d["y"] = int(y)
 
 
     # --- スナップ ---
