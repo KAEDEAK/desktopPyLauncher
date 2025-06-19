@@ -450,78 +450,10 @@ class SparkEffectItem(QGraphicsItem):
             glow_color.setAlpha(int(100 * alpha))
             painter.setBrush(QBrush(glow_color))
             painter.drawEllipse(
-                QPointF(x, y),
-                spark.size * alpha * 2,
+                QPointF(x, y), 
+                spark.size * alpha * 2, 
                 spark.size * alpha * 2
             )
-
-
-class WarpStarEffectItem(QGraphicsItem):
-    """シンプルなワープスターエフェクト"""
-
-    def __init__(self, effect_rect, duration=800, on_finished=None):
-        super().__init__()
-        self.effect_rect = effect_rect
-        self.duration = duration / 1000.0
-        self.on_finished = on_finished
-        self.start_time = time.time()
-        self.last_time = self.start_time
-        self.stars = []
-        self.setZValue(10000)
-
-        import random
-        cx = self.effect_rect.center().x()
-        cy = self.effect_rect.center().y()
-
-        # Create approximately 100 stars randomly placed on the screen. Each star
-        # stores its flight angle, initial distance from the centre, current
-        # distance and speed.
-        for _ in range(100):
-            x = random.uniform(self.effect_rect.left(), self.effect_rect.right())
-            y = random.uniform(self.effect_rect.top(), self.effect_rect.bottom())
-            angle = math.atan2(y - cy, x - cx)
-            start_dist = math.hypot(x - cx, y - cy)
-            speed = random.uniform(600, 1200)
-            # [angle, start_distance, current_distance, speed]
-            self.stars.append([angle, start_dist, start_dist, speed])
-
-        self.timer = QTimer()
-        self.timer.timeout.connect(self.update_animation)
-        self.timer.start(16)
-
-    def boundingRect(self):
-        return self.effect_rect
-
-    def update_animation(self):
-        current = time.time()
-        dt = current - self.last_time
-        self.last_time = current
-
-        for star in self.stars:
-            # star: [angle, start_distance, current_distance, speed]
-            star[2] += star[3] * dt
-
-        if current - self.start_time > self.duration:
-            self.timer.stop()
-            if self.scene():
-                self.scene().removeItem(self)
-            if callable(self.on_finished):
-                QTimer.singleShot(0, self.on_finished)
-            return
-
-        self.update()
-
-    def paint(self, painter, option, widget=None):
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        painter.setPen(QPen(QColor("white"), 2))
-        cx = self.effect_rect.center().x()
-        cy = self.effect_rect.center().y()
-        for angle, start, current, _ in self.stars:
-            x1 = cx + math.cos(angle) * start
-            y1 = cy + math.sin(angle) * start
-            x2 = cx + math.cos(angle) * current
-            y2 = cy + math.sin(angle) * current
-            painter.drawLine(x1, y1, x2, y2)
 
 # ==============================================================
 # ミニマップ
@@ -710,9 +642,6 @@ class CanvasView(QGraphicsView):
         # Spark Effect の初期化
         self.spark_effect = None
         self.spark_enabled = False
-
-        # Warp Effect の初期化
-        self.warp_effect = None
         
         self.setAcceptDrops(True)
         self.viewport().setAcceptDrops(True)
@@ -792,23 +721,6 @@ class CanvasView(QGraphicsView):
                 self.scene().removeItem(self.spark_effect)
             # 参照をクリア
             self.spark_effect = None
-
-    def play_warp_effect(self, on_finished=None):
-        """Warp エフェクトを再生して完了後にコールバック"""
-        if self.warp_effect:
-            try:
-                self.warp_effect.timer.stop()
-            except Exception:
-                pass
-            if self.warp_effect.scene():
-                self.scene().removeItem(self.warp_effect)
-            self.warp_effect = None
-
-        scene_rect = self.scene().sceneRect()
-        view_rect = self.mapToScene(self.viewport().rect()).boundingRect()
-        effect_rect = scene_rect.united(view_rect)
-        self.warp_effect = WarpStarEffectItem(effect_rect, on_finished=on_finished)
-        self.scene().addItem(self.warp_effect)
     def dragEnterEvent(self, e): 
         # ファイルやURLドロップの受付
         e.acceptProposedAction() if e.mimeData().hasUrls() else super().dragEnterEvent(e)
@@ -2790,17 +2702,14 @@ class MainWindow(QMainWindow):
 
         if len(items) == 0:
             self._show_loading(False)
-
-            def _finish_loading():
-                if self.scene.sceneRect().isEmpty():
-                    warn("_do_load_actual reset setSceneRect")
-                    self.scene.setSceneRect(QRectF(0, 0, 1, 1))
-                self._loading_in_progress = False
-                if callable(getattr(self, "_on_load_finished", None)):
-                    self._on_load_finished()
-                    self._on_load_finished = None
-
-            self.view.play_warp_effect(_finish_loading)
+            # 仮のシーン矩形（Qtの描画クラッシュ回避）
+            if self.scene.sceneRect().isEmpty():
+                warn("_do_load_actual reset setSceneRect")
+                self.scene.setSceneRect(QRectF(0, 0, 1, 1))
+            self._loading_in_progress = False
+            if callable(getattr(self, "_on_load_finished", None)):
+                self._on_load_finished()
+                self._on_load_finished = None
             return
            
         # アイテム復元
@@ -2882,12 +2791,9 @@ class MainWindow(QMainWindow):
 
         self._show_loading(False)
 
-        def _finish_loading():
-            if callable(getattr(self, "_on_load_finished", None)):
-                self._on_load_finished()
-                self._on_load_finished = None
-
-        self.view.play_warp_effect(_finish_loading)
+        if callable(getattr(self, "_on_load_finished", None)):
+            self._on_load_finished()
+            self._on_load_finished = None
             
         # ウォーターモード復元    
         try:
@@ -2927,11 +2833,6 @@ class MainWindow(QMainWindow):
         bounds.adjust(-margin, -margin, margin, margin)
         self.scene.setSceneRect(bounds)
 
-
-    # --- JSONプロジェクト切替用 ---
-    def play_warp_and_load_json(self, path: Path):
-        """プロジェクトをロードし、ロード完了後にワープエフェクトを再生"""
-        self._load_json(path)
 
     # --- JSONプロジェクト切替用 ---
     def _load_json(self, path: Path):
