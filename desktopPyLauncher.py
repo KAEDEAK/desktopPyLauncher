@@ -459,9 +459,9 @@ class SparkEffectItem(QGraphicsItem):
 class WarpStarEffectItem(QGraphicsItem):
     """シンプルなワープスターエフェクト"""
 
-    def __init__(self, scene_rect, duration=800, on_finished=None):
+    def __init__(self, effect_rect, duration=800, on_finished=None):
         super().__init__()
-        self.scene_rect = scene_rect
+        self.effect_rect = effect_rect
         self.duration = duration / 1000.0
         self.on_finished = on_finished
         self.start_time = time.time()
@@ -470,15 +470,15 @@ class WarpStarEffectItem(QGraphicsItem):
         self.setZValue(10000)
 
         import random
-        cx = self.scene_rect.center().x()
-        cy = self.scene_rect.center().y()
+        cx = self.effect_rect.center().x()
+        cy = self.effect_rect.center().y()
 
         # Create approximately 100 stars randomly placed on the screen. Each star
         # stores its flight angle, initial distance from the centre, current
         # distance and speed.
         for _ in range(100):
-            x = random.uniform(self.scene_rect.left(), self.scene_rect.right())
-            y = random.uniform(self.scene_rect.top(), self.scene_rect.bottom())
+            x = random.uniform(self.effect_rect.left(), self.effect_rect.right())
+            y = random.uniform(self.effect_rect.top(), self.effect_rect.bottom())
             angle = math.atan2(y - cy, x - cx)
             start_dist = math.hypot(x - cx, y - cy)
             speed = random.uniform(600, 1200)
@@ -490,7 +490,7 @@ class WarpStarEffectItem(QGraphicsItem):
         self.timer.start(16)
 
     def boundingRect(self):
-        return self.scene_rect
+        return self.effect_rect
 
     def update_animation(self):
         current = time.time()
@@ -512,9 +512,10 @@ class WarpStarEffectItem(QGraphicsItem):
         self.update()
 
     def paint(self, painter, option, widget=None):
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         painter.setPen(QPen(QColor("white"), 2))
-        cx = self.scene_rect.center().x()
-        cy = self.scene_rect.center().y()
+        cx = self.effect_rect.center().x()
+        cy = self.effect_rect.center().y()
         for angle, start, current, _ in self.stars:
             x1 = cx + math.cos(angle) * start
             y1 = cy + math.sin(angle) * start
@@ -804,7 +805,9 @@ class CanvasView(QGraphicsView):
             self.warp_effect = None
 
         scene_rect = self.scene().sceneRect()
-        self.warp_effect = WarpStarEffectItem(scene_rect, on_finished=on_finished)
+        view_rect = self.mapToScene(self.viewport().rect()).boundingRect()
+        effect_rect = scene_rect.united(view_rect)
+        self.warp_effect = WarpStarEffectItem(effect_rect, on_finished=on_finished)
         self.scene().addItem(self.warp_effect)
     def dragEnterEvent(self, e): 
         # ファイルやURLドロップの受付
@@ -2786,8 +2789,9 @@ class MainWindow(QMainWindow):
         base_dir = base_dir.expanduser().resolve()
 
         if len(items) == 0:
+            self._show_loading(False)
+
             def _finish_loading():
-                self._show_loading(False)
                 if self.scene.sceneRect().isEmpty():
                     warn("_do_load_actual reset setSceneRect")
                     self.scene.setSceneRect(QRectF(0, 0, 1, 1))
@@ -2876,8 +2880,9 @@ class MainWindow(QMainWindow):
         self._scroll_to_start_marker()
         self._apply_background()
 
+        self._show_loading(False)
+
         def _finish_loading():
-            self._show_loading(False)
             if callable(getattr(self, "_on_load_finished", None)):
                 self._on_load_finished()
                 self._on_load_finished = None
