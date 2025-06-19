@@ -470,10 +470,20 @@ class WarpStarEffectItem(QGraphicsItem):
         self.setZValue(10000)
 
         import random
-        for _ in range(150):
-            angle = random.uniform(0, 2 * math.pi)
+        cx = self.scene_rect.center().x()
+        cy = self.scene_rect.center().y()
+
+        # Create approximately 100 stars randomly placed on the screen. Each star
+        # stores its flight angle, initial distance from the centre, current
+        # distance and speed.
+        for _ in range(100):
+            x = random.uniform(self.scene_rect.left(), self.scene_rect.right())
+            y = random.uniform(self.scene_rect.top(), self.scene_rect.bottom())
+            angle = math.atan2(y - cy, x - cx)
+            start_dist = math.hypot(x - cx, y - cy)
             speed = random.uniform(600, 1200)
-            self.stars.append([angle, 0.0, speed, 0.0])
+            # [angle, start_distance, current_distance, speed]
+            self.stars.append([angle, start_dist, start_dist, speed])
 
         self.timer = QTimer()
         self.timer.timeout.connect(self.update_animation)
@@ -488,8 +498,8 @@ class WarpStarEffectItem(QGraphicsItem):
         self.last_time = current
 
         for star in self.stars:
-            star[3] = star[1]
-            star[1] += star[2] * dt
+            # star: [angle, start_distance, current_distance, speed]
+            star[2] += star[3] * dt
 
         if current - self.start_time > self.duration:
             self.timer.stop()
@@ -505,11 +515,11 @@ class WarpStarEffectItem(QGraphicsItem):
         painter.setPen(QPen(QColor("white"), 2))
         cx = self.scene_rect.center().x()
         cy = self.scene_rect.center().y()
-        for angle, dist, _, prev in self.stars:
-            x1 = cx + math.cos(angle) * prev
-            y1 = cy + math.sin(angle) * prev
-            x2 = cx + math.cos(angle) * dist
-            y2 = cy + math.sin(angle) * dist
+        for angle, start, current, _ in self.stars:
+            x1 = cx + math.cos(angle) * start
+            y1 = cy + math.sin(angle) * start
+            x2 = cx + math.cos(angle) * current
+            y2 = cy + math.sin(angle) * current
             painter.drawLine(x1, y1, x2, y2)
 
 # ==============================================================
