@@ -512,6 +512,7 @@ class WarpStarEffectItem(QGraphicsItem):
         self.update()
 
     def paint(self, painter, option, widget=None):
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         painter.setPen(QPen(QColor("white"), 2))
         cx = self.effect_rect.center().x()
         cy = self.effect_rect.center().y()
@@ -2788,8 +2789,9 @@ class MainWindow(QMainWindow):
         base_dir = base_dir.expanduser().resolve()
 
         if len(items) == 0:
+            self._show_loading(False)
+
             def _finish_loading():
-                self._show_loading(False)
                 if self.scene.sceneRect().isEmpty():
                     warn("_do_load_actual reset setSceneRect")
                     self.scene.setSceneRect(QRectF(0, 0, 1, 1))
@@ -2878,8 +2880,9 @@ class MainWindow(QMainWindow):
         self._scroll_to_start_marker()
         self._apply_background()
 
+        self._show_loading(False)
+
         def _finish_loading():
-            self._show_loading(False)
             if callable(getattr(self, "_on_load_finished", None)):
                 self._on_load_finished()
                 self._on_load_finished = None
