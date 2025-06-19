@@ -650,6 +650,13 @@ class CanvasView(QGraphicsView):
         # --- スクロールバー端到達時のシーン拡張 ---
         self.horizontalScrollBar().valueChanged.connect(self._on_hscroll)
         self.verticalScrollBar().valueChanged.connect(self._on_vscroll)
+
+    def reset_zoom(self):
+        """Reset view scale to 1.0"""
+        if self._zoom != 1.0:
+            factor = 1.0 / self._zoom
+            self.scale(factor, factor)
+            self._zoom = 1.0
         
     def toggle_water_effect(self, enabled):
         '''Water エフェクトのオン/オフ切り替え'''
@@ -2610,6 +2617,12 @@ class MainWindow(QMainWindow):
         """実際のロード処理（マイグレーション付き）"""
         # ロード中フラグを設定してスナップを無効化
         self._loading_in_progress = True
+
+        # reset zoom when loading new project
+        try:
+            self.view.reset_zoom()
+        except Exception:
+            pass
         
         # ウォーターモードのcleanupと維持
         was_water_enabled = False
