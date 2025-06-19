@@ -1645,7 +1645,7 @@ class JSONItem(LauncherItem):
 
         # プロジェクトファイルなら内部ロード
         if self._is_launcher_project():
-            win._load_json(p)
+            win.play_warp_and_load_json(p)
             return
 
         # フォールバック：通常オープン
