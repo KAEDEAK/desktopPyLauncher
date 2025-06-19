@@ -41,5 +41,3 @@ def my_has_attr(obj: object, attr: str) -> bool: return hasattr(obj, attr)
 def dump_missing_attrs(): pass
 
 __all__ = ["my_has_attr", "dump_missing_attrs", "trace_this"]
-
-    

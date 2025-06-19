@@ -31,7 +31,8 @@ from DPyL_utils import (
     warn, b64e, ICON_SIZE,IMAGE_EXTS,
     _icon_pixmap,compose_url_icon,
     normalize_unc_path,
-    fetch_favicon_base64
+    fetch_favicon_base64,
+    detect_image_format
 )
 
 from DPyL_debug import my_has_attr,dump_missing_attrs,trace_this
@@ -472,122 +473,6 @@ class CanvasItem(QGraphicsItemGroup):
             self.scene().removeItem(self)
 
         
-# --------------------------------------------------
-#  GifMixin  :  QMovie ライフサイクルを隠蔽
-# --------------------------------------------------
-
-class GifMixin:
-    """
-    多重継承するだけで GIF が動く Mixin。
-    CanvasItem 側で用意される以下のメンバーに依存する。
-
-        self.d            : dict  … width/height 等のメタ
-        self._pix_item    : QGraphicsPixmapItem
-        self._rect_item   : QGraphicsRectItem（無くても可）
-
-    継承順は「GifMixin, CanvasItem」を推奨。
-    """
-
-    # ---------------------------------------------------
-    #   ライフサイクル
-    # ---------------------------------------------------
-    def __init__(self, *args, **kwargs):
-        self._movie: Optional[QMovie] = None
-        self._gif_buffer: Optional[QBuffer] = None
-        super().__init__(*args, **kwargs)
-
-    def __del__(self):
-        self._stop_movie()
-
-    # ---------------------------------------------------
-    #   公開 API
-    # ---------------------------------------------------
-    def load_gif(
-        self,
-        *,
-        path: str | None = None,
-        raw: bytes | None = None,
-        scaled_w: int | None = None,
-        scaled_h: int | None = None
-    ) -> bool:
-        """
-        GIF をセットアップして再生開始。戻り値 True＝GIF として扱えた。
-        path または raw（base64 等を decode 済みバイト列）を渡す。
-        """
-        if not self._is_gif_source(path, raw):
-            return False                          # GIF ではない
-
-        self._stop_movie()                       # 既存を完全停止
-
-        # QMovie 構築
-        if raw:
-            self._gif_buffer = QBuffer()
-            self._gif_buffer.setData(QByteArray(raw))
-            self._gif_buffer.open(QIODevice.OpenModeFlag.ReadOnly)
-            self._movie = QMovie()
-            self._movie.setDevice(self._gif_buffer)
-        else:
-            self._movie = QMovie(path)
-
-        if scaled_w and scaled_h:
-            self._movie.setScaledSize(QSize(scaled_w, scaled_h))
-
-        self._movie.frameChanged.connect(self._on_movie_frame)
-        self._movie.start()
-        self._on_movie_frame()                   # 1 フレーム目即描画
-        return True
-
-    # ---------------------------------------------------
-    #   内部ユーティリティ
-    # ---------------------------------------------------
-    @staticmethod
-    def _is_gif_source(path: str | None, raw: bytes | None) -> bool:
-        if path and path.lower().endswith(".gif") and Path(path).exists():
-            return True
-        if raw and raw[:6] in (b"GIF87a", b"GIF89a"):
-            return True
-        return False
-
-    def _stop_movie(self):
-        """再生中 GIF を安全に破棄"""
-        if self._movie:
-            try:
-                self._movie.frameChanged.disconnect(self._on_movie_frame)
-            except Exception:
-                pass
-            self._movie.stop()
-            self._movie = None
-        if self._gif_buffer:
-            try:
-                self._gif_buffer.close()
-            except Exception:
-                pass
-            self._gif_buffer = None
-
-    # ------------------------------------------------------------------
-    #   フレーム更新スロット
-    # ------------------------------------------------------------------
-    def _on_movie_frame(self):
-        if not self._movie or not hasattr(self, "_pix_item"):
-            return
-        frame: QPixmap = self._movie.currentPixmap()
-        if frame.isNull():
-            return
-
-        tgt_w = int(self.d.get("width",  frame.width()))
-        tgt_h = int(self.d.get("height", frame.height()))
-        scaled = frame.scaled(
-            tgt_w, tgt_h,
-            Qt.AspectRatioMode.KeepAspectRatioByExpanding,
-            Qt.TransformationMode.SmoothTransformation,
-        )
-        cx = max(0, (scaled.width()  - tgt_w) // 2)
-        cy = max(0, (scaled.height() - tgt_h) // 2)
-        pm_final = scaled.copy(cx, cy, tgt_w, tgt_h)
-
-        self._pix_item.setPixmap(pm_final)
-        if hasattr(self, "_rect_item"):
-            self._rect_item.setRect(0, 0, tgt_w, tgt_h)
 
             
 # ==================================================================

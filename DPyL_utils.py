@@ -157,6 +157,22 @@ def b64encode_pixmap(pixmap: QPixmap) -> str:
     pixmap.save(buffer, "PNG")
     return base64.b64encode(buffer.data()).decode("utf-8")
 
+def detect_image_format(data: bytes) -> str:
+    """
+    バイナリデータから画像フォーマットを検出してData URLのプレフィックスを返す
+    """
+    if data.startswith(b'\x89PNG\r\n\x1a\n'):
+        return "data:image/png;base64,"
+    elif data.startswith(b'\xff\xd8\xff'):
+        return "data:image/jpeg;base64,"
+    elif data.startswith(b'GIF87a') or data.startswith(b'GIF89a'):
+        return "data:image/gif;base64,"
+    elif data.startswith(b'<svg') or b'<svg' in data[:100]:
+        return "data:image/svg+xml;base64,"
+    else:
+        # デフォルトはPNG
+        return "data:image/png;base64,"
+
 # -- favicon取得 -------------------------------------------
 def fetch_favicon_base64(domain_or_url: str, target_size: int = 64) -> str | None:
     def _to_base64(data: bytes) -> str:
@@ -258,7 +274,7 @@ def _default_icon(size: int = ICON_SIZE) -> QPixmap:
     return pm
 
 def _icon_pixmap(path: str, index: int = 0, size: int = ICON_SIZE) -> QPixmap:
-    return _icon_pixmap_basic(path, index, size);
+    return _icon_pixmap_full(path, index, size)
     
     
 def _icon_pixmap_basic(path: str, index: int = 0, size: int = ICON_SIZE) -> QPixmap:
@@ -401,6 +417,7 @@ __all__ = [
     "warn", "debug_print", "b64e", "b64d",
     "ms_to_hms_ms", "hms_to_ms", "ms_to_hms",
     "is_network_drive", "fetch_favicon_base64",
+    "detect_image_format",
     # アイコン関連
     "get_fixed_local_icon", "_default_icon", "_icon_pixmap","_load_pix_or_icon",
     # 定数群（利便用）
