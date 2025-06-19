@@ -450,10 +450,67 @@ class SparkEffectItem(QGraphicsItem):
             glow_color.setAlpha(int(100 * alpha))
             painter.setBrush(QBrush(glow_color))
             painter.drawEllipse(
-                QPointF(x, y), 
-                spark.size * alpha * 2, 
+                QPointF(x, y),
+                spark.size * alpha * 2,
                 spark.size * alpha * 2
             )
+
+
+class WarpStarEffectItem(QGraphicsItem):
+    """シンプルなワープスターエフェクト"""
+
+    def __init__(self, scene_rect, duration=800, on_finished=None):
+        super().__init__()
+        self.scene_rect = scene_rect
+        self.duration = duration / 1000.0
+        self.on_finished = on_finished
+        self.start_time = time.time()
+        self.last_time = self.start_time
+        self.stars = []
+        self.setZValue(10000)
+
+        import random
+        for _ in range(150):
+            angle = random.uniform(0, 2 * math.pi)
+            speed = random.uniform(600, 1200)
+            self.stars.append([angle, 0.0, speed, 0.0])
+
+        self.timer = QTimer()
+        self.timer.timeout.connect(self.update_animation)
+        self.timer.start(16)
+
+    def boundingRect(self):
+        return self.scene_rect
+
+    def update_animation(self):
+        current = time.time()
+        dt = current - self.last_time
+        self.last_time = current
+
+        for star in self.stars:
+            star[3] = star[1]
+            star[1] += star[2] * dt
+
+        if current - self.start_time > self.duration:
+            self.timer.stop()
+            if self.scene():
+                self.scene().removeItem(self)
+            if callable(self.on_finished):
+                QTimer.singleShot(0, self.on_finished)
+            return
+
+        self.update()
+
+    def paint(self, painter, option, widget=None):
+        painter.setPen(QPen(QColor("white"), 2))
+        cx = self.scene_rect.center().x()
+        cy = self.scene_rect.center().y()
+        for angle, dist, _, prev in self.stars:
+            x1 = cx + math.cos(angle) * prev
+            y1 = cy + math.sin(angle) * prev
+            x2 = cx + math.cos(angle) * dist
+            y2 = cy + math.sin(angle) * dist
+            painter.drawLine(x1, y1, x2, y2)
 
 # ==============================================================
 # ミニマップ
@@ -642,6 +699,9 @@ class CanvasView(QGraphicsView):
         # Spark Effect の初期化
         self.spark_effect = None
         self.spark_enabled = False
+
+        # Warp Effect の初期化
+        self.warp_effect = None
         
         self.setAcceptDrops(True)
         self.viewport().setAcceptDrops(True)
@@ -721,6 +781,21 @@ class CanvasView(QGraphicsView):
                 self.scene().removeItem(self.spark_effect)
             # 参照をクリア
             self.spark_effect = None
+
+    def play_warp_effect(self, on_finished=None):
+        """Warp エフェクトを再生して完了後にコールバック"""
+        if self.warp_effect:
+            try:
+                self.warp_effect.timer.stop()
+            except Exception:
+                pass
+            if self.warp_effect.scene():
+                self.scene().removeItem(self.warp_effect)
+            self.warp_effect = None
+
+        scene_rect = self.scene().sceneRect()
+        self.warp_effect = WarpStarEffectItem(scene_rect, on_finished=on_finished)
+        self.scene().addItem(self.warp_effect)
     def dragEnterEvent(self, e): 
         # ファイルやURLドロップの受付
         e.acceptProposedAction() if e.mimeData().hasUrls() else super().dragEnterEvent(e)
@@ -2833,6 +2908,14 @@ class MainWindow(QMainWindow):
         bounds.adjust(-margin, -margin, margin, margin)
         self.scene.setSceneRect(bounds)
 
+
+    # --- JSONプロジェクト切替用 ---
+    def play_warp_and_load_json(self, path: Path):
+        """ワープエフェクト再生後にプロジェクトを読み込む"""
+        def _cb():
+            self._load_json(path)
+
+        self.view.play_warp_effect(_cb)
 
     # --- JSONプロジェクト切替用 ---
     def _load_json(self, path: Path):
