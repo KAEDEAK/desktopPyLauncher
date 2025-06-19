@@ -2776,15 +2776,17 @@ class MainWindow(QMainWindow):
         base_dir = base_dir.expanduser().resolve()
 
         if len(items) == 0:
-            self._show_loading(False)
-            # 仮のシーン矩形（Qtの描画クラッシュ回避）
-            if self.scene.sceneRect().isEmpty():
-                warn("_do_load_actual reset setSceneRect")
-                self.scene.setSceneRect(QRectF(0, 0, 1, 1))
-            self._loading_in_progress = False
-            if callable(getattr(self, "_on_load_finished", None)):
-                self._on_load_finished()
-                self._on_load_finished = None
+            def _finish_loading():
+                self._show_loading(False)
+                if self.scene.sceneRect().isEmpty():
+                    warn("_do_load_actual reset setSceneRect")
+                    self.scene.setSceneRect(QRectF(0, 0, 1, 1))
+                self._loading_in_progress = False
+                if callable(getattr(self, "_on_load_finished", None)):
+                    self._on_load_finished()
+                    self._on_load_finished = None
+
+            self.view.play_warp_effect(_finish_loading)
             return
            
         # アイテム復元
@@ -2864,11 +2866,13 @@ class MainWindow(QMainWindow):
         self._scroll_to_start_marker()
         self._apply_background()
 
-        self._show_loading(False)
+        def _finish_loading():
+            self._show_loading(False)
+            if callable(getattr(self, "_on_load_finished", None)):
+                self._on_load_finished()
+                self._on_load_finished = None
 
-        if callable(getattr(self, "_on_load_finished", None)):
-            self._on_load_finished()
-            self._on_load_finished = None
+        self.view.play_warp_effect(_finish_loading)
             
         # ウォーターモード復元    
         try:
@@ -2911,11 +2915,8 @@ class MainWindow(QMainWindow):
 
     # --- JSONプロジェクト切替用 ---
     def play_warp_and_load_json(self, path: Path):
-        """ワープエフェクト再生後にプロジェクトを読み込む"""
-        def _cb():
-            self._load_json(path)
-
-        self.view.play_warp_effect(_cb)
+        """プロジェクトをロードし、ロード完了後にワープエフェクトを再生"""
+        self._load_json(path)
 
     # --- JSONプロジェクト切替用 ---
     def _load_json(self, path: Path):
