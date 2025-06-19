@@ -598,6 +598,31 @@ class MiniMapWidget(QWidget):
             painter.end()
         except Exception as e:
             warn(f"{e}")
+
+    def mousePressEvent(self, event):
+        """クリックされた位置をメインビューに表示する"""
+        if event.button() == Qt.MouseButton.LeftButton:
+            try:
+                scene_rect = self.win.scene.sceneRect()
+                if scene_rect.isEmpty():
+                    return
+
+                w_map, h_map = self.width(), self.height()
+                scale_x = w_map / scene_rect.width()
+                scale_y = h_map / scene_rect.height()
+                scale = min(scale_x, scale_y)
+                offset_x = (w_map - scene_rect.width() * scale) / 2
+                offset_y = (h_map - scene_rect.height() * scale) / 2
+
+                pos = event.position().toPoint()
+                sx = (pos.x() - offset_x) / scale + scene_rect.x()
+                sy = (pos.y() - offset_y) / scale + scene_rect.y()
+                self.win.view.centerOn(QPointF(sx, sy))
+                self.updateVisibility()
+            except Exception as e:
+                warn(f"Exception at minimap click: {e}")
+        else:
+            super().mousePressEvent(event)
         
 # ==============================================================
 #  CanvasView - キャンバス表示・ドラッグ&ドロップ対応
