@@ -2945,6 +2945,22 @@ class MainWindow(QMainWindow):
                 return path_str
             
             for item in export_data.get("items", []):
+                # VideoItem以外で未埋め込みならファイルから埋め込みを試みる
+                if item.get("type") != "video":
+                    embedded = item.get("image_embedded") and item.get("image_embedded_data")
+                    legacy_embed = item.get("icon_embed") or item.get("embed") or item.get("data")
+                    if not embedded and not legacy_embed:
+                        src = item.get("icon") or item.get("path")
+                        if src and os.path.isfile(src) and not src.startswith(("http://", "https://")):
+                            try:
+                                with open(src, "rb") as fp:
+                                    raw = fp.read()
+                                item["image_embedded"] = True
+                                item["image_embedded_data"] = base64.b64encode(raw).decode("ascii")
+                                item["image_format"] = detect_image_format(raw)
+                            except Exception as e:
+                                warn(f"[EXPORT] Failed to embed '{src}': {e}")
+
                 # embedデータがあるかチェック
                 has_embed = item.get("icon_embed") or item.get("embed")
                 
