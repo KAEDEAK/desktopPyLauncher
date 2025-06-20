@@ -28,11 +28,11 @@ from PyQt6.QtWidgets import (
 
 # ---------------------------------------------------------------------------------------------------- internal util -------------------------------------------------
 from DPyL_utils import (
-    warn, b64e, ICON_SIZE,IMAGE_EXTS,
-    _icon_pixmap,compose_url_icon,
+    warn, b64e, ICON_SIZE, IMAGE_EXTS,
+    _icon_pixmap, compose_url_icon, _load_pix_or_icon,
     normalize_unc_path,
     fetch_favicon_base64,
-    detect_image_format
+    detect_image_format,
 )
 
 from DPyL_debug import my_has_attr,dump_missing_attrs,trace_this
@@ -2177,24 +2177,38 @@ class LauncherEditDialog(QDialog):
             # ユーザーが新規指定した場合
             if icon_path:
                 try:
-                    with open(icon_path, "rb") as fp:
-                        raw = fp.read()
-                    embed_b64 = base64.b64encode(raw).decode("ascii")
-                    
-                    # バイナリデータから実際のフォーマットを検出
-                    image_format = detect_image_format(raw)
-                    self.data["image_format"] = image_format
-                    
-                    # 画像情報を取得
-                    pm = QPixmap(icon_path)
-                    if not pm.isNull():
+                    p = Path(icon_path)
+                    idx = self.spin_index.value()
+                    pm = None
+                    if p.suffix.lower() in IMAGE_EXTS:
+                        with open(icon_path, "rb") as fp:
+                            raw = fp.read()
+                        embed_b64 = base64.b64encode(raw).decode("ascii")
+                        self.data["image_format"] = detect_image_format(raw)
+                        pm = QPixmap(icon_path)
+                    else:
+                        pm = _load_pix_or_icon(icon_path, idx, ICON_SIZE)
+                        if pm and not pm.isNull():
+                            buf = QBuffer()
+                            buf.open(QIODevice.OpenModeFlag.WriteOnly)
+                            pm.save(buf, "PNG")
+                            raw = buf.data()
+                            embed_b64 = base64.b64encode(raw).decode("ascii")
+                            self.data["image_format"] = "data:image/png;base64,"
+                        else:
+                            with open(icon_path, "rb") as fp:
+                                raw = fp.read()
+                            embed_b64 = base64.b64encode(raw).decode("ascii")
+                            self.data["image_format"] = detect_image_format(raw)
+
+                    if pm and not pm.isNull():
                         self.data["image_width"] = pm.width()
                         self.data["image_height"] = pm.height()
                         self.data["image_bits"] = pm.depth()
-                        
+
                 except Exception as e:
                     warn(f"[EMBED] Failed to read file '{icon_path}': {e}")
-                    
+
                 self.data["image_path_last_embedded"] = icon_path
 
             # プレビュー画像からキャプチャ
