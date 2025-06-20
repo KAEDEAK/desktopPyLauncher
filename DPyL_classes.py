@@ -2282,37 +2282,26 @@ class LauncherEditDialog(QDialog):
             img = cb.image()
             if not img.isNull():
                 pix = QPixmap.fromImage(img)
-                
-                # クロップ処理
-                scaled = pix.scaled(
-                    current_w, current_h,
-                    Qt.AspectRatioMode.KeepAspectRatioByExpanding,
-                    Qt.TransformationMode.SmoothTransformation
-                )
-                cx = max(0, (scaled.width() - current_w) // 2)
-                cy = max(0, (scaled.height() - current_h) // 2)
-                cropped = scaled.copy(cx, cy, current_w, current_h)
-                
+
                 buf = QBuffer()
                 buf.open(QIODevice.OpenModeFlag.WriteOnly)
-                cropped.save(buf, "PNG")
+                pix.save(buf, "PNG")
                 raw_data = buf.data()
                 b64 = base64.b64encode(raw_data).decode("ascii")
-                
-                # ★修正: 新フィールドのみを使用
+
                 self.data["image_embedded"] = True
                 self.data["image_embedded_data"] = b64
                 self.data["image_format"] = "data:image/png;base64,"
-                self.data["image_width"] = cropped.width()
-                self.data["image_height"] = cropped.height()
-                self.data["image_bits"] = cropped.depth()
-                
+                self.data["image_width"] = pix.width()
+                self.data["image_height"] = pix.height()
+                self.data["image_bits"] = pix.depth()
+
                 self.combo_icon_type.setCurrentText("Embed")
                 self.le_icon.clear()
-                
+
                 # プレビュー更新
-                self._preview_override_pixmap = cropped
                 self._update_preview()
+                return
 
         warn("Clipboardに画像またはGIFファイルが見つかりません")
 
