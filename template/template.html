@@ -912,8 +912,14 @@ function addRect(d) {
     top: d.y + "px",
     width: d.width + "px",
     height: d.height + "px",
-    borderRadius: (d.corner_radius || 0) + "px"
+    borderRadius: (d.corner_radius || 0) + "px",
+    position: "absolute"
   });
+
+  if (typeof d.angle === "number" && d.angle % 360 !== 0) {
+    el.style.transform = `rotate(${d.angle}deg)`;
+    el.style.transformOrigin = `${d.width/2}px ${d.height/2}px`;
+  }
 
   // Z値を適用
   applyZIndex(el, d.z);
@@ -933,6 +939,23 @@ function addRect(d) {
   canvas.appendChild(el);
   addCaption(d, d.caption);
   attachOpenUrl(el, d.path);
+}
+
+/**
+ * 与えられた角度で矢印が外接楕円に収まる長さを求める
+ */
+function calculateArrowLength(w, h, angle) {
+  if (w <= 0 || h <= 0) return Math.min(w, h) * 0.8;
+  const a = w / 2;
+  const b = h / 2;
+  const rad = angle * Math.PI / 180;
+  const cosT = Math.cos(rad);
+  const sinT = Math.sin(rad);
+  const denom = (cosT / a) ** 2 + (sinT / b) ** 2;
+  if (denom > 0) {
+    return (1 / Math.sqrt(denom)) * 2;
+  }
+  return Math.min(w, h) * 0.8;
 }
 
 /**
@@ -967,7 +990,7 @@ function addArrow(d) {
   
   const centerX = d.width / 2;
   const centerY = d.height / 2;
-  const arrowLength = Math.min(d.width, d.height) * 0.8;
+  const arrowLength = calculateArrowLength(d.width, d.height, angle) * (d.is_line ? 0.9 : 0.85);
 
   if (d.is_line) {
     // 直線矢印（→）
