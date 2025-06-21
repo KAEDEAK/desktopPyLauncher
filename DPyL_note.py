@@ -993,6 +993,7 @@ class NoteEditDialog(QDialog):
                 path = self._clean_path(self.ed_path.text())
                 self.btn_save.setEnabled(bool(path) and path == self._loaded_path)
         self._update_watch_opts = _update_watch_opts
+        self.chk_watch.stateChanged.connect(self._on_watch_toggled)
         self.chk_watch.stateChanged.connect(self._update_watch_opts)
         self._update_watch_opts()
 
@@ -1062,18 +1063,21 @@ class NoteEditDialog(QDialog):
         """strip spaces and surrounding quotes"""
         return path.strip().strip('"').strip()
 
+    def _on_watch_toggled(self):
+        if self.chk_watch.isChecked():
+            path = self._clean_path(self.ed_path.text())
+            if not os.path.exists(path):
+                self.chk_watch.setChecked(False)
+
     def _update_path_buttons(self):
         path = self._clean_path(self.ed_path.text())
         has_path = bool(path)        
         self.btn_load.setEnabled(has_path)
         #self.btn_ok.setEnabled(path == "" or path == self._loaded_path)
-        enable_ok = (
-            path == "" or path == self._loaded_path or path == self._orig_path
-        )
-        self.btn_ok.setEnabled(enable_ok)
+        self.btn_ok.setEnabled(True)
         self.btn_save.setEnabled(has_path and path == self._loaded_path)
 
-        enable_watch = has_path and path == self._loaded_path
+        enable_watch = has_path
         self.chk_watch.setEnabled(enable_watch)
         if not enable_watch:
             self.chk_watch.setChecked(False)
