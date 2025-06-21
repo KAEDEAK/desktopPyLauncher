@@ -113,6 +113,8 @@ class NoteItem(CanvasItem):
             # ファイル読み込み
             self._path: str = self.d.get("path", "")
             self.watch_file: bool = self.d.get("watch_file", False)
+            self.reverse_lines: bool = self.d.get("reverse_lines", False)
+            self.line_limit: int = int(self.d.get("line_limit", 100))
             self._file_watcher: QFileSystemWatcher | None = None
             # NoteItem is not a QObject, so the timer can't be parented to self
             self._file_watch_retry_timer = QTimer(None)
@@ -512,13 +514,24 @@ class NoteItem(CanvasItem):
         """self.path からテキストを読み込む"""
         try:
             with open(self.path, "r", encoding="utf-8") as f:
-                self.text = f.read()
+                if self.watch_file:
+                    lines = f.readlines()
+                    limit = self.line_limit if self.line_limit > 0 else len(lines)
+                    if self.reverse_lines:
+                        selected = lines[:limit]
+                    else:
+                        selected = lines[-limit:]
+                    self.text = "".join(selected)
+                else:
+                    self.text = f.read()
             self.d["text"] = self.text
         except Exception as e:
             warn(f"[NoteItem] load_from_file failed: {e}")
 
     def save_to_file(self):
         """self.path にテキストを書き出す"""
+        if self.watch_file:
+            return
         try:
             with open(self.path, "w", encoding="utf-8") as f:
                 f.write(self.text)
@@ -961,6 +974,28 @@ class NoteEditDialog(QDialog):
         self.chk_watch.setChecked(self.d.get("watch_file", False))
         vbox.addWidget(self.chk_watch)
 
+        self.chk_reverse = QCheckBox("reverse_lines")
+        self.chk_reverse.setChecked(self.d.get("reverse_lines", False))
+        self.spin_limit = QSpinBox()
+        self.spin_limit.setRange(1, 100000)
+        self.spin_limit.setValue(int(self.d.get("line_limit", 100)))
+        limit_layout = _hl("line limit", self.spin_limit)
+        vbox.addWidget(self.chk_reverse)
+        vbox.addLayout(limit_layout)
+
+        def _update_watch_opts():
+            enable = self.chk_watch.isChecked()
+            self.chk_reverse.setEnabled(enable)
+            self.spin_limit.setEnabled(enable)
+            if enable:
+                self.btn_save.setEnabled(False)
+            else:
+                path = self._clean_path(self.ed_path.text())
+                self.btn_save.setEnabled(bool(path) and path == self._loaded_path)
+        self._update_watch_opts = _update_watch_opts
+        self.chk_watch.stateChanged.connect(self._update_watch_opts)
+        self._update_watch_opts()
+
         # --- Splitter: 上部=編集エリア / 下部=プレビュー ---
         splitter = QSplitter(Qt.Orientation.Vertical)
 
@@ -1042,6 +1077,8 @@ class NoteEditDialog(QDialog):
         self.chk_watch.setEnabled(enable_watch)
         if not enable_watch:
             self.chk_watch.setChecked(False)
+        if hasattr(self, "_update_watch_opts"):
+            self._update_watch_opts()
             
     def _load_from_path(self):
         path = self._clean_path(self.ed_path.text())
@@ -1111,16 +1148,23 @@ class NoteEditDialog(QDialog):
         self.d["color"] = self.ed_color.text().strip() or "#ffffff"
         self.d["path"] = self.ed_path.text().strip()
         self.d["watch_file"] = self.chk_watch.isChecked()
+        self.d["reverse_lines"] = self.chk_reverse.isChecked()
+        self.d["line_limit"] = self.spin_limit.value()
 
 
         # NoteItem 側に即時反映
         self.item.format = self.d["format"]
-        self.item.text = self.d["text"]
         self.item.fill_bg = self.d["fill_background"]
         self.item.path = self.d["path"]
+        self.item.reverse_lines = self.d["reverse_lines"]
+        self.item.line_limit = self.d["line_limit"]
         self.item.set_file_watching(self.d["watch_file"])
-        if self.item.path:
-            self.item.save_to_file()
+        if self.item.watch_file:
+            self.item.load_from_file()
+        else:
+            self.item.text = self.d["text"]
+            if self.item.path:
+                self.item.save_to_file()
 
         super().accept()
 

@@ -2439,6 +2439,9 @@ class MainWindow(QMainWindow):
             "fontsize": 14,
             "noteType": "text",
             "path": "",
+            "watch_file": False,
+            "reverse_lines": False,
+            "line_limit": 100,
         }
         it = NoteItem(d, self.text_color)
         self.scene.addItem(it)
@@ -2905,6 +2908,12 @@ class MainWindow(QMainWindow):
             pos = it.pos()
             it.d["x"], it.d["y"] = pos.x(), pos.y()
             it.d["z"] = it.zValue()
+
+            if isinstance(it, NoteItem):
+                if it.watch_file:
+                    it.d["text"] = ""
+                else:
+                    it.d["text"] = it.text
 
             # === GroupItem の特別処理を追加 ===
             if isinstance(it, GroupItem):
