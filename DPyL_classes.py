@@ -703,8 +703,7 @@ class LauncherItem(GifMixin, CanvasItem):
             cls.SHORTCUT_LIKE +
             cls.EXE_LIKE +
             cls.SCRIPT_LIKE +
-            cls.EDITABLE_LIKE +
-            (".gif",)  # GIFもサポート
+            cls.EDITABLE_LIKE
         )
 
     @classmethod
