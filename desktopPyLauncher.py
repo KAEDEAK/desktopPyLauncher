@@ -65,6 +65,9 @@ EXPAND_STEP = 500  # 端に到達したときに拡張する幅・高さ（px）
 
 SHOW_MINIMAP = True
 
+# アプリケーションバージョン
+APP_VERSION = "1.1.5"
+
 # ==============================================================
 # migration 関数
 # ==============================================================
@@ -1313,9 +1316,10 @@ class MainWindow(QMainWindow):
         act("[-1-]", lambda: self._jump_all_videos(0))
         act("[-2-]", lambda: self._jump_all_videos(1))
         act("[-3-]", lambda: self._jump_all_videos(2))
-        
+
         self.add_toolbar_spacer(tb, width=24)
 
+        act("About", self._show_about)
         act("Exit", self.close)
         
         self._update_nav()
@@ -1327,6 +1331,14 @@ class MainWindow(QMainWindow):
     def _toggle_spark_effect(self, checked):
         '''Spark エフェクトのオン/オフ切り替え'''
         self.view.toggle_spark_effect(checked)
+
+    def _show_about(self):
+        """アプリのバージョン情報を表示"""
+        QMessageBox.information(
+            self,
+            "About desktopPyLauncher",
+            f"desktopPyLauncher Version {APP_VERSION}"
+        )
         
     r"""
     def _on_edit_mode_toggled(self, checked: bool):
