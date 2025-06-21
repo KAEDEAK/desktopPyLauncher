@@ -33,6 +33,7 @@ from DPyL_utils import (
     normalize_unc_path,
     fetch_favicon_base64,
     detect_image_format,
+    b64encode_pixmap,
 )
 
 from DPyL_debug import my_has_attr,dump_missing_attrs,trace_this
@@ -283,9 +284,18 @@ class CanvasItem(QGraphicsItemGroup):
         """
         # 1) ピクスマップ取得
         pix = QPixmap()
-        
-        # 新フィールドから埋め込みデータを取得
-        if self.d.get("image_embedded") and self.d.get("image_embedded_data"):
+
+        # 新フィールドからリサイズ済み埋め込みデータを優先取得
+        loaded_resized = False
+        if self.d.get("image_embedded") and self.d.get("image_embedded_resized"):
+            try:
+                pix.loadFromData(b64decode(self.d["image_embedded_resized"]))
+                loaded_resized = not pix.isNull()
+            except Exception:
+                pix = QPixmap()
+
+        # オリジナルの埋め込みデータから取得
+        if (not loaded_resized) and self.d.get("image_embedded") and self.d.get("image_embedded_data"):
             try:
                 pix.loadFromData(b64decode(self.d["image_embedded_data"]))
             except Exception as e:
@@ -317,6 +327,13 @@ class CanvasItem(QGraphicsItemGroup):
         crop_x = max(0, (scaled.width() - tgt_w) // 2)
         crop_y = max(0, (scaled.height() - tgt_h) // 2)
         pix = scaled.copy(crop_x, crop_y, tgt_w, tgt_h)
+
+        # リサイズ後データを保持
+        if self.d.get("image_embedded"):
+            try:
+                self.d["image_embedded_resized"] = b64encode_pixmap(pix)
+            except Exception as e:
+                warn(f"[CanvasItem] Failed to encode resized image: {e}")
 
         # 4) 明るさ補正（brightnessがある場合のみ）
         bri = self.d.get("brightness")
@@ -1316,9 +1333,16 @@ class ImageItem(CanvasItem):
     def _apply_pixmap(self):
         """画像を適用 - 新フィールド対応"""
         pix = QPixmap()
-        
-        # 新フィールドから埋め込みデータを取得
-        if self.d.get("image_embedded") and self.d.get("image_embedded_data"):
+
+        loaded_resized = False
+        if self.d.get("image_embedded") and self.d.get("image_embedded_resized"):
+            try:
+                pix.loadFromData(b64decode(self.d["image_embedded_resized"]))
+                loaded_resized = not pix.isNull()
+            except Exception:
+                pix = QPixmap()
+
+        if (not loaded_resized) and self.d.get("image_embedded") and self.d.get("image_embedded_data"):
             try:
                 pix.loadFromData(b64decode(self.d["image_embedded_data"]))
             except Exception as e:
@@ -1343,6 +1367,12 @@ class ImageItem(CanvasItem):
         crop_x = max(0, (scaled.width()  - tgt_w) // 2)
         crop_y = max(0, (scaled.height() - tgt_h) // 2)
         pix = scaled.copy(crop_x, crop_y, tgt_w, tgt_h)
+
+        if self.d.get("image_embedded"):
+            try:
+                self.d["image_embedded_resized"] = b64encode_pixmap(pix)
+            except Exception as e:
+                warn(f"[IMAGE] Failed to encode resized data: {e}")
 
         # 明るさ調整
         bri = self.brightness
@@ -1851,7 +1881,7 @@ class ImageEditDialog(QDialog):
                 try:
                     with open(path, "rb") as fp:
                         raw_data = fp.read()
-                    
+
                     self.item.d["image_embedded_data"] = base64.b64encode(raw_data).decode("ascii")
                     self.item.d["image_path_last_embedded"] = path
                     
@@ -1864,6 +1894,25 @@ class ImageEditDialog(QDialog):
                         self.item.d["image_width"] = pm.width()
                         self.item.d["image_height"] = pm.height()
                         self.item.d["image_bits"] = pm.depth()
+
+                    try:
+                        scaled = pm.scaled(
+                            int(self.item.d.get("width", pm.width())),
+                            int(self.item.d.get("height", pm.height())),
+                            Qt.AspectRatioMode.KeepAspectRatioByExpanding,
+                            Qt.TransformationMode.SmoothTransformation,
+                        )
+                        cx = max(0, (scaled.width() - int(self.item.d.get("width", pm.width()))) // 2)
+                        cy = max(0, (scaled.height() - int(self.item.d.get("height", pm.height()))) // 2)
+                        cropped = scaled.copy(
+                            cx,
+                            cy,
+                            int(self.item.d.get("width", pm.width())),
+                            int(self.item.d.get("height", pm.height())),
+                        )
+                        self.item.d["image_embedded_resized"] = b64encode_pixmap(cropped)
+                    except Exception as e:
+                        warn(f"[embed] failed to create resized data: {e}")
                     
                 except Exception as e:
                     warn(f"embed failed: {e}")
@@ -2076,6 +2125,26 @@ class LauncherEditDialog(QDialog):
             if fav:
                 self.data["image_embedded"] = True
                 self.data["image_embedded_data"] = fav
+                try:
+                    pm = QPixmap()
+                    pm.loadFromData(base64.b64decode(fav))
+                    scaled = pm.scaled(
+                        int(self.data.get("width", ICON_SIZE)),
+                        int(self.data.get("height", ICON_SIZE)),
+                        Qt.AspectRatioMode.KeepAspectRatioByExpanding,
+                        Qt.TransformationMode.SmoothTransformation,
+                    )
+                    cx = max(0, (scaled.width() - int(self.data.get("width", ICON_SIZE))) // 2)
+                    cy = max(0, (scaled.height() - int(self.data.get("height", ICON_SIZE))) // 2)
+                    cropped = scaled.copy(
+                        cx,
+                        cy,
+                        int(self.data.get("width", ICON_SIZE)),
+                        int(self.data.get("height", ICON_SIZE)),
+                    )
+                    self.data["image_embedded_resized"] = b64encode_pixmap(cropped)
+                except Exception as e:
+                    warn(f"[default icon] failed to create resized: {e}")
                 
                 # faviconのフォーマットを検出
                 try:
@@ -2239,6 +2308,23 @@ class LauncherEditDialog(QDialog):
                         self.data["image_format"] = detect_image_format(raw)
                     except:
                         self.data["image_format"] = "data:image/png;base64,"
+                try:
+                    pm = QPixmap()
+                    pm.loadFromData(base64.b64decode(embed_b64))
+                    sw = int(self.data.get("width", ICON_SIZE))
+                    sh = int(self.data.get("height", ICON_SIZE))
+                    scaled = pm.scaled(
+                        sw,
+                        sh,
+                        Qt.AspectRatioMode.KeepAspectRatioByExpanding,
+                        Qt.TransformationMode.SmoothTransformation,
+                    )
+                    cx = max(0, (scaled.width() - sw) // 2)
+                    cy = max(0, (scaled.height() - sh) // 2)
+                    cropped = scaled.copy(cx, cy, sw, sh)
+                    self.data["image_embedded_resized"] = b64encode_pixmap(cropped)
+                except Exception as e:
+                    warn(f"[accept] failed to create resized: {e}")
             else:
                 self.data["image_embedded"] = False
                 self.data.pop("image_embedded_data", None)
@@ -2268,6 +2354,21 @@ class LauncherEditDialog(QDialog):
                     self.data["image_embedded_data"] = base64.b64encode(gif_data).decode("ascii")
                     self.data["image_format"] = detect_image_format(gif_data)
                     self.data["image_path_last_embedded"] = path
+                    try:
+                        pm = QPixmap()
+                        pm.loadFromData(gif_data)
+                        scaled = pm.scaled(
+                            current_w,
+                            current_h,
+                            Qt.AspectRatioMode.KeepAspectRatioByExpanding,
+                            Qt.TransformationMode.SmoothTransformation,
+                        )
+                        cx = max(0, (scaled.width() - current_w) // 2)
+                        cy = max(0, (scaled.height() - current_h) // 2)
+                        cropped = scaled.copy(cx, cy, current_w, current_h)
+                        self.data["image_embedded_resized"] = b64encode_pixmap(cropped)
+                    except Exception as e:
+                        warn(f"[paste icon] resized gif failed: {e}")
                     
                     self.combo_icon_type.setCurrentText("Embed")
                     self.le_icon.clear()
@@ -2295,6 +2396,19 @@ class LauncherEditDialog(QDialog):
                 self.data["image_width"] = pix.width()
                 self.data["image_height"] = pix.height()
                 self.data["image_bits"] = pix.depth()
+                try:
+                    scaled = pix.scaled(
+                        current_w,
+                        current_h,
+                        Qt.AspectRatioMode.KeepAspectRatioByExpanding,
+                        Qt.TransformationMode.SmoothTransformation,
+                    )
+                    cx = max(0, (scaled.width() - current_w) // 2)
+                    cy = max(0, (scaled.height() - current_h) // 2)
+                    cropped = scaled.copy(cx, cy, current_w, current_h)
+                    self.data["image_embedded_resized"] = b64encode_pixmap(cropped)
+                except Exception as e:
+                    warn(f"[paste icon] resized png failed: {e}")
 
                 self.combo_icon_type.setCurrentText("Embed")
                 self.le_icon.clear()

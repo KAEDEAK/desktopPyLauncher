@@ -1917,12 +1917,28 @@ class MainWindow(QMainWindow):
             embed_data = b64encode_pixmap(pixmap)
             now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
+            try:
+                scaled = pixmap.scaled(
+                    pixmap.width(),
+                    pixmap.height(),
+                    Qt.AspectRatioMode.KeepAspectRatioByExpanding,
+                    Qt.TransformationMode.SmoothTransformation,
+                )
+                cx = max(0, (scaled.width() - pixmap.width()) // 2)
+                cy = max(0, (scaled.height() - pixmap.height()) // 2)
+                cropped = scaled.copy(cx, cy, pixmap.width(), pixmap.height())
+                embed_resized = b64encode_pixmap(cropped)
+            except Exception as e:
+                warn(f"[paste image] resized failed: {e}")
+                embed_resized = embed_data
+
             d = {
                 "type": "image",
                 "caption": now_str,
                 # --- 新フォーマット: 埋め込み情報 ---
                 "image_embedded": True,
                 "image_embedded_data": embed_data,
+                "image_embedded_resized": embed_resized,
                 "image_format": "data:image/png;base64",
                 # --- 座標・サイズ情報 ---
                 "x": int(scene_pos.x()),
