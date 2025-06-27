@@ -648,7 +648,11 @@ class CanvasView(QGraphicsView):
         
         self.setAcceptDrops(True)
         self.viewport().setAcceptDrops(True)
-        self.setRenderHint(self.renderHints() | self.renderHints().Antialiasing)
+        self.setRenderHints(
+            self.renderHints()
+            | QPainter.RenderHint.Antialiasing
+            | QPainter.RenderHint.SmoothPixmapTransform
+        )
 
         # --- スクロールバー端到達時のシーン拡張 ---
         self.horizontalScrollBar().valueChanged.connect(self._on_hscroll)
