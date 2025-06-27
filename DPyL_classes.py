@@ -780,10 +780,6 @@ class LauncherItem(GifMixin, CanvasItem):
         
         # ピクスマップアイテム
         self._pix_item = QGraphicsPixmapItem(parent=self)
-        # 変換時も高品質補間させる
-        self._pix_item.setTransformationMode(
-            Qt.TransformationMode.SmoothTransformation
-        )
         self._refresh_icon()
         
     @property
@@ -1312,10 +1308,6 @@ class ImageItem(CanvasItem):
         self.path = self.d.get("path", "")
         # 古いembedフィールドは使用しない
         self._pix_item = QGraphicsPixmapItem(parent=self)
-        # 変換時も滑らかに縮小・拡大する
-        self._pix_item.setTransformationMode(
-            Qt.TransformationMode.SmoothTransformation
-        )
         self._apply_pixmap()
         self._orig_pixmap = self._src_pixmap
         self._update_grip_pos()

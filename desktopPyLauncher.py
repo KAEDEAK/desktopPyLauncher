@@ -648,15 +648,21 @@ class CanvasView(QGraphicsView):
         
         self.setAcceptDrops(True)
         self.viewport().setAcceptDrops(True)
-        self.setRenderHints(
-            self.renderHints()
-            | QPainter.RenderHint.Antialiasing
-            | QPainter.RenderHint.SmoothPixmapTransform
-        )
+        # 拡大率に応じて補間方法を切り替える
+        self._update_render_hints()
 
         # --- スクロールバー端到達時のシーン拡張 ---
         self.horizontalScrollBar().valueChanged.connect(self._on_hscroll)
         self.verticalScrollBar().valueChanged.connect(self._on_vscroll)
+
+    def _update_render_hints(self):
+        """Update rendering hints based on current zoom"""
+        hints = self.renderHints() | QPainter.RenderHint.Antialiasing
+        if self._zoom <= 1.0:
+            hints |= QPainter.RenderHint.SmoothPixmapTransform
+        else:
+            hints &= ~QPainter.RenderHint.SmoothPixmapTransform
+        self.setRenderHints(hints)
 
     def reset_zoom(self):
         """Reset view scale to 1.0"""
@@ -664,6 +670,7 @@ class CanvasView(QGraphicsView):
             factor = 1.0 / self._zoom
             self.scale(factor, factor)
             self._zoom = 1.0
+        self._update_render_hints()
         
     def toggle_water_effect(self, enabled):
         '''Water エフェクトのオン/オフ切り替え'''
@@ -1005,6 +1012,8 @@ class CanvasView(QGraphicsView):
         diff = new_pos - old_pos
         self.translate(diff.x(), diff.y())
 
+        self._update_render_hints()
+
         event.accept()
     # ----------------------------------------------
     #   何もない所をダブルクリック → ズーム 100 % に戻す
@@ -1023,6 +1032,7 @@ class CanvasView(QGraphicsView):
                 factor = 1.0 / self._zoom        # 元倍率へ戻す係数
                 self.scale(factor, factor)       # 行列を一気にリセット
                 self._zoom = 1.0
+            self._update_render_hints()
             event.accept()
         else:
             # アイテムの上なら既存挙動（選択など）を維持
