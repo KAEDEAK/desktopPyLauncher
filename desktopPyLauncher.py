@@ -872,6 +872,14 @@ class CanvasView(QGraphicsView):
                 ev.accept()
                 return
         super().mousePressEvent(ev)
+
+    def mouseReleaseEvent(self, ev):
+        """Middle button toggle for edit/run mode"""
+        if ev.button() == Qt.MouseButton.MiddleButton:
+            self.win.a_run.trigger()
+            ev.accept()
+            return
+        super().mouseReleaseEvent(ev)
         
     def _on_vscroll(self, value: int):
         vbar = self.verticalScrollBar()
