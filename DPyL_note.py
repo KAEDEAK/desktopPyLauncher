@@ -72,14 +72,19 @@ NOTE_MODE_EDIT  = 2
 # =====================================================================
 class NoteItem(CanvasItem):
     TYPE_NAME = "note"
+    
+    def _clean_path(self, path: str) -> str:
+        """strip spaces and surrounding quotes"""
+        return path.strip().strip('"').strip()
+    
     @property
     def path(self) -> str:
         return getattr(self, "_path", "")
 
     @path.setter
     def path(self, value: str):
-        self._path = value
-        self.d["path"] = value
+        self._path = self._clean_path(value)
+        self.d["path"] = self._path
 
     def __init__(self, d: dict[str, Any] | None = None, cb_resize=None):
         super().__init__(d, cb_resize)
@@ -111,7 +116,7 @@ class NoteItem(CanvasItem):
             self.fill_bg: bool = self.d.get("fill_background", True)
             
             # ファイル読み込み
-            self._path: str = self.d.get("path", "")
+            self._path: str = self._clean_path(self.d.get("path", ""))
             self.watch_file: bool = self.d.get("watch_file", False)
             self.reverse_lines: bool = self.d.get("reverse_lines", False)
             self.line_limit: int = int(self.d.get("line_limit", 100))
@@ -587,8 +592,11 @@ class NoteItem(CanvasItem):
         try:
             self.load_from_file()
             self._apply_text()
-            if self._file_watcher and self.path not in self._file_watcher.files():
-                self._file_watcher.addPath(self.path)
+            # パスの重複を防ぐために、既に監視されているかチェック
+            if self._file_watcher and self.path:
+                watched_files = self._file_watcher.files()
+                if self.path not in watched_files:
+                    self._file_watcher.addPath(self.path)
         except Exception as e:
             warn(f"[NoteItem] reload failed: {e}")
             self._schedule_watch_retry()
@@ -913,7 +921,7 @@ class NoteEditDialog(QDialog):
         self.item = item
         self.d = item.d
         # 現在読み込まれているパスを保持
-        self._orig_path = self.d.get("path", "").strip()
+        self._orig_path = self._clean_path(self.d.get("path", ""))
         self._loaded_path = self._orig_path        
        
         self.setWindowTitle("Note 設定")
@@ -1150,7 +1158,7 @@ class NoteEditDialog(QDialog):
         self.d["bgcolor"] = self.ed_bg.text().strip() or NOTE_BG_COLOR
         self.d["fontsize"] = self.spin_font.value()
         self.d["color"] = self.ed_color.text().strip() or "#ffffff"
-        self.d["path"] = self.ed_path.text().strip()
+        self.d["path"] = self._clean_path(self.ed_path.text())
         self.d["watch_file"] = self.chk_watch.isChecked()
         self.d["reverse_lines"] = self.chk_reverse.isChecked()
         self.d["line_limit"] = self.spin_limit.value()

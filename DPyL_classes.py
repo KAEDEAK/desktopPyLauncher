@@ -272,6 +272,125 @@ class CanvasItem(QGraphicsItemGroup):
         # グループ自身は描画しない
         return None
 
+    def _scale_pixmap_with_quality_base_CUSTOM(self, pixmap: QPixmap, target_w: int, target_h: int) -> QPixmap:
+        """
+        プラットフォーム非依存の高品質ピクスマップスケーリング
+        Windowsでも確実に動作する独自の高品質アルゴリズム
+        """
+        if pixmap.isNull():
+            return pixmap
+            
+        src_w, src_h = pixmap.width(), pixmap.height()
+        
+        # アスペクト比を保持して拡張するサイズを計算
+        src_ratio = src_w / src_h
+        tgt_ratio = target_w / target_h
+        
+        if src_ratio > tgt_ratio:
+            scale_w = target_w
+            scale_h = int(target_w / src_ratio)
+        else:
+            scale_h = target_h
+            scale_w = int(target_h * src_ratio)
+        
+        # 縮小比率を計算
+        scale_factor_x = scale_w / src_w
+        scale_factor_y = scale_h / src_h
+        
+        # 縮小時は独自の高品質アルゴリズムを使用
+        if scale_factor_x < 1.0 or scale_factor_y < 1.0:
+            return self._custom_high_quality_downscale_CUSTOM(pixmap, scale_w, scale_h)
+        else:
+            # 拡大時は標準のスムーズスケーリング
+            return pixmap.scaled(
+                scale_w, scale_h,
+                Qt.AspectRatioMode.IgnoreAspectRatio,
+                Qt.TransformationMode.SmoothTransformation
+            )
+    
+    def _custom_high_quality_downscale_CUSTOM(self, pixmap: QPixmap, target_w: int, target_h: int) -> QPixmap:
+        """
+        実用的な高品質縮小アルゴリズム
+        段階的縮小 + QPainter高品質レンダリングの組み合わせ
+        """
+        src_w, src_h = pixmap.width(), pixmap.height()
+        current = pixmap
+        
+        # 段階的縮小（75%ずつ、より滑らか）
+        curr_w, curr_h = src_w, src_h
+        while curr_w > target_w * 1.5 or curr_h > target_h * 1.5:
+            curr_w = max(target_w, int(curr_w * 0.75))
+            curr_h = max(target_h, int(curr_h * 0.75))
+            
+            # QPainterを使った高品質レンダリング
+            scaled_pixmap = QPixmap(curr_w, curr_h)
+            scaled_pixmap.fill(Qt.GlobalColor.transparent)
+            
+            painter = QPainter(scaled_pixmap)
+            painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+            painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, True)
+            
+            # 高品質描画
+            painter.drawPixmap(
+                0, 0, curr_w, curr_h,
+                current, 
+                0, 0, current.width(), current.height()
+            )
+            painter.end()
+            
+            current = scaled_pixmap
+        
+        # 最終調整（目標サイズぴったりに）
+        if current.width() != target_w or current.height() != target_h:
+            final_pixmap = QPixmap(target_w, target_h)
+            final_pixmap.fill(Qt.GlobalColor.transparent)
+            
+            painter = QPainter(final_pixmap)
+            painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+            painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, True)
+            
+            painter.drawPixmap(
+                0, 0, target_w, target_h,
+                current,
+                0, 0, current.width(), current.height()
+            )
+            painter.end()
+            
+            current = final_pixmap
+            
+        return current
+
+    def _scale_pixmap_with_quality_base(self, pixmap: QPixmap, target_w: int, target_h: int) -> QPixmap:
+        """
+        Qt標準のスケーリング（現在有効）
+        LODシステムと組み合わせてQt標準の品質をテスト
+        
+        カスタム版に切り替える場合:
+        return self._scale_pixmap_with_quality_base_CUSTOM(pixmap, target_w, target_h)
+        """
+        if pixmap.isNull():
+            return pixmap
+            
+        src_w, src_h = pixmap.width(), pixmap.height()
+        
+        # アスペクト比を保持して拡張するサイズを計算
+        src_ratio = src_w / src_h
+        tgt_ratio = target_w / target_h
+        
+        if src_ratio > tgt_ratio:
+            scale_w = target_w
+            scale_h = int(target_w / src_ratio)
+        else:
+            scale_h = target_h
+            scale_w = int(target_h * src_ratio)
+        
+        # Qt標準のSmoothTransformationを使用
+        return pixmap.scaled(
+            scale_w, scale_h,
+            Qt.AspectRatioMode.IgnoreAspectRatio,
+            Qt.TransformationMode.SmoothTransformation
+        )
+
     # CanvasItem _apply_pixmap
     def _apply_pixmap(self) -> None:
         """
@@ -306,14 +425,10 @@ class CanvasItem(QGraphicsItemGroup):
         # オリジナルを保持
         self._src_pixmap = pix.copy()
 
-        # 3) サイズ指定でスケーリング（cover）
+        # 3) サイズ指定でスケーリング（cover）- 高品質スケーリング使用
         tgt_w = int(self.d.get("width", pix.width()))
         tgt_h = int(self.d.get("height", pix.height()))
-        scaled = self._src_pixmap.scaled(
-            tgt_w, tgt_h,
-            Qt.AspectRatioMode.KeepAspectRatioByExpanding,
-            Qt.TransformationMode.SmoothTransformation
-        )
+        scaled = self._scale_pixmap_with_quality_base(self._src_pixmap, tgt_w, tgt_h)
         crop_x = max(0, (scaled.width() - tgt_w) // 2)
         crop_y = max(0, (scaled.height() - tgt_h) // 2)
         pix = scaled.copy(crop_x, crop_y, tgt_w, tgt_h)
@@ -640,12 +755,33 @@ class GifMixin:
         scaled_w = int(orig_w * scale)
         scaled_h = int(orig_h * scale)
         
-        # スケーリング実行
-        scaled = frame.scaled(
-            scaled_w, scaled_h,
-            Qt.AspectRatioMode.IgnoreAspectRatio,  # 計算済みなので比率は無視
-            Qt.TransformationMode.SmoothTransformation,
-        )
+        # 高品質スケーリング実行 - QImage経由でより美しく
+        image = frame.toImage()
+        if not image.isNull():
+            scaled_image = image.scaled(
+                scaled_w, scaled_h,
+                Qt.AspectRatioMode.IgnoreAspectRatio,
+                Qt.TransformationMode.SmoothTransformation
+            )
+            
+            # 縮小時はQPainterで追加の品質向上
+            if scaled_w < orig_w or scaled_h < orig_h:
+                scaled = QPixmap(scaled_w, scaled_h)
+                scaled.fill(Qt.GlobalColor.transparent)
+                painter = QPainter(scaled)
+                painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+                painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, True)
+                painter.drawImage(0, 0, scaled_image)
+                painter.end()
+            else:
+                scaled = QPixmap.fromImage(scaled_image)
+        else:
+            # フォールバック
+            scaled = frame.scaled(
+                scaled_w, scaled_h,
+                Qt.AspectRatioMode.IgnoreAspectRatio,
+                Qt.TransformationMode.SmoothTransformation,
+            )
         
         # 中央部分をクロップ（はみ出した部分を切り取り）
         cx = max(0, (scaled_w - tgt_w) // 2)
@@ -780,6 +916,12 @@ class LauncherItem(GifMixin, CanvasItem):
         
         # ピクスマップアイテム
         self._pix_item = QGraphicsPixmapItem(parent=self)
+        self._pix_item.setTransformationMode(Qt.TransformationMode.SmoothTransformation)
+        
+        # LOD (Level of Detail) を有効にしてキャンバスズーム時の品質向上
+        self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemUsesExtendedStyleOption, True)
+        self._current_lod_scale = 1.0
+        
         self._refresh_icon()
         
     @property
@@ -939,12 +1081,8 @@ class LauncherItem(GifMixin, CanvasItem):
         self.d["width"], self.d["height"] = tgt_w, tgt_h
 
     def _apply_scaling_and_crop(self, pix: QPixmap, tgt_w: int, tgt_h: int) -> QPixmap:
-        """スケーリングとクロップ処理"""
-        scaled = pix.scaled(
-            tgt_w, tgt_h,
-            Qt.AspectRatioMode.KeepAspectRatioByExpanding,
-            Qt.TransformationMode.SmoothTransformation
-        )
+        """スケーリングとクロップ処理 - 高品質スケーリング使用"""
+        scaled = self._scale_pixmap_with_quality_base(pix, tgt_w, tgt_h)
         crop_x = max(0, (scaled.width() - tgt_w) // 2)
         crop_y = max(0, (scaled.height() - tgt_h) // 2)
         return scaled.copy(crop_x, crop_y, tgt_w, tgt_h)
@@ -1000,6 +1138,51 @@ class LauncherItem(GifMixin, CanvasItem):
             
         self._rect_item.setRect(0, 0, w, h)
         self._update_grip_pos()
+
+    def paint(self, painter, option, widget=None):
+        """
+        カスタムペイント - LOD (Level of Detail) 実装
+        キャンバスズーム時に動的にアイコン品質を調整
+        """
+        # 現在のスケール因子を取得
+        current_scale = option.levelOfDetailFromTransform(painter.worldTransform())
+        
+        # スケール因子が大きく変わった場合のみピクスマップを再生成
+        scale_threshold = 0.2  # 20%以上の変化で再生成
+        if abs(current_scale - self._current_lod_scale) > scale_threshold:
+            self._current_lod_scale = current_scale
+            self._update_icon_for_lod(current_scale)
+        
+        # 標準の描画処理
+        super().paint(painter, option, widget)
+    
+    def _update_icon_for_lod(self, scale_factor):
+        """
+        LOD用のアイコン更新
+        キャンバスのスケール因子に応じて最適な解像度のアイコンを生成
+        """
+        if not hasattr(self, '_src_pixmap') or not self._src_pixmap or self._src_pixmap.isNull():
+            return
+            
+        # 現在の表示サイズ
+        current_w = int(self.d.get("width", ICON_SIZE))
+        current_h = int(self.d.get("height", ICON_SIZE))
+        
+        # スケール因子を考慮した最適サイズを計算
+        optimal_w = max(16, int(current_w * scale_factor))  # 最小16px
+        optimal_h = max(16, int(current_h * scale_factor))
+        
+        # 最適スケーリング実行
+        scaled = self._apply_scaling_and_crop(self._src_pixmap, optimal_w, optimal_h)
+        
+        # 表示サイズに最終調整
+        if scaled.width() != current_w or scaled.height() != current_h:
+            scaled = self._apply_scaling_and_crop(scaled, current_w, current_h)
+        
+        # 明るさ調整適用
+        final_pix = self._apply_brightness_to_pixmap(scaled)
+        
+        self._pix_item.setPixmap(final_pix)
 
     def mousePressEvent(self, ev):
         """
@@ -1132,9 +1315,17 @@ class LauncherItem(GifMixin, CanvasItem):
         # --- フォルダなら explorer で開く ---
         if os.path.isdir(path):
             try:
-                os.startfile(path)
+                # ディレクトリの場合は明示的にexplorerコマンドを使用して開く
+                # これにより同名のバッチファイルが誤って実行されることを防ぐ
+                import subprocess
+                subprocess.run(['explorer', path], check=False)
             except Exception as e:
                 warn(f"[LauncherItem] フォルダオープン失敗: {e}")
+                # フォールバック: 従来の方法を試す
+                try:
+                    os.startfile(path)
+                except Exception as e2:
+                    warn(f"[LauncherItem] フォルダオープン(フォールバック)失敗: {e2}")
             return
 
         ext = Path(path).suffix.lower()
@@ -1308,9 +1499,30 @@ class ImageItem(CanvasItem):
         self.path = self.d.get("path", "")
         # 古いembedフィールドは使用しない
         self._pix_item = QGraphicsPixmapItem(parent=self)
+        # QGraphicsPixmapItemにスムーズトランスフォームを設定
+        self._pix_item.setTransformationMode(Qt.TransformationMode.SmoothTransformation)
+        
+        # LOD (Level of Detail) を有効にしてキャンバスズーム時の品質向上
+        self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemUsesExtendedStyleOption, True)
+        
         self._apply_pixmap()
         self._orig_pixmap = self._src_pixmap
         self._update_grip_pos()
+        
+        # 現在のスケール因子を追跡
+        self._current_lod_scale = 1.0
+
+    def _scale_pixmap_with_quality_CUSTOM(self, pixmap: QPixmap, target_w: int, target_h: int) -> QPixmap:
+        """
+        高品質なピクスマップスケーリング - ImageItem用カスタム版（テスト用に無効化）
+        """
+        return self._scale_pixmap_with_quality_base_CUSTOM(pixmap, target_w, target_h)
+    
+    def _scale_pixmap_with_quality(self, pixmap: QPixmap, target_w: int, target_h: int) -> QPixmap:
+        """
+        高品質なピクスマップスケーリング - ImageItem用（現在Qt標準版を使用）
+        """
+        return self._scale_pixmap_with_quality_base(pixmap, target_w, target_h)
 
     def _apply_pixmap(self):
         """画像を適用 - 新フィールド対応"""
@@ -1333,12 +1545,8 @@ class ImageItem(CanvasItem):
         tgt_w = int(self.d.get("width", pix.width()))
         tgt_h = int(self.d.get("height", pix.height()))
         
-        # スケーリング処理
-        scaled = self._src_pixmap.scaled(
-            tgt_w, tgt_h,
-            Qt.AspectRatioMode.KeepAspectRatioByExpanding,
-            Qt.TransformationMode.SmoothTransformation
-        )
+        # スケーリング処理 - 縮小時は平均近傍を使用
+        scaled = self._scale_pixmap_with_quality(self._src_pixmap, tgt_w, tgt_h)
         crop_x = max(0, (scaled.width()  - tgt_w) // 2)
         crop_y = max(0, (scaled.height() - tgt_h) // 2)
         pix = scaled.copy(crop_x, crop_y, tgt_w, tgt_h)
@@ -1370,15 +1578,85 @@ class ImageItem(CanvasItem):
         self._pix_item.setPixmap(pix)
         self._rect_item.setRect(0, 0, tgt_w, tgt_h)
 
+    def paint(self, painter, option, widget=None):
+        """
+        カスタムペイント - LOD (Level of Detail) 実装
+        キャンバスズーム時に動的にピクスマップ品質を調整
+        """
+        # 現在のスケール因子を取得
+        current_scale = option.levelOfDetailFromTransform(painter.worldTransform())
+        
+        # スケール因子が大きく変わった場合のみピクスマップを再生成
+        scale_threshold = 0.2  # 20%以上の変化で再生成
+        if abs(current_scale - self._current_lod_scale) > scale_threshold:
+            self._current_lod_scale = current_scale
+            self._update_pixmap_for_lod(current_scale)
+        
+        # 標準の描画処理
+        super().paint(painter, option, widget)
+    
+    def _update_pixmap_for_lod(self, scale_factor):
+        """
+        LOD用のピクスマップ更新
+        キャンバスのスケール因子に応じて最適な解像度のピクスマップを生成
+        """
+        if not hasattr(self, '_src_pixmap') or self._src_pixmap.isNull():
+            return
+            
+        # 現在の表示サイズ
+        current_w = int(self.d.get("width", 200))
+        current_h = int(self.d.get("height", 200))
+        
+        # スケール因子を考慮した最適サイズを計算
+        optimal_w = max(32, int(current_w * scale_factor))  # 最小32px
+        optimal_h = max(32, int(current_h * scale_factor))
+        
+        # 元画像からの最適スケーリング実行
+        scaled = self._scale_pixmap_with_quality(self._src_pixmap, optimal_w, optimal_h)
+        
+        # 表示サイズに最終調整
+        if scaled.width() != current_w or scaled.height() != current_h:
+            final_scaled = scaled.scaled(
+                current_w, current_h,
+                Qt.AspectRatioMode.KeepAspectRatioByExpanding,
+                Qt.TransformationMode.SmoothTransformation
+            )
+            crop_x = max(0, (final_scaled.width() - current_w) // 2)
+            crop_y = max(0, (final_scaled.height() - current_h) // 2)
+            scaled = final_scaled.copy(crop_x, crop_y, current_w, current_h)
+        
+        # 明るさ調整
+        bri = self.brightness
+        if bri is not None and bri != 50:
+            level = bri - 50
+            alpha = int(abs(level) / 50 * 255)
+            overlay = QPixmap(scaled.size())
+            overlay.fill(Qt.GlobalColor.transparent)
+            painter = QPainter(overlay)
+            col = QColor(255,255,255,alpha) if level>0 else QColor(0,0,0,alpha)
+            painter.fillRect(overlay.rect(), col)
+            painter.end()
+            
+            result = QPixmap(scaled.size())
+            result.fill(Qt.GlobalColor.transparent)
+            painter = QPainter(result)
+            painter.drawPixmap(0, 0, scaled)
+            painter.setCompositionMode(
+                QPainter.CompositionMode.CompositionMode_SourceOver if level > 0
+                else QPainter.CompositionMode.CompositionMode_Multiply
+            )
+            painter.drawPixmap(0, 0, overlay)
+            painter.end()
+            scaled = result
+        
+        self._pix_item.setPixmap(scaled)
+
     def resize_content(self, w: int, h: int):
         src = getattr(self, "_src_pixmap", None)
         if not src or src.isNull():
             return
-        scaled = src.scaled(
-            w, h,
-            Qt.AspectRatioMode.KeepAspectRatioByExpanding,
-            Qt.TransformationMode.SmoothTransformation
-        )
+        # 高品質スケーリングを使用
+        scaled = self._scale_pixmap_with_quality(src, w, h)
         cx = max(0, (scaled.width()  - w) // 2)
         cy = max(0, (scaled.height() - h) // 2)
         pm = scaled.copy(cx, cy, w, h)

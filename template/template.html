@@ -3,12 +3,25 @@
 <head>
 <meta charset="utf-8">
 <title><!-- title --></title>
+<!-- 
+===== TEMPLATE METADATA =====
+Template Version: 1.1-improved
+Template Date: 2025-07-12
+Improvements: Enhanced reproducibility, better placeholder handling, metadata support
+Compatible with: desktopPyLauncher data format v1.1
+============================
+-->
 <!-- Google Fonts: Noto Sans JP -->
 <!--
-  データフォーマット version 1.1 用のテンプレートです。
+  データフォーマット version 1.1 用のテンプレートです（再現性向上版）。
   長いノートには対応していません。line-heightなどが異なるためです。
   一応表示はできますが、枠でテキストを囲んだり、矢印で単語等を示してもずれます。
   ずれないようにするには、短いノートを作って、そのノート自体を枠で囲ったりしてください。
+  
+  改善点:
+  - プレースホルダー処理の安全性向上
+  - エクスポートメタデータの記録
+  - より正確なレンダリング
 //-->
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -1048,6 +1061,27 @@ function addArrow(d) {
   attachOpenUrl(el, d.path);
 }
 
+/**
+ * エクスポートメタデータの表示
+ */
+function displayExportMetadata(data) {
+  const metadata = data._export_metadata;
+  if (metadata) {
+    console.log("=== Export Metadata ===");
+    console.log("Export Timestamp:", metadata.export_timestamp);
+    console.log("Template Version:", metadata.template_version);
+    console.log("Application Version:", metadata.application_version);
+    console.log("Source Project:", metadata.source_project);
+    console.log("Template Embedded:", metadata.template_embedded);
+    console.log("=====================");
+    
+    // HTMLにもメタデータを表示（オプション）
+    if (metadata.template_embedded) {
+      document.title = `${document.title} (Exported: ${metadata.export_timestamp})`;
+    }
+  }
+}
+
 // イベントリスナーの設定
 document.addEventListener("DOMContentLoaded", () => {
   wrapper.addEventListener("mousedown", onDragStart);
@@ -1063,6 +1097,10 @@ document.addEventListener("DOMContentLoaded", () => {
     const jsonElement = document.getElementById("jsonData");
     if (jsonElement && jsonElement.textContent.trim()) {
       const data = JSON.parse(jsonElement.textContent);
+      
+      // エクスポートメタデータの表示
+      displayExportMetadata(data);
+      
       buildUI(data);
     }
   } catch (err) {

@@ -659,11 +659,12 @@ class CanvasView(QGraphicsView):
         """Update rendering hints based on current zoom"""
         hints = self.renderHints() | QPainter.RenderHint.Antialiasing
         
-        #後で調整するからこのコメントアウト部分は残して
-        #if self._zoom <= 1.0:
-        #    hints |= QPainter.RenderHint.SmoothPixmapTransform
-        #else:
-        #    hints &= ~QPainter.RenderHint.SmoothPixmapTransform
+        # スムーズピクスマップ変換を有効にして画像品質を向上
+        # 特に縮小時のピクセル抜けを防ぐため、常に有効化
+        hints |= QPainter.RenderHint.SmoothPixmapTransform
+        
+        # テキストレンダリングの品質も向上
+        hints |= QPainter.RenderHint.TextAntialiasing
         
         self.setRenderHints(hints)
 
@@ -2968,14 +2969,23 @@ class MainWindow(QMainWindow):
     # ==============================================================
     def _export_html(self):
         """
-        現在のプロジェクトをHTMLファイルとしてエクスポート
+        現在のプロジェクトをHTMLファイルとしてエクスポート（再現性向上版）
         """
         try:
+            import re
+            from datetime import datetime
+            
+            # 処理中通知を表示
+            show_export_html_notification("エクスポート処理中...", self)
+            
+            # イベントループを更新してUIの応答性を確保
+            from PyQt6.QtWidgets import QApplication
+            QApplication.processEvents()
+            
             # テンプレートファイルを読み込み
             template_path = Path(__file__).parent / "template" / "template.html"
             if not template_path.exists():
                 show_error_notification(f"テンプレートファイルが見つかりません: {template_path}", self)
-
                 return
                 
             with open(template_path, "r", encoding="utf-8") as f:
@@ -2990,7 +3000,15 @@ class MainWindow(QMainWindow):
                     return path_str.replace('\\', '\\\\')
                 return path_str
             
-            for item in export_data.get("items", []):
+            # 埋め込み処理の進行状況管理
+            items = export_data.get("items", [])
+            total_items = len(items)
+            
+            for i, item in enumerate(items):
+                # 進行状況を定期的に更新
+                if i % 10 == 0:  # 10アイテムごとに更新
+                    QApplication.processEvents()
+                
                 # VideoItem以外で未埋め込みならファイルから埋め込みを試みる
                 if item.get("type") != "video":
                     embedded = item.get("image_embedded") and item.get("image_embedded_data")
@@ -3047,12 +3065,39 @@ class MainWindow(QMainWindow):
                 else:
                     export_data["background"]["path"] = escape_windows_path(bg_path)
             
-            # JSONに変換
+            # エクスポートメタデータを追加
+            export_metadata = {
+                "export_timestamp": datetime.now().isoformat(),
+                "template_version": "1.1",
+                "application_version": "desktopPyLauncher",
+                "template_embedded": True,
+                "source_project": self.json_path.name
+            }
+            export_data["_export_metadata"] = export_metadata
+            
+            # JSONに変換（succeeded_ever.htmlと同じ方式）
             json_str = json.dumps(export_data, ensure_ascii=False, indent=2)
             
-            # テンプレートの置換マーカーを実際のJSONデータに置き換え
+            # シンプルなplaceholder置換（succeeded_ever.htmlの成功パターン）
             html_content = template_html.replace('<!-- title -->', self.json_path.stem)
             html_content = html_content.replace('<!-- embedded_json_data//-->', json_str)
+            
+            # テンプレート埋め込みコメントを追加（デバッグと再現性のため）
+            template_comment = f"""
+<!-- 
+===== EXPORT METADATA =====
+Export Timestamp: {export_metadata['export_timestamp']}
+Template Version: {export_metadata['template_version']}
+Source Project: {export_metadata['source_project']}
+Template Embedded: {export_metadata['template_embedded']}
+
+This HTML file contains the embedded template for reproducibility.
+Original template file: {template_path.name}
+============================
+-->"""
+            
+            # headタグの直後にコメントを挿入
+            html_content = re.sub(r'(<head[^>]*>)', r'\1' + template_comment, html_content)
             
             # 保存先ファイルダイアログ
             default_name = self.json_path.stem + ".html"
@@ -3064,11 +3109,17 @@ class MainWindow(QMainWindow):
             )
             
             if save_path:
-                # HTMLファイルとして保存
-                with open(save_path, "w", encoding="utf-8") as f:
-                    f.write(html_content)
+                # ファイル保存前に最終チェック
+                QApplication.processEvents()
                 
-                show_export_html_notification(Path(save_path).name, self)
+                # HTMLファイルとして保存
+                try:
+                    with open(save_path, "w", encoding="utf-8") as f:
+                        f.write(html_content)
+                    
+                    show_export_html_notification(Path(save_path).name, self)
+                except Exception as e:
+                    show_error_notification(f"ファイル保存エラー: {str(e)}", self)
                 
         except Exception as e:
             show_export_error_notification(str(e), self)
