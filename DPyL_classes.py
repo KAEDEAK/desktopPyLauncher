@@ -821,9 +821,15 @@ class LauncherItem(GifMixin, CanvasItem):
     EXE_LIKE    = (".exe", ".com", ".jar", ".msi")
     EDITABLE_LIKE = (".txt", ".json", ".yaml", ".yml", ".md", ".bat", ".ini")
     SHORTCUT_LIKE = (".lnk", ".url")
+    
+    # ターミナルとLauncherItemの近接判定距離の定数
+    PROXIMITY_DISTANCE = 1000.0  # 1000px範囲
 
     @classmethod
     def supports_path(cls, path: str) -> bool:
+        # Windows では forward slash を backslash に正規化
+        if os.name == 'nt':
+            path = os.path.normpath(path)
         ext = Path(path).suffix.lower()
         # JSONプロジェクトファイルは除外
         if ext == ".json":
@@ -844,6 +850,9 @@ class LauncherItem(GifMixin, CanvasItem):
 
     @classmethod
     def create_from_path(cls, path: str, sp, win):
+        # Windows では forward slash を backslash に正規化
+        if os.name == 'nt':
+            path = os.path.normpath(path)
         ext = Path(path).suffix.lower()
         d = {
             "type": "launcher",
@@ -890,7 +899,11 @@ class LauncherItem(GifMixin, CanvasItem):
                 d["path"] = path
         else:
             d["path"] = path
-            d["workdir"] = str(Path(path).parent)
+            workdir = str(Path(path).parent)
+            # Windows では forward slash を backslash に正規化
+            if os.name == 'nt':
+                workdir = os.path.normpath(workdir)
+            d["workdir"] = workdir
 
         return cls(d, win.text_color), d
 
@@ -1310,6 +1323,10 @@ class LauncherItem(GifMixin, CanvasItem):
             warn("[LauncherItem] path が設定されていません")
             return
         
+        # Windows では forward slash を backslash に正規化
+        if os.name == 'nt':
+            path = os.path.normpath(path)
+        
         warn(f"on_activate: {path}")
         
         # --- フォルダなら explorer で開く ---
@@ -1362,6 +1379,9 @@ class LauncherItem(GifMixin, CanvasItem):
         workdir = (self.d.get("workdir") or "").strip()
         if not workdir:
             workdir = str(Path(path).parent)
+        # Windows では forward slash を backslash に正規化
+        if os.name == 'nt':
+            workdir = os.path.normpath(workdir)
         workdir = os.path.abspath(workdir)
 
         # CWD を workdir にスワップ（os.startfile 用）
@@ -1376,6 +1396,16 @@ class LauncherItem(GifMixin, CanvasItem):
 
         try:
             is_edit = self.d.get("is_editable", False)
+            
+            # --- バッチファイル・PowerShellスクリプトの最寄りターミナル実行 ---
+            if ext in ('.bat', '.cmd', '.ps1') and not is_edit:
+                warn(f"[LauncherItem] ターミナル実行を試行: {path}")
+                # 最寄りのターミナルで実行を試行
+                if self.execute_in_nearest_terminal():
+                    warn(f"[LauncherItem] ターミナルで実行成功: {path}")
+                    return
+                warn(f"[LauncherItem] ターミナル実行失敗、フォールバック: {path}")
+                # 失敗した場合は従来の実行方法にフォールバック
 
             # --- Pythonスクリプト ---
             if ext == ".py" and not is_edit:
@@ -1451,6 +1481,477 @@ class LauncherItem(GifMixin, CanvasItem):
             if cwd_changed:
                 os.chdir(orig_cwd)
     
+    def execute_in_nearest_terminal(self):
+        """最寄りのターミナルでファイルを実行"""
+        try:
+            warn("[LauncherItem] execute_in_nearest_terminal 開始")
+            # キャンバス上の全アイテムから最寄りのターミナルを検索
+            nearest_terminal = self._find_nearest_terminal()
+            if not nearest_terminal:
+                warn("[LauncherItem] 最寄りのターミナルが見つかりません")
+                return False
+            
+            warn(f"[LauncherItem] 最寄りターミナル発見: {nearest_terminal.__class__.__name__}")
+            
+            # 拡張子に応じたターミナル種別の判定
+            path = self.d.get("path", "")
+            # Windows では forward slash を backslash に正規化
+            if os.name == 'nt':
+                path = os.path.normpath(path)
+            ext = Path(path).suffix.lower()
+            
+            # 拡張子とターミナル種別のマッピング
+            required_terminal_type = self._get_required_terminal_type(ext)
+            if not required_terminal_type:
+                warn(f"[LauncherItem] 対応していない拡張子です: {ext}")
+                return False
+            
+            # ターミナルの種別が一致するかチェック
+            terminal_type = getattr(nearest_terminal, 'terminal_type', None) or \
+                           nearest_terminal.d.get('terminal_type', 'cmd')
+            
+            if not self._is_compatible_terminal(required_terminal_type, terminal_type):
+                warn(f"[LauncherItem] ターミナル種別が一致しません: 必要={required_terminal_type}, 現在={terminal_type}")
+                return False
+            
+            # ターミナルでファイルを実行
+            return self._execute_in_terminal(nearest_terminal, path)
+            
+        except Exception as e:
+            warn(f"[LauncherItem] execute_in_nearest_terminal エラー: {e}")
+            return False
+    
+    def _find_nearest_terminal(self):
+        """最寄りのターミナルアイテムを検索"""
+        try:
+            scene = self.scene()
+            if not scene:
+                warn("[LauncherItem] シーンが見つかりません")
+                return None
+            
+            my_pos = self.pos()
+            my_center = QPointF(my_pos.x() + self.d.get("width", 32)/2, 
+                               my_pos.y() + self.d.get("height", 32)/2)
+            
+            warn(f"[LauncherItem] 自分の位置: {my_center.x()}, {my_center.y()}")
+            
+            nearest_terminal = None
+            min_distance = float('inf')
+            terminal_count = 0
+            
+            # 全てのアイテムをチェック
+            for item in scene.items():
+                # ターミナル系アイテムかチェック
+                if self._is_terminal_item(item):
+                    terminal_count += 1
+                    item_pos = item.pos()
+                    item_center = QPointF(item_pos.x() + getattr(item.d, 'get', lambda k, d: d)("width", 100)/2,
+                                         item_pos.y() + getattr(item.d, 'get', lambda k, d: d)("height", 100)/2)
+                    
+                    # 距離を計算
+                    distance = ((my_center.x() - item_center.x()) ** 2 + 
+                              (my_center.y() - item_center.y()) ** 2) ** 0.5
+                    
+                    warn(f"[LauncherItem] ターミナル {item.__class__.__name__} 位置: {item_center.x()}, {item_center.y()}, 距離: {distance}")
+                    
+                    # 近接距離内で最も近いものを選択
+                    if distance <= self.PROXIMITY_DISTANCE and distance < min_distance:
+                        min_distance = distance
+                        nearest_terminal = item
+                        warn(f"[LauncherItem] 新しい最寄りターミナル: {item.__class__.__name__}, 距離: {distance}")
+            
+            warn(f"[LauncherItem] 見つかったターミナル数: {terminal_count}")
+            if nearest_terminal:
+                warn(f"[LauncherItem] 最終選択ターミナル: {nearest_terminal.__class__.__name__}, 距離: {min_distance}")
+            
+            return nearest_terminal
+            
+        except Exception as e:
+            warn(f"[LauncherItem] _find_nearest_terminal エラー: {e}")
+            return None
+    
+    def _is_terminal_item(self, item):
+        """アイテムがターミナルかどうかを判定"""
+        try:
+            # TYPE_NAMEで判定
+            type_name = getattr(item, 'TYPE_NAME', None)
+            class_name = item.__class__.__name__
+            
+            warn(f"[LauncherItem] アイテムチェック: {class_name}, TYPE_NAME: {type_name}")
+            
+            if type_name in ['embedded_terminal', 'terminal_manager', 'terminal', 'command']:
+                warn(f"[LauncherItem] TYPE_NAMEでターミナル判定: {type_name}")
+                return True
+            
+            # クラス名で判定
+            if any(keyword in class_name.lower() for keyword in ['terminal', 'cmd', 'command']):
+                warn(f"[LauncherItem] クラス名でターミナル判定: {class_name}")
+                return True
+            
+            return False
+            
+        except Exception as e:
+            warn(f"[LauncherItem] _is_terminal_item エラー: {e}")
+            return False
+    
+    def _get_required_terminal_type(self, ext):
+        """拡張子に応じて必要なターミナル種別を返す"""
+        if ext in ('.bat', '.cmd'):
+            return 'cmd'
+        elif ext == '.ps1':
+            return 'powershell'
+        else:
+            return None  # 対応していない拡張子
+    
+    def _is_compatible_terminal(self, required_type, terminal_type):
+        """ターミナル種別の互換性をチェック"""
+        if required_type == terminal_type:
+            return True
+        
+        # PowerShellはcmdコマンドも実行可能
+        if required_type == 'cmd' and terminal_type in ['powershell', 'pwsh']:
+            return True
+        
+        return False
+    
+    def _execute_in_terminal(self, terminal_item, file_path):
+        """指定されたターミナルでファイルを実行"""
+        try:
+            # ターミナルタイプを確認
+            terminal_type = getattr(terminal_item, 'terminal_type', None) or \
+                           terminal_item.d.get('terminal_type', 'cmd')
+            warn(f"[LauncherItem] ターミナルタイプ: {terminal_type}")
+            
+            # バッチファイル実行用に専用メソッドを追加
+            if hasattr(terminal_item, 'execute_file_in_terminal'):
+                warn("[LauncherItem] execute_file_in_terminalメソッド使用")
+                return terminal_item.execute_file_in_terminal(file_path)
+            
+            # TerminalItemに動的にメソッドを追加
+            self._add_execute_method_to_terminal(terminal_item)
+            
+            if hasattr(terminal_item, 'execute_file_in_terminal'):
+                warn("[LauncherItem] 動的追加したexecute_file_in_terminalメソッド使用")
+                return terminal_item.execute_file_in_terminal(file_path)
+            
+            # フォールバック: 従来の方法
+            warn("[LauncherItem] フォールバック: 従来の実行方法")
+            return False
+            
+        except Exception as e:
+            warn(f"[LauncherItem] _execute_in_terminal エラー: {e}")
+            return False
+    
+    def _add_execute_method_to_terminal(self, terminal_item):
+        """TerminalItemに実行メソッドを動的に追加"""
+        try:
+            def execute_file_in_terminal(file_path):
+                """ファイルをターミナルで直接実行"""
+                try:
+                    import subprocess
+                    from pathlib import Path
+                    
+                    # 作業ディレクトリを設定
+                    workdir = getattr(terminal_item, 'workdir', None) or \
+                             terminal_item.d.get('workdir', Path(file_path).parent)
+                    
+                    # ターミナルタイプに応じて実行
+                    terminal_type = getattr(terminal_item, 'terminal_type', None) or \
+                                   terminal_item.d.get('terminal_type', 'cmd')
+                    
+                    # ターミナルウィジェット内でファイルを直接実行
+                    if hasattr(terminal_item, '_terminal_widget'):
+                        widget = terminal_item._terminal_widget
+                        
+                        # 直接実行（TerminalItemの_on_command_executedを回避）
+                        try:
+                            from PyQt6.QtCore import QTimer
+                            import threading
+                            
+                            # 結果を保存する変数
+                            execution_result = {"completed": False, "output": "", "error": "", "returncode": 0}
+                            
+                            def run_in_background():
+                                try:
+                                    if terminal_type == "cmd":
+                                        # バッチファイルを直接実行（エンコーディング対応＋curl進捗無効化）
+                                        env = os.environ.copy()
+                                        env['CURL_PROGRESS_BAR'] = '0'  # curlの進捗バーを無効化
+                                        env['CURL_SILENT'] = '1'       # curlをサイレントモードに
+                                        result = subprocess.run(
+                                            [file_path],
+                                            cwd=workdir,
+                                            capture_output=True,
+                                            text=True,
+                                            shell=True,
+                                            timeout=60,
+                                            env=env,
+                                            encoding='utf-8',
+                                            errors='replace'  # デコードエラーを回避
+                                        )
+                                    elif terminal_type == "powershell":
+                                        # PowerShellでスクリプトを実行（エンコーディング対応）
+                                        result = subprocess.run(
+                                            ["powershell", "-ExecutionPolicy", "Bypass", "-File", file_path],
+                                            cwd=workdir,
+                                            capture_output=True,
+                                            text=True,
+                                            timeout=60,
+                                            encoding='utf-8',
+                                            errors='replace'
+                                        )
+                                    else:
+                                        # デフォルト実行（エンコーディング対応）
+                                        result = subprocess.run(
+                                            [file_path],
+                                            cwd=workdir,
+                                            capture_output=True,
+                                            text=True,
+                                            shell=True,
+                                            timeout=60,
+                                            encoding='utf-8',
+                                            errors='replace'
+                                        )
+                                    
+                                    # 結果を保存
+                                    execution_result["output"] = result.stdout
+                                    execution_result["error"] = result.stderr
+                                    execution_result["returncode"] = result.returncode
+                                    execution_result["completed"] = True
+                                    
+                                    # デバッグ情報
+                                    warn(f"[LauncherItem] 実行結果 - stdout: {repr(result.stdout)}")
+                                    warn(f"[LauncherItem] 実行結果 - stderr: {repr(result.stderr)}")
+                                    warn(f"[LauncherItem] 実行結果 - returncode: {result.returncode}")
+                                        
+                                except subprocess.TimeoutExpired:
+                                    execution_result["error"] = "Timeout: 実行時間が長すぎます"
+                                    execution_result["completed"] = True
+                                except Exception as bg_e:
+                                    execution_result["error"] = f"実行エラー: {bg_e}"
+                                    execution_result["completed"] = True
+                            
+                            # バックグラウンドで実行開始
+                            thread = threading.Thread(target=run_in_background)
+                            thread.daemon = True
+                            thread.start()
+                            
+                            # 定期的に結果をチェックしてUI更新
+                            def check_result():
+                                if execution_result["completed"]:
+                                    # 出力を一度に表示（プロンプトの重複を防ぐ）
+                                    all_output = ""
+                                    if execution_result["output"]:
+                                        stdout_content = execution_result["output"].strip()
+                                        warn(f"[LauncherItem] stdout処理前: {repr(stdout_content)}")
+                                        all_output += stdout_content
+                                    
+                                    if execution_result["error"]:
+                                        stderr_content = execution_result["error"]
+                                        warn(f"[LauncherItem] stderr処理前: {repr(stderr_content)}")
+                                        
+                                        # curlの進捗表示を完全にフィルタリング
+                                        error_lines = stderr_content.split('\n')
+                                        filtered_errors = []
+                                        for line in error_lines:
+                                            # curlの進捗表示を完全に除去
+                                            if not any(keyword in line for keyword in [
+                                                "% Total", "% Received", "% Xferd", "Average Speed",
+                                                "Dload", "Upload", "Total", "Spent", "Left", "Speed",
+                                                "--:--:--", "0:00:", "Current", "Time"
+                                            ]) and line.strip() and not line.strip().isspace():
+                                                # 空行や数字のみの行も除去
+                                                if not (line.strip().replace(' ', '').replace('0', '').replace('100', '') == ''):
+                                                    filtered_errors.append(line)
+                                        
+                                        filtered_error = '\n'.join(filtered_errors).strip()
+                                        warn(f"[LauncherItem] stderr処理後: {repr(filtered_error)}")
+                                        if filtered_error:
+                                            if all_output:
+                                                all_output += "\n"
+                                            all_output += filtered_error
+                                    
+                                    warn(f"[LauncherItem] 最終出力: {repr(all_output)}")
+                                    
+                                    if all_output:
+                                        # エスケープシーケンスを処理してから出力
+                                        processed_output = self._process_ansi_escape_sequences(all_output)
+                                        # カスタムメソッドで出力（プロンプト重複回避）
+                                        self._add_output_without_prompt(widget, processed_output)
+                                    
+                                    if execution_result["returncode"] == 0:
+                                        self._add_output_without_prompt(widget, "実行完了")
+                                    elif execution_result["returncode"] != 0 and not all_output:
+                                        self._add_output_without_prompt(widget, f"終了コード: {execution_result['returncode']}")
+                                else:
+                                    # まだ完了していない場合は100ms後に再チェック
+                                    QTimer.singleShot(100, check_result)
+                            
+                            # 結果チェック開始
+                            QTimer.singleShot(100, check_result)
+                                
+                        except Exception as exec_e:
+                            widget.add_output(f"実行エラー: {exec_e}")
+                    
+                    return True
+                    
+                except Exception as e:
+                    warn(f"[TerminalItem] execute_file_in_terminal エラー: {e}")
+                    return False
+            
+            # メソッドを動的に追加
+            terminal_item.execute_file_in_terminal = execute_file_in_terminal
+            
+        except Exception as e:
+            warn(f"[LauncherItem] _add_execute_method_to_terminal エラー: {e}")
+    
+    def _send_command_to_terminal_widget(self, widget, command):
+        """TerminalWidgetにコマンドを直接送信"""
+        try:
+            from PyQt6.QtCore import QTimer
+            from PyQt6.QtGui import QTextCursor
+            
+            warn(f"[LauncherItem] ターミナルに送信するコマンド: {command}")
+            
+            # カーソルを最後の行の末尾に移動
+            cursor = widget.textCursor()
+            cursor.movePosition(QTextCursor.MoveOperation.End)
+            
+            # プロンプトの後にコマンドを挿入
+            cursor.insertText(command)
+            widget.setTextCursor(cursor)
+            
+            # コマンドを実行
+            def execute_command():
+                try:
+                    warn(f"[LauncherItem] コマンド実行中: {command}")
+                    # _execute_current_commandメソッドを直接呼び出し
+                    if hasattr(widget, '_execute_current_command'):
+                        widget._execute_current_command()
+                    # またはcommand_executedシグナルを発行
+                    elif hasattr(widget, 'command_executed'):
+                        widget.command_executed.emit(command)
+                    else:
+                        warn("[LauncherItem] 実行メソッドが見つかりません")
+                except Exception as ex:
+                    warn(f"[LauncherItem] コマンド実行エラー: {ex}")
+            
+            # 少し遅延してからコマンドを実行
+            QTimer.singleShot(100, execute_command)
+            
+        except Exception as e:
+            warn(f"[LauncherItem] _send_command_to_terminal_widget エラー: {e}")
+    
+    def _add_output_without_prompt(self, widget, text):
+        """プロンプトを重複させずに出力を追加（HTML対応）"""
+        try:
+            from PyQt6.QtGui import QTextCursor
+            
+            # カーソルを最後の行に移動
+            cursor = widget.textCursor()
+            cursor.movePosition(QTextCursor.MoveOperation.End)
+            
+            # 現在の行がプロンプトのみの場合は、プロンプトの前に挿入
+            current_line = cursor.block().text()
+            if current_line.strip() == widget.prompt.strip():
+                # プロンプトの前に移動
+                cursor.movePosition(QTextCursor.MoveOperation.StartOfLine)
+                # HTMLを含む場合はHTML形式で挿入
+                if '<span' in text or '&' in text:
+                    cursor.insertHtml(text + "<br>")
+                else:
+                    cursor.insertText(text + "\n")
+                # 新しいプロンプトは追加しない（元のプロンプトが残る）
+            else:
+                # 通常の出力追加
+                if '<span' in text or '&' in text:
+                    cursor.insertHtml("<br>" + text + "<br>" + widget.prompt)
+                else:
+                    cursor.insertText("\n" + text + "\n" + widget.prompt)
+            
+            widget.setTextCursor(cursor)
+            widget.ensureCursorVisible()
+            
+        except Exception as e:
+            warn(f"[LauncherItem] _add_output_without_prompt エラー: {e}")
+            # フォールバック
+            widget.add_output(text)
+    
+    def _process_ansi_escape_sequences(self, text):
+        """ANSIエスケープシーケンスを処理してHTMLに変換"""
+        try:
+            import re
+            
+            # ANSIカラーコードとHTMLカラーのマッピング
+            ansi_colors = {
+                '30': '#000000',  # 黒
+                '31': '#FF0000',  # 赤
+                '32': '#00FF00',  # 緑
+                '33': '#FFFF00',  # 黄
+                '34': '#0000FF',  # 青
+                '35': '#FF00FF',  # マゼンタ
+                '36': '#00FFFF',  # シアン
+                '37': '#FFFFFF',  # 白
+                '90': '#808080',  # 明るい黒（グレー）
+                '91': '#FF8080',  # 明るい赤
+                '92': '#80FF80',  # 明るい緑
+                '93': '#FFFF80',  # 明るい黄
+                '94': '#8080FF',  # 明るい青
+                '95': '#FF80FF',  # 明るいマゼンタ
+                '96': '#80FFFF',  # 明るいシアン
+                '97': '#FFFFFF',  # 明るい白
+            }
+            
+            # ANSIエスケープシーケンスのパターン
+            ansi_pattern = re.compile(r'\x1b\[([0-9;]*)m')
+            
+            # テキストを処理
+            result = ""
+            last_end = 0
+            current_color = None
+            
+            for match in ansi_pattern.finditer(text):
+                # マッチ前のテキストを追加
+                before_text = text[last_end:match.start()]
+                if current_color:
+                    result += f'<span style="color: {current_color};">{self._escape_html(before_text)}</span>'
+                else:
+                    result += self._escape_html(before_text)
+                
+                # ANSIコードを解析
+                codes = match.group(1).split(';') if match.group(1) else ['0']
+                
+                for code in codes:
+                    if code == '0' or code == '':  # リセット
+                        current_color = None
+                    elif code in ansi_colors:  # カラーコード
+                        current_color = ansi_colors[code]
+                
+                last_end = match.end()
+            
+            # 残りのテキストを追加
+            remaining_text = text[last_end:]
+            if current_color:
+                result += f'<span style="color: {current_color};">{self._escape_html(remaining_text)}</span>'
+            else:
+                result += self._escape_html(remaining_text)
+            
+            return result
+            
+        except Exception as e:
+            warn(f"[LauncherItem] ANSIエスケープシーケンス処理エラー: {e}")
+            # エラー時は元のテキストをそのまま返す（エスケープシーケンスを除去）
+            import re
+            return re.sub(r'\x1b\[[0-9;]*m', '', text)
+    
+    def _escape_html(self, text):
+        """HTMLエスケープ処理"""
+        return (text.replace('&', '&amp;')
+                   .replace('<', '&lt;')
+                   .replace('>', '&gt;')
+                   .replace('"', '&quot;')
+                   .replace("'", '&#x27;'))
+    
     def __del__(self):
         """デストラクタでGIFリソースをクリーンアップ"""
         try:
@@ -1473,11 +1974,17 @@ class ImageItem(CanvasItem):
 
     @classmethod
     def supports_path(cls, path: str) -> bool:
+        # Windows では forward slash を backslash に正規化
+        if os.name == 'nt':
+            path = os.path.normpath(path)
         suffix = Path(path).suffix.lower()
         return suffix in cls.IMAGE_EXTS
 
     @classmethod
     def create_from_path(cls, path: str, sp, win):
+        # Windows では forward slash を backslash に正規化
+        if os.name == 'nt':
+            path = os.path.normpath(path)
         d = {
             "type": "image",
             "path": path,
@@ -1694,10 +2201,16 @@ class GifItem(GifMixin, ImageItem):
 
     @classmethod
     def supports_path(cls, path: str) -> bool:
+        # Windows では forward slash を backslash に正規化
+        if os.name == 'nt':
+            path = os.path.normpath(path)
         return path.lower().endswith(".gif")
 
     @classmethod
     def create_from_path(cls, path, sp, win):
+        # Windows では forward slash を backslash に正規化
+        if os.name == 'nt':
+            path = os.path.normpath(path)
         d = {
             "type": cls.TYPE_NAME,
             "caption": Path(path).stem,
@@ -1852,6 +2365,9 @@ class JSONItem(LauncherItem):
 
     @classmethod
     def supports_path(cls, path: str) -> bool:
+        # Windows では forward slash を backslash に正規化
+        if os.name == 'nt':
+            path = os.path.normpath(path)
         # .json 拡張子のみ担当
         return Path(path).suffix.lower() == ".json"
 
@@ -1946,12 +2462,18 @@ class GenericFileItem(LauncherItem):
     # ① 常に True だが “最後に登録” されるので優先度は最下位
     @classmethod
     def supports_path(cls, path: str) -> bool:
+        # Windows では forward slash を backslash に正規化
+        if os.name == 'nt':
+            path = os.path.normpath(path)
         p = Path(path)
         return p.exists()
 
     # ② ファクトリ
     @classmethod
     def create_from_path(cls, path: str, sp, win):
+        # Windows では forward slash を backslash に正規化
+        if os.name == 'nt':
+            path = os.path.normpath(path)
         p = Path(path)
         d = {
             "type": "launcher",

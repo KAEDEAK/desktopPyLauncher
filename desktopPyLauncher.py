@@ -58,7 +58,14 @@ from urllib.parse import urlparse
 
 from DPyL_debug import my_has_attr,dump_missing_attrs,trace_this
 from DPyL_shapes import RectItem, ArrowItem
+from DPyL_command_widget import CommandWidget
 #from DPyL_effects import EffectManager
+
+# ターミナルアイテムのインポート
+try:
+    from DPyL_terminal import TerminalItem
+except ImportError:
+    TerminalItem = None
 
     
 EXPAND_STEP = 500  # 端に到達したときに拡張する幅・高さ（px）
@@ -1224,6 +1231,11 @@ class MainWindow(QMainWindow):
             return ArrowItem
         # ==========================================
 
+        # === ターミナルアイテム対応 ===
+        if t == "terminal":
+            return TerminalItem
+        # ===============================
+
         return None
 
     def _new_project(self):
@@ -1298,12 +1310,16 @@ class MainWindow(QMainWindow):
         menu_obj = QMenu(self)
         act_marker = menu_obj.addAction("マーカー追加")
         act_note   = menu_obj.addAction("ノート追加")
+        act_terminal = menu_obj.addAction("ターミナル追加")
+        act_command_widget = menu_obj.addAction("コマンドウィジェット")
         menu_obj.addSeparator()  # セパレータで分ける
         act_rect   = menu_obj.addAction("矩形追加")
         act_arrow  = menu_obj.addAction("矢印追加")
     
         act_marker.triggered.connect(self._add_marker)
         act_note.triggered.connect(self._add_note)
+        act_terminal.triggered.connect(self._add_terminal)
+        act_command_widget.triggered.connect(self._add_command_widget)
         act_rect.triggered.connect(self._add_rect)
         act_arrow.triggered.connect(self._add_arrow)
 
@@ -1864,10 +1880,10 @@ class MainWindow(QMainWindow):
         """
         items = self.scene.selectedItems()
         
-        # === 修正：図形アイテムも含める ===
+        # === 修正：図形アイテムおよびターミナルアイテムも含める ===
         from DPyL_shapes import RectItem, ArrowItem
-        ds = [it.d for it in items if isinstance(it, (CanvasItem, VideoItem, RectItem, ArrowItem))]
-        # ===============================
+        ds = [it.d for it in items if isinstance(it, (CanvasItem, VideoItem, RectItem, ArrowItem)) or (TerminalItem and isinstance(it, TerminalItem))]
+        # ==================================================
         
         if not ds:
             return
@@ -1882,10 +1898,10 @@ class MainWindow(QMainWindow):
         
         if cut:
             for it in items:
-                # === 修正：図形アイテムも削除対象に含める ===
-                if isinstance(it, (CanvasItem, VideoItem, RectItem, ArrowItem)):
+                # === 修正：図形アイテムおよびターミナルアイテムも削除対象に含める ===
+                if isinstance(it, (CanvasItem, VideoItem, RectItem, ArrowItem)) or (TerminalItem and isinstance(it, TerminalItem)):
                     self._remove_item(it)
-                # =======================================
+                # ============================================================
 
     # --- 指定座標へペースト ---
     def _paste_items_at(self, scene_pos):
@@ -2525,6 +2541,79 @@ class MainWindow(QMainWindow):
         item.setFlag(item.GraphicsItemFlag.ItemIsSelectable, True)
         item.setFlag(item.GraphicsItemFlag.ItemIsMovable, True)
 
+    # --- ターミナル追加 ---
+    def _add_terminal(self):
+        """シーンの中央付近に、新規 TerminalItem を追加する"""
+        if TerminalItem is None:
+            QMessageBox.warning(
+                self, 
+                "Terminal Item Not Available", 
+                "TerminalItem クラスがインポートできませんでした。\nDPyL_terminal.py が正しく配置されているか確認してください。"
+            )
+            return
+            
+        # 画面中心位置を取得
+        sp = self.view.mapToScene(self.view.viewport().rect().center())
+        
+        # デフォルトの設定辞書を構築
+        d = {
+            "type": "terminal",
+            "x": sp.x(),
+            "y": sp.y(),
+            "width": 400,
+            "height": 300,
+            "workdir": os.getcwd(),
+            "terminal_type": "cmd",
+            "startup_command": "",
+            "auto_start": False,
+            "font_size": 12,
+            "background_color": "#000000",
+            "text_color": "#ffffff",
+            "caption": "Terminal"
+        }
+        
+        # TerminalItem インスタンスを生成してシーンに追加
+        item = TerminalItem(d, text_color=self.text_color)
+        self.scene.addItem(item)
+        self.data.setdefault("items", []).append(d)
+        
+        # 追加直後は編集モードでプロパティを設定できるようにする
+        item.set_run_mode(False)
+        item.setFlag(item.GraphicsItemFlag.ItemIsSelectable, True)
+        item.setFlag(item.GraphicsItemFlag.ItemIsMovable, True)
+
+    # --- コマンドウィジェット追加 ---
+    def _add_command_widget(self):
+        """シーンの中央付近に、新規 CommandWidget を追加する"""
+        # 画面中心位置を取得
+        sp = self.view.mapToScene(self.view.viewport().rect().center())
+        
+        # デフォルトの設定辞書を構築
+        d = {
+            "type": "command_widget",
+            "x": sp.x(),
+            "y": sp.y(),
+            "width": 64,
+            "height": 64,
+            "workdir": os.getcwd(),
+            "terminal_type": "cmd",
+            "custom_command": "",
+            "startup_command": "",
+            "run_as_admin": False,
+            "caption": "Terminal",
+            "icon": ""
+        }
+        
+        # CommandWidget インスタンスを生成してシーンに追加
+        item = CommandWidget(d, text_color=self.text_color)
+        self.scene.addItem(item)
+        self.data.setdefault("items", []).append(d)
+        
+        # 追加直後は編集モードでプロパティを設定できるようにする
+        item.set_run_mode(False)
+        item.setFlag(item.GraphicsItemFlag.ItemIsSelectable, True)
+        item.setFlag(item.GraphicsItemFlag.ItemIsMovable, True)
+
     # --- 履歴管理 ---
     def _push_history(self, p: Path):
         # 履歴を現在位置で切り詰めて追加
@@ -3075,12 +3164,15 @@ class MainWindow(QMainWindow):
             }
             export_data["_export_metadata"] = export_metadata
             
-            # JSONに変換（succeeded_ever.htmlと同じ方式）
+            # JSONに変換してbase64エンコード（最も安全な方法）
             json_str = json.dumps(export_data, ensure_ascii=False, indent=2)
+            json_bytes = json_str.encode('utf-8')
+            json_base64 = base64.b64encode(json_bytes).decode('ascii')
+            safe_json_str = json_base64
             
-            # シンプルなplaceholder置換（succeeded_ever.htmlの成功パターン）
+            # シンプルなplaceholder置換
             html_content = template_html.replace('<!-- title -->', self.json_path.stem)
-            html_content = html_content.replace('<!-- embedded_json_data//-->', json_str)
+            html_content = html_content.replace('<!-- embedded_json_data//-->', safe_json_str)
             
             # テンプレート埋め込みコメントを追加（デバッグと再現性のため）
             template_comment = f"""

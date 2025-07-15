@@ -369,10 +369,30 @@ html, body {
 
 <canvas id="minimapCanvas" width="180" height="180"></canvas>
 
-<script type="application/json" id="jsonData"><!-- embedded_json_data//--></script>
-
 <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
 <script>
+// JSONデータをbase64エンコードして埋め込み
+const jsonDataBase64 = "<!-- embedded_json_data//-->";
+
+// UTF-8対応のbase64デコード関数
+function base64ToUtf8(base64) {
+  try {
+    // base64をバイナリ文字列にデコード
+    const binaryString = atob(base64);
+    // バイナリ文字列をUint8Arrayに変換
+    const bytes = new Uint8Array(binaryString.length);
+    for (let i = 0; i < binaryString.length; i++) {
+      bytes[i] = binaryString.charCodeAt(i);
+    }
+    // UTF-8としてデコード
+    return new TextDecoder('utf-8').decode(bytes);
+  } catch (e) {
+    console.error('Base64 decode error:', e);
+    return null;
+  }
+}
+
+const jsonDataText = jsonDataBase64 ? base64ToUtf8(jsonDataBase64) : null;
 // アイコン定義
 const definedIcons = {
   ".bat":"res/batch-file.png", ".cmd":"res/batch-file.png", ".py":"res/python-file.png",
@@ -1094,9 +1114,8 @@ document.addEventListener("DOMContentLoaded", () => {
   mini.addEventListener("click", onMinimapClick);
 
   try {
-    const jsonElement = document.getElementById("jsonData");
-    if (jsonElement && jsonElement.textContent.trim()) {
-      const data = JSON.parse(jsonElement.textContent);
+    if (jsonDataText && jsonDataText.trim()) {
+      const data = JSON.parse(jsonDataText);
       
       // エクスポートメタデータの表示
       displayExportMetadata(data);
