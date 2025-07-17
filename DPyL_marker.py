@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-DPyL_marker.py ― MarkerItem / MarkerEditDialog（Qt6 / PyQt6 専用）
+DPyL_marker.py ― MarkerItem / MarkerEditDialog（Qt6 / PySide6 専用）
 --------------------------------------------------------------------
 機能:
   - Warp Point（マーカー）をキャンバス上に配置
@@ -12,16 +12,16 @@ DPyL_marker.py ― MarkerItem / MarkerEditDialog（Qt6 / PyQt6 専用）
 
 from __future__ import annotations
 from typing import Any, Optional, Dict
-from PyQt6.QtWidgets import (
+from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit,
     QPushButton, QCheckBox, QComboBox, QMessageBox
 )
-from PyQt6.QtGui import QColor, QBrush
-from PyQt6.QtCore import Qt, QPointF, QRectF
+from PySide6.QtGui import QColor, QBrush
+from PySide6.QtCore import Qt, QPointF, QRectF
 
 from DPyL_classes import CanvasItem
 from DPyL_utils import warn
-from PyQt6.QtWidgets import QGraphicsTextItem, QGraphicsRectItem, QGraphicsItem
+from PySide6.QtWidgets import QGraphicsTextItem, QGraphicsRectItem, QGraphicsItem
 
 
 # ==============================================================

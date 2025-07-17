@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-共通ユーティリティ（GUI非依存、PyQt前提）
+共通ユーティリティ（GUI非依存、PySide6前提）
 """
 
 from __future__ import annotations
@@ -13,10 +13,10 @@ from PIL import Image
 from urllib.parse import urlparse
 from urllib.request import Request,urlopen
 from pathlib import Path
-from PyQt6.QtGui     import QPixmap, QPainter, QImage, QImageReader, QIcon, QPalette, QColor
-from PyQt6.QtGui     import QBrush, QPen
-from PyQt6.QtCore    import Qt, QSize, QFileInfo, QIODevice, QBuffer
-from PyQt6.QtWidgets import QApplication, QFileIconProvider
+from PySide6.QtGui     import QPixmap, QPainter, QImage, QImageReader, QIcon, QPalette, QColor
+from PySide6.QtGui     import QBrush, QPen
+from PySide6.QtCore    import Qt, QSize, QFileInfo, QIODevice, QBuffer
+from PySide6.QtWidgets import QApplication, QFileIconProvider
   
 from DPyL_debug import my_has_attr
 

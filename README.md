@@ -179,7 +179,7 @@ pip install -r requirements.txt
 
 ### 必須ライブラリ
 
-- **PyQt6** — GUI全体および動画／SVG描画に使用
+- **PySide6** — GUI全体および動画／SVG描画に使用
 - **markdown** — NoteアイテムのMarkdown表示に使用
 - **pywin32** — `.lnk` ショートカット解析に必要（未導入だと `.lnk` は読み取れません）
 

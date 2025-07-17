@@ -10,9 +10,9 @@ import subprocess
 from pathlib import Path
 from typing import Any, Dict
 
-from PyQt6.QtCore import Qt, QProcess
-from PyQt6.QtGui import QPixmap, QIcon, QColor
-from PyQt6.QtWidgets import (
+from PySide6.QtCore import Qt, QProcess
+from PySide6.QtGui import QPixmap, QIcon, QColor
+from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QLineEdit, QComboBox, QCheckBox, QFileDialog, QSpinBox,
     QGroupBox, QTextEdit

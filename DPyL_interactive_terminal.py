@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
 DPyL_interactive_terminal.py ― 双方向通信対応ターミナルアイテム
-◎ Qt6 / PyQt6 専用
+◎ Qt6 / PySide6 専用
 ◎ QProcess を使用した双方向通信対応
 ◎ ANSI エスケープシーケンス対応
 ◎ pythonやclaudeなどの対話型プログラムで固まらない設計
@@ -14,18 +14,18 @@ import re
 from pathlib import Path
 from typing import Any, Callable, Dict, Tuple
 
-from PyQt6.QtCore import (
+from PySide6.QtCore import (
     Qt, QPointF, QRectF, QSizeF, QTimer, QSize, QProcess, QIODevice, 
-    pyqtSignal, QObject, QEvent, QThread, QMutex, QMutexLocker
+    Signal, QObject, QEvent, QThread, QMutex, QMutexLocker
 )
-from PyQt6.QtGui import (
+from PySide6.QtGui import (
     QPixmap, QPainter, QColor, QBrush, QPen, QIcon, QFont, 
     QKeyEvent, QTextCursor, QTextCharFormat, QMouseEvent,
     QTextDocument, QTextBlockFormat
 )
 # QGraphicsSceneMouseEventはQtGuiにある
-# from PyQt6.QtWidgets import QGraphicsSceneMouseEvent
-from PyQt6.QtWidgets import (
+# from PySide6.QtWidgets import QGraphicsSceneMouseEvent
+from PySide6.QtWidgets import (
     QGraphicsTextItem, QGraphicsRectItem, QGraphicsItemGroup,
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QLineEdit, QComboBox, QTextEdit, QCheckBox, QSpinBox,
@@ -40,8 +40,8 @@ try:
     from DPyL_utils import warn, debug_print
 except ImportError:
     # テスト環境用の代替
-    from PyQt6.QtWidgets import QGraphicsItemGroup as CanvasItem
-    from PyQt6.QtWidgets import QGraphicsItemGroup as NoteItem
+    from PySide6.QtWidgets import QGraphicsItemGroup as CanvasItem
+    from PySide6.QtWidgets import QGraphicsItemGroup as NoteItem
     def warn(msg): print(f"WARN: {msg}")
     def debug_print(msg): print(f"DEBUG: {msg}")
 
@@ -326,7 +326,7 @@ class InteractiveTerminalWidget(QTextEdit):
         self.process.setWorkingDirectory(working_dir)
         
         # 日本語対応：環境変数を設定
-        from PyQt6.QtCore import QProcessEnvironment
+        from PySide6.QtCore import QProcessEnvironment
         env = QProcessEnvironment.systemEnvironment()
         
         # UTF-8エンコーディングを強制
@@ -810,7 +810,7 @@ class InteractiveTerminalItem(NoteItem):
 
     def contextMenuEvent(self, ev):
         """右クリックメニュー"""
-        from PyQt6.QtWidgets import QMenu
+        from PySide6.QtWidgets import QMenu
         
         menu = QMenu()
         

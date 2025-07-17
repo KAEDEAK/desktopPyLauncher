@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
 DPyL_ticker.py ―  desktopPyLauncher通知ティッカーシステム
-◎ Qt6 / PyQt6 専用
+◎ Qt6 / PySide6 専用
 従来のOKボタン付きダイアログに代わる、ニュースティッカー風通知システム
 """
 
@@ -10,16 +10,16 @@ import sys
 from enum import Enum
 from typing import Optional
 
-from PyQt6.QtCore import (
+from PySide6.QtCore import (
     Qt, QTimer, QPropertyAnimation, QEasingCurve, 
     QParallelAnimationGroup, QSequentialAnimationGroup,
-    QRect, QPointF, QSize, pyqtSignal, QObject
+    QRect, QPointF, QSize, Signal, QObject
 )
-from PyQt6.QtGui import (
+from PySide6.QtGui import (
     QFont, QColor, QPalette, QPainter, QPen, QBrush,
     QLinearGradient, QPixmap, QIcon
 )
-from PyQt6.QtWidgets import (
+from PySide6.QtWidgets import (
     QWidget, QLabel, QHBoxLayout, QVBoxLayout,
     QGraphicsOpacityEffect, QSizePolicy, QApplication,
     QGraphicsProxyWidget, QGraphicsItem
@@ -41,7 +41,7 @@ class NotificationTicker(QWidget):
     """
     
     # シグナル定義
-    clicked = pyqtSignal()
+    clicked = Signal()
     
     def __init__(self, parent_view=None):
         super().__init__(parent_view)

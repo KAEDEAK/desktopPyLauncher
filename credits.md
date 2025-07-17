@@ -2,10 +2,11 @@
 
 This project uses the following third-party libraries and software. We thank all the developers and contributors who have made these projects available.
 
-## PyQt6
-- **License**: GPL v3 or Commercial License
-- **Copyright**: © 2023 The Qt Company Ltd. and Riverbank Computing Limited
-- **Website**: https://www.riverbankcomputing.com/software/pyqt/
+## PySide6
+- **License**: LGPL v3 or Commercial License
+- **Copyright**: © 2023 The Qt Company Ltd.
+
+- **Website**: https://www.qt.io/qt-for-python
 - **Usage**: Primary GUI framework for the entire application
 
 ## Pillow (PIL Fork)
