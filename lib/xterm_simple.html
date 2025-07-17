@@ -1,0 +1,1077 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>Simple Terminal</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            background-color: #000000;
+            font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
+            color: #ffffff;
+        }
+        #terminal {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            padding: 10px;
+            white-space: pre-wrap;  /* 改行とスペースを保持しつつ、長い行は折り返す */
+            overflow-y: auto;
+            overflow-x: auto;
+            font-size: 14px;
+            line-height: 1.2;
+            letter-spacing: 0px;  /* 文字間隔を固定 */
+            word-spacing: 0px;    /* 単語間隔を固定 */
+            outline: none;  /* フォーカス時のアウトラインを削除 */
+        }
+        #terminal:focus {
+            outline: 2px solid #00ff00;  /* フォーカス時に緑の境界線 */
+        }
+        .cursor {
+            background-color: #ffffff;
+            animation: blink 1s infinite;
+        }
+        @keyframes blink {
+            0%, 50% { opacity: 1; }
+            51%, 100% { opacity: 0; }
+        }
+        .prompt {
+            color: #00ff00;
+        }
+        .error {
+            color: #ff5555;
+        }
+        .success {
+            color: #50fa7b;
+        }
+        .warning {
+            color: #f1fa8c;
+        }
+    </style>
+</head>
+<body>
+    <div id="terminal"></div>
+    
+    <script src="qrc:///qtwebchannel/qwebchannel.js"></script>
+    
+    <script>
+        // Selective console logging for debugging backspace issue
+        const originalConsoleLog = console.log;
+        console.log = function(...args) {
+            // Only log backspace-related messages
+            if (args[0] && (args[0].includes('Backspace') || args[0].includes('inputCharCount') || args[0].includes('Key:') || args[0].includes('removeLastChar') || args[0].includes('Removed') || args[0].includes('Found') || args[0].includes('Content') || args[0].includes('Last'))) {
+                originalConsoleLog.apply(console, args);
+            }
+        };
+        console.error = function() {};
+        
+        let backend;
+        let terminalDiv;
+        let output = [];
+        let cursorPos = 0;
+        let currentInput = '';
+        let promptEnd = 0;
+        let terminalLines = [];
+        let cursorRow = 0;
+        let cursorCol = 0;
+        let inputStartIndex = -1;  // 入力開始位置を記録
+        let maxCols = 80;  // デフォルトの列数
+        let maxRows = 24;  // デフォルトの行数
+        
+        // 出力バッファリング用
+        let outputBuffer = '';
+        let outputTimeout;
+        
+        // 入力追跡用（バックスペース処理のため）
+        let inputCharCount = 0;
+        
+        // console.log("Simple terminal starting...");
+        
+        // WebChannel 初期化
+        new QWebChannel(qt.webChannelTransport, function(channel) {
+            // console.log("WebChannel connected successfully");
+            backend = channel.objects.backend;
+            // console.log("Backend object:", backend);
+            
+            // バックエンドからの出力を受信
+            window.backspaceJustPressed = false;  // グローバル変数として設定
+            
+            backend.output_ready.connect(function(data) {
+                // 短い出力のみログ
+                if (data.length <= 10) {
+                    console.log("Received output from backend:", JSON.stringify(data), "Length:", data.length, "Current inputCharCount:", inputCharCount);
+                }
+                
+                // バックスペースパターンの処理
+                if (data === '\x08 \x08') {
+                    console.log("BS-Space-BS pattern received from PTY");
+                    // このパターンは文字の消去を意味するので、何も表示しない
+                    return;
+                }
+                
+                // バックスペース直後のスペースは無視
+                if (window.backspaceJustPressed && data === ' ') {
+                    console.log("Ignoring space after backspace");
+                    window.backspaceJustPressed = false;
+                    return;
+                }
+                
+                // 通常の文字入力後はバックスペースフラグをリセット
+                if (data.length === 1 && data !== ' ' && data !== '\n' && data !== '\r') {
+                    window.backspaceJustPressed = false;
+                }
+                
+                // プロンプトまたはコマンド実行結果の場合のみリセット
+                if (data.includes('\n') && data.length > 2) {
+                    // 改行を含む長い出力（コマンド実行結果）の場合
+                    console.log("Resetting inputCharCount due to command output");
+                    inputCharCount = 0;
+                    inputStartIndex = -1;
+                } else if (data.includes('>') && (data.includes(':\\') || data.includes(':/'))) {
+                    // 新しいプロンプトの場合（例: "C:\path>" または "C:/path>")
+                    console.log("Resetting inputCharCount due to new prompt");
+                    inputCharCount = 0;
+                    inputStartIndex = -1;
+                } else if (data.endsWith('> ')) {
+                    // プロンプトの終わり（"> "で終わる）
+                    console.log("Resetting inputCharCount due to prompt end");
+                    inputCharCount = 0;
+                    inputStartIndex = -1;
+                }
+                // 単一文字のエコーバックの場合はカウントを維持
+                
+                // 出力をそのまま表示（入力管理は無効化）
+                appendOutput(data);
+            });
+            
+            // console.log("Calling initTerminal...");
+            initTerminal();
+        });
+        
+        function initTerminal() {
+            // console.log("initTerminal called");
+            
+            terminalDiv = document.getElementById('terminal');
+            if (!terminalDiv) {
+                // console.error("Terminal div not found");
+                return;
+            }
+            
+            console.log("Terminal div found, setting up event listeners");
+            
+            // キーボードイベントリスナー（一つに統一）
+            let keyHandled = false;
+            document.addEventListener('keydown', function(event) {
+                if (!keyHandled) {
+                    keyHandled = true;
+                    console.log("Key pressed:", event.key, event.keyCode);
+                    handleKeyPress(event);
+                    setTimeout(() => { keyHandled = false; }, 10);
+                }
+            });
+            
+            // ターミナルdivのクリック時にフォーカスを設定
+            terminalDiv.addEventListener('click', function() {
+                console.log("Terminal div clicked, setting focus");
+                terminalDiv.focus();
+            });
+            
+            // フォーカス設定
+            terminalDiv.tabIndex = 0;
+            terminalDiv.focus();
+            
+            // フォーカス状態を定期的に確認（頻度を下げる）
+            setInterval(function() {
+                if (document.activeElement !== terminalDiv) {
+                    terminalDiv.focus();
+                }
+            }, 2000);
+            
+            // ウィンドウリサイズ時の処理（デバウンス）
+            let resizeTimeout;
+            window.addEventListener('resize', function() {
+                clearTimeout(resizeTimeout);
+                resizeTimeout = setTimeout(updateTerminalDimensions, 300);
+            });
+            
+            // 初期メッセージ
+            appendOutput("\x1b[32mSimple Terminal Ready\x1b[0m\r\n");
+            appendOutput("\x1b[33mStarting shell...\x1b[0m\r\n");
+            
+            // ターミナルサイズを初期化
+            updateTerminalDimensions();
+            
+            // シェル開始はPython側から制御される
+            console.log("Terminal initialized, waiting for shell start command from Python...");
+        }
+        
+        function handleKeyPress(event) {
+            console.log("handleKeyPress called with event:", event);
+            
+            if (!backend) {
+                console.log("Backend not available for key press");
+                return;
+            }
+            
+            let data = '';
+            
+            // 特別なキー処理
+            if (event.key === 'Enter') {
+                data = '\r\n';  // 実際の改行文字
+                console.log("Enter key detected");
+            } else if (event.key === 'Backspace') {
+                data = '\b';    // 実際のバックスペース文字
+                console.log("Backspace key detected");
+            } else if (event.key === 'Tab') {
+                data = '\t';    // 実際のタブ文字
+                console.log("Tab key detected");
+            } else if (event.key === 'Escape') {
+                data = '\x1b';  // 実際のエスケープ文字
+                console.log("Escape key detected");
+            } else if (event.key === 'ArrowUp') {
+                data = '\x1b[A';
+                console.log("Arrow Up key detected");
+            } else if (event.key === 'ArrowDown') {
+                data = '\x1b[B';
+                console.log("Arrow Down key detected");
+            } else if (event.key === 'ArrowRight') {
+                data = '\x1b[C';
+                console.log("Arrow Right key detected");
+            } else if (event.key === 'ArrowLeft') {
+                data = '\x1b[D';
+                console.log("Arrow Left key detected");
+            } else if (event.ctrlKey && event.key.length === 1) {
+                // Ctrl+キー
+                const code = event.key.toUpperCase().charCodeAt(0) - 64;
+                data = String.fromCharCode(code);
+                console.log("Ctrl+key detected:", event.key);
+            } else if (event.key.length === 1) {
+                // 通常のテキスト入力
+                data = event.key;
+                console.log("Regular key detected:", event.key);
+            }
+            
+            if (data) {
+                console.log("Sending data to backend:", JSON.stringify(data));
+                
+                // ローカルエコーは無効化（PTY側で処理される）
+                // ただし入力文字数は追跡（バックスペース処理のため）
+                if (event.key === 'Enter') {
+                    // Enterキーの場合は入力カウントをリセット
+                    inputCharCount = 0;
+                    inputStartIndex = -1;
+                    window.backspaceJustPressed = false;
+                } else if (event.key === 'Backspace') {
+                    // バックスペースの場合
+                    console.log(`Backspace pressed. inputCharCount before: ${inputCharCount}`);
+                    if (inputCharCount > 0) {
+                        console.log("Calling removeLastAlphanumericChar()");
+                        // バッファをフラッシュしてから削除
+                        if (outputBuffer) {
+                            processBufferedOutput();
+                            outputBuffer = '';
+                        }
+                        // 最後の英数字を削除（スペースは無視）
+                        let removed = removeLastAlphanumericChar();
+                        if (removed) {
+                            inputCharCount--;
+                            console.log(`Character removed. inputCharCount after: ${inputCharCount}`);
+                        } else {
+                            console.log("No character removed. inputCharCount remains: " + inputCharCount);
+                            // 英数字が見つからない場合は、inputCharCountを0にリセット
+                            inputCharCount = 0;
+                        }
+                        // PTYからのスペースを無視するためのフラグ
+                        window.backspaceJustPressed = true;
+                        // 100ms後に自動的にリセット
+                        setTimeout(() => {
+                            window.backspaceJustPressed = false;
+                            console.log("Backspace flag reset by timeout");
+                        }, 100);
+                        console.log(`Backspace processed. Final inputCharCount: ${inputCharCount}`);
+                    } else {
+                        console.log("Backspace ignored - inputCharCount is 0");
+                    }
+                } else if (event.key.length === 1 && !event.ctrlKey && !event.altKey) {
+                    // 通常の文字の場合はカウントを増やす
+                    if (inputCharCount === 0 && terminalDiv) {
+                        // 最初の文字入力時に現在のHTML長を記録
+                        inputStartIndex = terminalDiv.innerHTML.length;
+                        console.log(`Input started at index: ${inputStartIndex}`);
+                    }
+                    inputCharCount++;
+                    console.log(`Character typed: '${event.key}'. inputCharCount: ${inputCharCount}`);
+                }
+                
+                // デバッグ情報
+                console.log(`Key: ${event.key}, inputCharCount: ${inputCharCount}`);
+                
+                const result = backend.write_to_shell(data);
+                console.log("Backend write result:", result);
+                event.preventDefault();
+            } else {
+                console.log("No data to send for key:", event.key);
+            }
+        }
+        
+        function updateInputDisplay() {
+            // この関数は使用しない（PTY側で処理される）
+            // console.log("updateInputDisplay called but disabled");
+        }
+        
+        function cleanupBrokenEntities(content) {
+            // 壊れたHTMLエンティティを削除
+            // &nbs;, &nb;, &n; などのパターンを削除
+            content = content.replace(/&n(b(s?)?)?;/g, '');
+            // その他の不完全なエンティティも削除
+            content = content.replace(/&[a-z]{0,4};/g, function(match) {
+                // 有効なHTMLエンティティのリスト
+                const validEntities = ['&lt;', '&gt;', '&amp;', '&quot;', '&apos;', '&nbsp;'];
+                if (validEntities.includes(match)) {
+                    return match;
+                }
+                console.log(`Removing broken entity: ${match}`);
+                return '';
+            });
+            return content;
+        }
+        
+        function removeLastAlphanumericChar() {
+            // 最後の英数字文字を削除（スペースは無視）
+            if (terminalDiv) {
+                console.log(`removeLastAlphanumericChar called`);
+                
+                let content = terminalDiv.innerHTML;
+                let removed = false;
+                
+                // 逆方向から検索して最後の英数字を見つける
+                // inputStartIndexより前は削除しない
+                let searchLimit = inputStartIndex >= 0 ? inputStartIndex : 0;
+                for (let i = content.length - 1; i >= searchLimit && !removed; i--) {
+                    // &nbsp; をスキップ
+                    if (i >= 5 && content.substring(i - 5, i + 1) === '&nbsp;') {
+                        i = i - 5;  // &nbsp; 全体をスキップ
+                        continue;
+                    }
+                    // 壊れた &nbsp; エンティティをスキップ
+                    else if (content[i] === ';' && i >= 1) {
+                        // &nbs; や &n; などの壊れたエンティティを検出
+                        let entityStart = content.lastIndexOf('&', i);
+                        if (entityStart >= 0 && entityStart > i - 6) {
+                            i = entityStart;
+                            continue;
+                        }
+                    }
+                    // タグをスキップ
+                    else if (content[i] === '>') {
+                        let tagStart = content.lastIndexOf('<', i);
+                        if (tagStart >= 0) {
+                            i = tagStart;
+                            continue;
+                        }
+                    }
+                    // 英数字を見つけた場合
+                    else if (content[i].match(/[a-zA-Z0-9]/)) {
+                        let charToRemove = content[i];
+                        content = content.substring(0, i) + content.substring(i + 1);
+                        removed = true;
+                        console.log(`Removed alphanumeric character '${charToRemove}' at index ${i}`);
+                    }
+                }
+                
+                if (removed) {
+                    // 壊れたHTMLエンティティをクリーンアップ
+                    content = cleanupBrokenEntities(content);
+                    terminalDiv.innerHTML = content;
+                    console.log("HTML updated");
+                } else {
+                    console.log("No alphanumeric character found to remove");
+                }
+                
+                terminalDiv.scrollTop = terminalDiv.scrollHeight;
+                return removed;  // 削除成功/失敗を返す
+            }
+            return false;
+        }
+        
+        function removeLastCharFromTerminal() {
+            // ターミナルから最後の文字を削除
+            if (terminalDiv) {
+                console.log(`removeLastCharFromTerminal called`);
+                
+                // テキストベースのアプローチ
+                let text = terminalDiv.textContent || terminalDiv.innerText;
+                console.log(`Current text: '${text}'`);
+                console.log(`Last 20 chars: '${text.substring(text.length - 20)}'`);
+                
+                if (text.length > 0) {
+                    // 最後の文字を削除
+                    let newText = text.substring(0, text.length - 1);
+                    console.log(`New text: '${newText}'`);
+                    console.log(`Removed: '${text[text.length - 1]}'`);
+                    
+                    // HTMLを再構築（シンプルに）
+                    // 既存のHTMLから最後の文字を削除する必要がある
+                    let content = terminalDiv.innerHTML;
+                    
+                    // 最後の文字の位置を見つける
+                    let removed = false;
+                    
+                    // 逆方向から検索
+                    for (let i = content.length - 1; i >= 0 && !removed; i--) {
+                        // 通常の文字を見つけた場合
+                        if (content[i].match(/[a-zA-Z0-9]/)) {
+                            // 削除する前に文字を保存
+                            let charToRemove = content[i];
+                            content = content.substring(0, i) + content.substring(i + 1);
+                            removed = true;
+                            console.log(`Removed character '${charToRemove}' from HTML at index ${i}`);
+                        }
+                        // &nbsp; の最後の文字 ';' を見つけた場合
+                        else if (i >= 5 && content.substring(i - 5, i + 1) === '&nbsp;') {
+                            content = content.substring(0, i - 5) + content.substring(i + 1);
+                            removed = true;
+                            console.log(`Removed &nbsp; from HTML at index ${i-5}`);
+                        }
+                    }
+                    
+                    if (removed) {
+                        terminalDiv.innerHTML = content;
+                        console.log("HTML updated");
+                    }
+                }
+                
+                terminalDiv.scrollTop = terminalDiv.scrollHeight;
+            }
+        }
+        
+        function processAnsiColors(codes) {
+            console.log("Processing ANSI codes:", codes);
+            
+            if (!codes || codes === '') {
+                return '';
+            }
+            
+            const codeArray = codes.split(';').map(code => parseInt(code));
+            let result = '';
+            
+            for (let code of codeArray) {
+                switch (code) {
+                    case 0:  // リセット
+                        result += '</span>';
+                        break;
+                    case 1:  // 太字
+                        result += '<span style="font-weight: bold;">';
+                        break;
+                    case 30: // 黒色
+                        result += '<span style="color: #000000;">';
+                        break;
+                    case 31: // 赤色
+                        result += '<span class="error">';
+                        break;
+                    case 32: // 緑色
+                        result += '<span class="success">';
+                        break;
+                    case 33: // 黄色
+                        result += '<span class="warning">';
+                        break;
+                    case 34: // 青色
+                        result += '<span style="color: #0000ff;">';
+                        break;
+                    case 35: // マゼンタ
+                        result += '<span style="color: #ff00ff;">';
+                        break;
+                    case 36: // シアン
+                        result += '<span style="color: #00ffff;">';
+                        break;
+                    case 37: // 白色
+                        result += '<span style="color: #ffffff;">';
+                        break;
+                    case 90: // 明るい黒色（グレー）
+                        result += '<span style="color: #808080;">';
+                        break;
+                    case 91: // 明るい赤色
+                        result += '<span style="color: #ff6666;">';
+                        break;
+                    case 92: // 明るい緑色
+                        result += '<span style="color: #66ff66;">';
+                        break;
+                    case 93: // 明るい黄色
+                        result += '<span style="color: #ffff66;">';
+                        break;
+                    case 94: // 明るい青色
+                        result += '<span style="color: #6666ff;">';
+                        break;
+                    case 95: // 明るいマゼンタ
+                        result += '<span style="color: #ff66ff;">';
+                        break;
+                    case 96: // 明るいシアン
+                        result += '<span style="color: #66ffff;">';
+                        break;
+                    case 97: // 明るい白色
+                        result += '<span style="color: #ffffff;">';
+                        break;
+                    default:
+                        console.log("Unknown ANSI code:", code);
+                        break;
+                }
+            }
+            
+            return result;
+        }
+        
+        function processAnsiSequence(sequence) {
+            // デバッグ出力を減らす
+            if (sequence.length < 3) {
+                return '';
+            }
+            
+            // 最後の文字でシーケンスタイプを判定
+            const lastChar = sequence[sequence.length - 1];
+            const numbers = sequence.slice(2, -1); // ESC[ を除去し、最後の文字も除去
+            const params = numbers ? numbers.split(';').map(n => parseInt(n) || 0) : [];
+            
+            switch (lastChar.toLowerCase()) {
+                case 'm': // カラーとスタイル
+                    return processAnsiColors(numbers);
+                case 'a': // カーソル上移動
+                    moveCursorUp(params[0] || 1);
+                    return '';
+                case 'b': // カーソル下移動
+                    moveCursorDown(params[0] || 1);
+                    return '';
+                case 'c': // カーソル右移動
+                    moveCursorRight(params[0] || 1);
+                    return '';
+                case 'd': // カーソル左移動
+                    moveCursorLeft(params[0] || 1);
+                    return '';
+                case 'h': // カーソル位置設定
+                case 'f': // カーソル位置設定
+                    setCursorPosition(params[0] || 1, params[1] || 1);
+                    return '';
+                case 'j': // 画面消去
+                    clearScreen(params[0] || 0);
+                    return '';
+                case 'k': // 行消去
+                    clearLine(params[0] || 0);
+                    return '';
+                case 's': // カーソル保存
+                    saveCursorPosition();
+                    return '';
+                case 'u': // カーソル復元
+                    restoreCursorPosition();
+                    return '';
+                case 'r': // スクロール領域設定
+                case 'g': // タブクリア
+                case 'l': // モード設定
+                case 'n': // デバイス状態レポート
+                case 'p': // 文字セット選択
+                case 'q': // LEDライト設定
+                case 'i': // 印刷モード
+                case 'x': // 端末パラメーター要求
+                case 't': // ウィンドウ操作
+                    // これらは表示しない（無視）
+                    return '';
+                default:
+                    // 不明なシーケンスは無視（ログも削減）
+                    return '';
+            }
+        }
+        
+        // カーソル位置保存・復元
+        let savedCursorRow = 0;
+        let savedCursorCol = 0;
+        
+        function saveCursorPosition() {
+            savedCursorRow = cursorRow;
+            savedCursorCol = cursorCol;
+            console.log(`Cursor position saved: ${savedCursorRow},${savedCursorCol}`);
+        }
+        
+        function restoreCursorPosition() {
+            cursorRow = savedCursorRow;
+            cursorCol = savedCursorCol;
+            console.log(`Cursor position restored: ${cursorRow},${cursorCol}`);
+            updateCursorPosition();
+        }
+        
+        // ターミナル状態管理（変数は上で宣言済み）
+        // terminalLines = [];  // 初期化のみ
+        // maxCols = 80;
+        // maxRows = 24;
+        
+        // 行を分割して管理
+        function splitIntoLines(content) {
+            const lines = content.split('<br>');
+            terminalLines = lines;
+            maxRows = Math.max(24, lines.length);
+        }
+        
+        // カーソル移動関数
+        function moveCursorUp(lines) {
+            cursorRow = Math.max(0, cursorRow - lines);
+            console.log(`Cursor moved up ${lines} lines to row ${cursorRow}`);
+            updateCursorPosition();
+        }
+        
+        function moveCursorDown(lines) {
+            cursorRow = cursorRow + lines;
+            console.log(`Cursor moved down ${lines} lines to row ${cursorRow}`);
+            updateCursorPosition();
+        }
+        
+        function moveCursorRight(cols) {
+            cursorCol = cursorCol + cols;
+            console.log(`Cursor moved right ${cols} cols to col ${cursorCol}`);
+            updateCursorPosition();
+        }
+        
+        function moveCursorLeft(cols) {
+            cursorCol = Math.max(0, cursorCol - cols);
+            console.log(`Cursor moved left ${cols} cols to col ${cursorCol}`);
+            updateCursorPosition();
+        }
+        
+        function setCursorPosition(row, col) {
+            cursorRow = Math.max(0, row - 1);
+            cursorCol = Math.max(0, col - 1);
+            console.log(`Cursor set to position ${cursorRow},${cursorCol}`);
+            
+            // DOM操作で実際にカーソル位置を設定
+            ensureTerminalLines(cursorRow + 1);
+            updateCursorPosition();
+        }
+        
+        function ensureTerminalLines(minLines) {
+            // 必要な行数を確保
+            const content = terminalDiv.innerHTML;
+            const lines = content.split('<br>');
+            
+            while (lines.length < minLines) {
+                lines.push('');
+            }
+            
+            if (lines.length !== content.split('<br>').length) {
+                terminalDiv.innerHTML = lines.join('<br>');
+            }
+        }
+        
+        function updateCursorPosition() {
+            // DOM操作でカーソル位置を更新
+            // 簡単な実装：現在の位置にカーソルを移動
+            if (terminalDiv) {
+                // カーソル位置にスクロール
+                terminalDiv.scrollTop = terminalDiv.scrollHeight;
+            }
+        }
+        
+        function appendTextAtCursor(text) {
+            // カーソル位置にテキストを追加
+            // 簡単な実装：現在のカーソル位置を無視して末尾に追加
+            terminalDiv.innerHTML += text;
+        }
+        
+        function clearScreen(mode) {
+            console.log(`Clear screen mode ${mode}`);
+            if (mode === 0) {
+                // カーソル位置から画面下端まで消去
+                clearFromCursorToEnd();
+            } else if (mode === 1) {
+                // 画面上端からカーソル位置まで消去
+                clearFromStartToCursor();
+            } else if (mode === 2) {
+                // 画面全体を消去
+                terminalDiv.innerHTML = '';
+                cursorRow = 0;
+                cursorCol = 0;
+                terminalLines = [];
+            }
+        }
+        
+        function clearLine(mode) {
+            console.log(`Clear line mode ${mode}`);
+            if (mode === 0) {
+                // カーソル位置から行末まで消去
+                clearCurrentLineFromCursor();
+            } else if (mode === 1) {
+                // 行頭からカーソル位置まで消去
+                clearCurrentLineToColumn();
+            } else if (mode === 2) {
+                // 行全体を消去
+                clearCurrentLineCompletely();
+            }
+        }
+        
+        function clearFromCursorToEnd() {
+            // カーソル位置から画面下端までの内容を消去
+            const content = terminalDiv.innerHTML;
+            const lines = content.split('<br>');
+            
+            if (cursorRow < lines.length) {
+                const newLines = lines.slice(0, cursorRow + 1);
+                if (newLines.length > 0) {
+                    // 現在の行のカーソル位置以降を消去
+                    const currentLine = newLines[cursorRow] || '';
+                    const beforeCursor = currentLine.substring(0, cursorCol);
+                    newLines[cursorRow] = beforeCursor;
+                }
+                terminalDiv.innerHTML = newLines.join('<br>');
+            }
+        }
+        
+        function clearFromStartToCursor() {
+            // 画面上端からカーソル位置までの内容を消去
+            const content = terminalDiv.innerHTML;
+            const lines = content.split('<br>');
+            
+            if (cursorRow < lines.length) {
+                const newLines = lines.slice(cursorRow);
+                if (newLines.length > 0) {
+                    // 現在の行のカーソル位置以前を消去
+                    const currentLine = newLines[0] || '';
+                    const afterCursor = currentLine.substring(cursorCol);
+                    newLines[0] = afterCursor;
+                }
+                terminalDiv.innerHTML = newLines.join('<br>');
+                cursorRow = 0;
+                cursorCol = 0;
+            }
+        }
+        
+        function clearCurrentLineFromCursor() {
+            // 現在の行のカーソル位置から行末まで消去
+            const content = terminalDiv.innerHTML;
+            const lines = content.split('<br>');
+            
+            if (cursorRow < lines.length) {
+                const currentLine = lines[cursorRow] || '';
+                const beforeCursor = currentLine.substring(0, cursorCol);
+                lines[cursorRow] = beforeCursor;
+                terminalDiv.innerHTML = lines.join('<br>');
+            }
+        }
+        
+        function clearCurrentLineToColumn() {
+            // 現在の行の行頭からカーソル位置まで消去
+            const content = terminalDiv.innerHTML;
+            const lines = content.split('<br>');
+            
+            if (cursorRow < lines.length) {
+                const currentLine = lines[cursorRow] || '';
+                const afterCursor = currentLine.substring(cursorCol);
+                lines[cursorRow] = afterCursor;
+                terminalDiv.innerHTML = lines.join('<br>');
+                cursorCol = 0;
+            }
+        }
+        
+        function clearCurrentLineCompletely() {
+            // 現在の行を完全に消去
+            const content = terminalDiv.innerHTML;
+            const lines = content.split('<br>');
+            
+            if (cursorRow < lines.length) {
+                lines[cursorRow] = '';
+                terminalDiv.innerHTML = lines.join('<br>');
+                cursorCol = 0;
+            }
+        }
+        
+        function appendOutput(text) {
+            if (!terminalDiv) {
+                return;
+            }
+            
+            // 出力をバッファに追加
+            outputBuffer += text;
+            
+            // 既存のタイマーをクリア
+            clearTimeout(outputTimeout);
+            
+            // 少し遅延してから一括処理
+            outputTimeout = setTimeout(function() {
+                if (outputBuffer) {
+                    processBufferedOutput();
+                    outputBuffer = '';
+                }
+            }, 16); // 約60FPS
+        }
+        
+        function processBufferedOutput() {
+            // バッファされた出力を一括処理
+            // バックスペース関連の出力を確認
+            if (outputBuffer.includes('\x08') || outputBuffer.includes('\x7f') || outputBuffer.includes(' \x08')) {
+                console.log("processBufferedOutput - backspace pattern in buffer:", JSON.stringify(outputBuffer));
+                
+                // バックスペース + スペース + バックスペース のパターンを削除
+                if (outputBuffer.includes('\x08 \x08')) {
+                    console.log("Removing BS-Space-BS pattern from output");
+                    outputBuffer = outputBuffer.replace(/\x08 \x08/g, '');
+                }
+                // 単独のバックスペースも削除
+                else if (outputBuffer.includes('\x08')) {
+                    console.log("Removing single backspace from output");
+                    outputBuffer = outputBuffer.replace(/\x08/g, '');
+                }
+            }
+            
+            let processedText = outputBuffer
+                // 最初にANSIエスケープシーケンスを処理（HTMLエスケープ前に）
+                // 全ての色コード（m終端）を統一的に処理
+                .replace(/\x1b\[([0-9;]*)m/g, function(match, codes) {
+                    if (!codes) return '<COLOREND>';  // 空の場合はリセット
+                    
+                    const codeArray = codes.split(';');
+                    for (let code of codeArray) {
+                        switch(code) {
+                            case '0': case '': return '<COLOREND>';
+                            case '30': return '<COLORBLACK>';
+                            case '31': return '<COLORRED>';
+                            case '32': return '<COLORGREEN>';
+                            case '33': return '<COLORYELLOW>';
+                            case '34': return '<COLORBLUE>';
+                            case '35': return '<COLORMAGENTA>';
+                            case '36': return '<COLORCYAN>';
+                            case '37': return '<COLORWHITE>';
+                            case '90': return '<COLORBRIGHTBLACK>';
+                            case '91': return '<COLORBRIGHTRED>';
+                            case '92': return '<COLORBRIGHTGREEN>';
+                            case '93': return '<COLORBRIGHTYELLOW>';
+                            case '94': return '<COLORBRIGHTBLUE>';
+                            case '95': return '<COLORBRIGHTMAGENTA>';
+                            case '96': return '<COLORBRIGHTCYAN>';
+                            case '97': return '<COLORBRIGHTWHITE>';
+                            // 256色対応
+                            case '38': 
+                                if (codes.includes('5')) {
+                                    return '<COLOREXTENDED>';
+                                }
+                                return '';
+                            case '48': // 背景色
+                                return '';
+                            // その他の属性
+                            case '1': return '<COLORBOLD>';
+                            case '2': return '<COLORDIM>';
+                            case '3': return '<COLORITALIC>';
+                            case '4': return '<COLORUNDERLINE>';
+                            case '5': return '<COLORBLINK>';
+                            case '7': return '<COLORINVERSE>';
+                            case '8': return '<COLORHIDDEN>';
+                            case '9': return '<COLORSTRIKETHROUGH>';
+                            case '22': return '<COLORNORMALBOLD>';
+                            case '23': return '<COLORNORMALITALIC>';
+                            case '24': return '<COLORNORMALUNDERLINE>';
+                            case '25': return '<COLORNORMALBLINK>';
+                            case '27': return '<COLORNORMALINVERSE>';
+                            case '28': return '<COLORNORMALHIDDEN>';
+                            case '29': return '<COLORNORMALSTRIKETHROUGH>';
+                        }
+                    }
+                    return ''; // 不明な場合は削除
+                })
+                // カーソル制御エスケープシーケンス（一時的にコメントアウトして確認）
+                .replace(/\x1b\[\?25l/g, '')  // カーソル非表示
+                .replace(/\x1b\[\?25h/g, '')  // カーソル表示
+                .replace(/\x1b\[H/g, '')     // カーソルをホーム位置に
+                .replace(/\x1b\[[0-9]*;?[0-9]*H/g, '')  // カーソル位置設定
+                .replace(/\x1b\[[0-9]*;?[0-9]*f/g, '')  // カーソル位置設定
+                // .replace(/\x1b\[K/g, '')     // 行の右側をクリア（バックスペースで使用される可能性）
+                .replace(/\x1b\[[0-9]*K/g, '')  // 行クリア
+                .replace(/\x1b\[J/g, '')     // 画面の下側をクリア
+                .replace(/\x1b\[[0-9]*J/g, '')  // 画面クリア
+                .replace(/\x1b\[2J/g, '')    // 画面全体をクリア
+                .replace(/\x1b\[[0-9]*A/g, '')  // カーソル上移動
+                .replace(/\x1b\[[0-9]*B/g, '')  // カーソル下移動
+                .replace(/\x1b\[[0-9]*C/g, '')  // カーソル右移動
+                // .replace(/\x1b\[[0-9]*D/g, '')  // カーソル左移動（バックスペースで使用される可能性）
+                .replace(/\x1b\[[0-9]*P/g, '')  // 文字削除
+                // 特殊なプライベートモード（Windows Terminal固有）
+                .replace(/\x1b\[\?9001h/g, '')  // Windows Terminal 拡張機能
+                .replace(/\x1b\[\?1004h/g, '')  // フォーカス報告モード
+                // OSC (Operating System Command) シーケンス
+                .replace(/\x1b\][0-9;]*[^\x07\x1b]*(?:\x07|\x1b\\)/g, '')
+                // その他の制御シーケンス
+                .replace(/\x1b\([0-9AB]/g, '')  // 文字セット選択
+                .replace(/\x1b[>=]/g, '')       // キーパッドモード
+                .replace(/\x1b\[\?[0-9]+[hl]/g, '')  // プライベートモード
+                // 不完全なエスケープシーケンス
+                .replace(/\x1b\[\?[0-9]*[a-zA-Z]?/g, '')  // 不完全なシーケンス
+                // 複合的なエスケープシーケンス（色以外）
+                .replace(/\x1b\[[0-9;]*[a-df-ln-zA-Z]/g, '')  // mを除外
+                // 文字列リテラルのエスケープシーケンス（二重エスケープ）
+                .replace(/\\x1b\[[0-9;?]*[a-zA-Z]/g, '')
+                // 残存するエスケープシーケンス
+                .replace(/\x1b\[[0-9;?]*[a-zA-Z]/g, '')  // 残りの全て
+                // 孤立したエスケープ文字
+                .replace(/\x1b(?!\[)/g, '')  // [ が続かない単独のESC文字
+                // 制御文字の削除（改行、タブ、スペース、バックスペースを除く）
+                .replace(/[\x00-\x07\x0b\x0c\x0e-\x1f\x7f]/g, '')  // 不要な制御文字のみ（\x08は保持）
+                // 基本的なHTMLエスケープ
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;')
+                // スペースを可視化
+                .replace(/ /g, '&nbsp;')
+                // バックスペース処理は無効化（PTY側で処理される）
+                // .replace(/\x08/g, '<BACKSPACE>')  // バックスペース文字
+                // .replace(/\\b/g, '<BACKSPACE>')   // 文字列リテラルの\b
+                // 改行処理（文字列リテラルも含む）
+                .replace(/\\r\\n/g, '\n')  // 文字列リテラルの\r\n
+                .replace(/\\r/g, '\n')     // 文字列リテラルの\r
+                .replace(/\\n/g, '\n')     // 文字列リテラルの\n
+                .replace(/\r\n/g, '\n')    // 実際の\r\n
+                .replace(/\r/g, '\n')      // 実際の\r
+                .replace(/\n/g, '<br>')    // 全てのnewlineをbrに
+                // 色タグを戻す
+                .replace(/&lt;COLORBLACK&gt;/g, '<span style="color: #000000;">')
+                .replace(/&lt;COLORRED&gt;/g, '<span style="color: #cd3131;">')
+                .replace(/&lt;COLORGREEN&gt;/g, '<span style="color: #0dbc79;">')
+                .replace(/&lt;COLORYELLOW&gt;/g, '<span style="color: #e5e510;">')
+                .replace(/&lt;COLORBLUE&gt;/g, '<span style="color: #2472c8;">')
+                .replace(/&lt;COLORMAGENTA&gt;/g, '<span style="color: #bc3fbc;">')
+                .replace(/&lt;COLORCYAN&gt;/g, '<span style="color: #11a8cd;">')
+                .replace(/&lt;COLORWHITE&gt;/g, '<span style="color: #ffffff;">')
+                .replace(/&lt;COLORBRIGHTBLACK&gt;/g, '<span style="color: #666666;">')
+                .replace(/&lt;COLORBRIGHTRED&gt;/g, '<span style="color: #f14c4c;">')
+                .replace(/&lt;COLORBRIGHTGREEN&gt;/g, '<span style="color: #23d18b;">')
+                .replace(/&lt;COLORBRIGHTYELLOW&gt;/g, '<span style="color: #f5f543;">')
+                .replace(/&lt;COLORBRIGHTBLUE&gt;/g, '<span style="color: #3b8eea;">')
+                .replace(/&lt;COLORBRIGHTMAGENTA&gt;/g, '<span style="color: #d670d6;">')
+                .replace(/&lt;COLORBRIGHTCYAN&gt;/g, '<span style="color: #29b8db;">')
+                .replace(/&lt;COLORBRIGHTWHITE&gt;/g, '<span style="color: #ffffff;">')
+                .replace(/&lt;COLOREXTENDED&gt;/g, '<span style="color: #ffffff;">')  // 256色は白で代用
+                .replace(/&lt;COLORBOLD&gt;/g, '<span style="font-weight: bold;">')
+                .replace(/&lt;COLORDIM&gt;/g, '<span style="opacity: 0.7;">')
+                .replace(/&lt;COLORITALIC&gt;/g, '<span style="font-style: italic;">')
+                .replace(/&lt;COLORUNDERLINE&gt;/g, '<span style="text-decoration: underline;">')
+                .replace(/&lt;COLORBLINK&gt;/g, '<span style="animation: blink 1s infinite;">')
+                .replace(/&lt;COLORINVERSE&gt;/g, '<span style="background-color: #ffffff; color: #000000;">')
+                .replace(/&lt;COLORHIDDEN&gt;/g, '<span style="visibility: hidden;">')
+                .replace(/&lt;COLORSTRIKETHROUGH&gt;/g, '<span style="text-decoration: line-through;">')
+                .replace(/&lt;COLORNORMALBOLD&gt;/g, '<span style="font-weight: normal;">')
+                .replace(/&lt;COLORNORMALITALIC&gt;/g, '<span style="font-style: normal;">')
+                .replace(/&lt;COLORNORMALUNDERLINE&gt;/g, '<span style="text-decoration: none;">')
+                .replace(/&lt;COLORNORMALBLINK&gt;/g, '<span style="animation: none;">')
+                .replace(/&lt;COLORNORMALINVERSE&gt;/g, '<span style="background-color: transparent; color: inherit;">')
+                .replace(/&lt;COLORNORMALHIDDEN&gt;/g, '<span style="visibility: visible;">')
+                .replace(/&lt;COLORNORMALSTRIKETHROUGH&gt;/g, '<span style="text-decoration: none;">')
+                .replace(/&lt;COLOREND&gt;/g, '</span>')
+                // バックスペース処理は無効化（PTY側で処理される）
+                // .replace(/&lt;BACKSPACE&gt;/g, '')
+            
+            // エスケープシーケンスによるカーソル移動と行クリア
+            if (processedText.includes('\x1b[D') && processedText.includes('\x1b[K')) {
+                console.log("Cursor left + line clear sequence detected");
+                // このパターンは無視（既にローカルで処理済み）
+                return;
+            }
+            
+            // PTYが送る可能性のあるバックスペースパターン
+            processedText = processedText
+                .replace(/\x08&nbsp;\x08/g, '')  // BS + スペース + BS
+                .replace(/\x1b\[D&nbsp;\x1b\[D/g, '')  // 左移動 + スペース + 左移動
+                .replace(/\x08./g, '')  // BS + 任意の1文字（上書き）
+                .replace(/\x7f/g, '')  // DEL文字
+            
+            // 一度に更新してちらつきを防止
+            if (processedText) {
+                terminalDiv.innerHTML += processedText;
+                terminalDiv.scrollTop = terminalDiv.scrollHeight;
+            }
+        }
+        
+        // 不要になった関数は削除（appendOutput内で処理）
+        
+        // ターミナルサイズ調整用の関数（Python から呼び出し可能）
+        window.resizeTerminal = function() {
+            console.log("Terminal resize requested");
+            updateTerminalDimensions();
+        }
+        
+        let lastUpdateTime = 0;
+        function updateTerminalDimensions() {
+            // 頻繁な更新を制限（最大100ms間隔）
+            const now = Date.now();
+            if (now - lastUpdateTime < 100) {
+                return;
+            }
+            lastUpdateTime = now;
+            
+            if (terminalDiv) {
+                const rect = terminalDiv.getBoundingClientRect();
+                const computedStyle = window.getComputedStyle(terminalDiv);
+                const fontSize = parseFloat(computedStyle.fontSize);
+                const lineHeight = parseFloat(computedStyle.lineHeight) || fontSize * 1.2;
+                
+                // 実際の文字幅を測定
+                const charWidth = measureCharWidth();
+                const charHeight = lineHeight;
+                
+                // パディングを考慮
+                const padding = 20;
+                const usableWidth = rect.width - padding;
+                const usableHeight = rect.height - padding;
+                
+                // 行列数を計算
+                const cols = Math.max(80, Math.floor(usableWidth / charWidth));
+                const rows = Math.max(24, Math.floor(usableHeight / charHeight));
+                
+                // 前回と同じ値の場合は更新しない
+                if (maxCols === cols && maxRows === rows) {
+                    return;
+                }
+                
+                // グローバル変数を更新
+                maxCols = cols;
+                maxRows = rows;
+                
+                // Python側に正しい列数を通知
+                if (backend) {
+                    backend.update_terminal_columns(cols);
+                }
+            }
+        }
+        
+        function measureCharWidth() {
+            // 実際の文字幅を測定
+            const testElement = document.createElement('span');
+            testElement.style.fontFamily = 'Consolas, Monaco, "Courier New", monospace';
+            testElement.style.fontSize = '14px';
+            testElement.style.position = 'absolute';
+            testElement.style.visibility = 'hidden';
+            testElement.style.whiteSpace = 'pre';
+            testElement.textContent = '0123456789012345678901234567890123456789'; // 40文字
+            
+            document.body.appendChild(testElement);
+            const width = testElement.getBoundingClientRect().width;
+            document.body.removeChild(testElement);
+            
+            const charWidth = width / 40; // 40文字で割る
+            // console.log(`Measured character width: ${charWidth.toFixed(2)}px`);
+            return charWidth;
+        }
+        
+        // シェル変更用の関数
+        window.changeShell = function(shellType, workingDir) {
+            console.log("Changing shell to:", shellType, workingDir);
+            if (backend) {
+                backend.stop_shell();
+                setTimeout(function() {
+                    backend.start_shell(shellType, workingDir);
+                }, 500);
+            }
+        }
+        
+        // ページがアンロードされる時の処理
+        window.addEventListener('beforeunload', function() {
+            if (backend) {
+                backend.stop_shell();
+            }
+        });
+    </script>
+</body>
+</html>
