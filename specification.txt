@@ -1,0 +1,158 @@
+desktopPyLauncher – Refactor Specification
+===========================================
+
+1. Module Structure
+-------------------
+DPyL_utils.py
+    • Pure utility functions (non-GUI logic only)
+      - warn, b64d, ms_to_hms_ms, hms_to_ms, ms_to_hms
+      - is_network_drive, get_fixed_local_icon, _default_icon, _icon_pixmap
+      - debug_print (デバッグ出力用)
+      - any other future helpers not tied to Qt widgets
+
+DPyL_classes.py
+    • GUI common/base layer
+    • Defines CanvasItem (new base class for all scene items)
+    • Contains lightweight item classes that only need basic features:
+        - LauncherItem
+        - JSONItem
+        - ImageItem (simple version)
+    • Holds shared ResizeGrip implementation for rectangular items
+
+DPyL_note.py
+    • Note‑related high‑functionality
+    • Implements NoteItem, NoteEditDialog and any note‑specific helpers
+
+DPyL_video.py
+    • Video‑related high‑functionality
+    • Implements VideoItem, VideoEditDialog, ResizeGripItem (video size)
+
+DPyL_terminal.py
+    • Terminal functionality (simple direct input terminal)
+    • Implements TerminalItem (QPlainTextEdit based), TerminalEditDialog
+    • Supports cmd, powershell, wsl command execution
+
+DPyL_xterm_terminal.py
+    • Advanced terminal with bidirectional I/O support
+    • Implements XtermTerminalItem with PTY support via winpty
+    • Uses QWebEngineView with xterm.js for full terminal emulation
+    • Supports ANSI escape sequences, terminal resizing
+
+DPyL_marker.py
+    • Marker/annotation functionality
+    • Implements MarkerItem for visual markers on canvas
+
+DPyL_group.py
+    • Group functionality for organizing canvas items
+    • Implements GroupItem for grouping multiple items
+
+DPyL_shapes.py
+    • Basic shape drawing functionality
+    • Implements shape items (rectangles, circles, etc.)
+
+DPyL_effects.py
+    • Visual effects and animations
+    • Implements effect items and transitions
+
+DPyL_ticker.py
+    • Ticker/scrolling text functionality
+    • Implements TickerItem for scrolling text display
+
+DPyL_command_widget.py
+    • Command execution widget
+    • Provides command palette functionality
+
+DPyL_interactive_terminal.py
+    • Interactive terminal base functionality
+    • Shared terminal utilities
+
+desktopPyLauncher.py
+    • Application entry point
+    • Defines MainWindow, CanvasView, toolbar/menu wiring, drag‑and‑drop
+    • Imports from the three DPyL_* modules above
+    • No utility logic lives here
+
+Dependency direction (one‑way):
+    desktopPyLauncher → DPyL_* → Qt / utils
+    * No circular imports.
+
+2. CanvasItem (Base Class)
+--------------------------
+Parent: QGraphicsItemGroup
+
+Constructor signature:
+    CanvasItem(data: dict, text_color: QColor, *, run_mode: bool = False)
+
+Responsibilities:
+    • Hold self.d (raw JSON‑compatible dict)
+    • Manage position, selection, movability flags
+    • Provide set_run_mode(on: bool)
+    • Centralised itemChange override:
+        - Update self.d["x"], self.d["y"]
+        - Call MainWindow.snap_position() when scene exists
+    • Generic contextMenuEvent (delegates to MainWindow)
+    • mouseDoubleClickEvent left as virtual for subclasses
+
+3. ResizeGrip (Common)
+----------------------
+• Generic CanvasResizeGrip(target_item, on_resize_callback)
+• Handles corner‑drag, calls on_resize_callback(w, h)
+• Updates target_item.d["width"], ["height"]
+
+4. Data Flow Rules
+------------------
+* Position & Size changes are always written back to self.d.
+* MainWindow.snap_position() handles magnetic snapping logic.
+* run_mode True blocks ItemIsMovable on every CanvasItem.
+
+5. Split Criteria
+-----------------
+Lightweight / generic items (launcher, image, json) live in DPyL_classes.py.
+High‑feature or heavy‑dependency items get their own module:
+    - Note (Markdown rendering, label mode, custom styling)
+    - Video (QMediaPlayer, audio, timeline dialogs)
+    - Terminal (subprocess/process management, terminal emulation)
+    - XtermTerminal (PTY support, WebEngine integration, xterm.js)
+    - Marker (annotation tools)
+    - Group (item grouping logic)
+    - Shapes (drawing primitives)
+    - Effects (visual animations)
+    - Ticker (text scrolling)
+    - CommandWidget (command palette UI)
+
+6. Coding Conventions
+---------------------
+* No bidirectional imports.
+* Enum references must use full Qt6 path (Qt.AlignmentFlag etc.).
+* Avoid implicit float→int; cast explicitly.
+* Keep JSON dict untouched except intended field updates.
+* CanvasItem subclasses should avoid duplicating base logic.
+* Use debug_print() for debug output instead of print()
+* Handle character encoding properly (utf-8 with error handling)
+
+7. External Dependencies
+------------------------
+lib/xterm_simple.html
+    • Terminal display HTML/JavaScript interface
+    • Uses xterm.js for terminal emulation
+    • Handles ANSI escape sequences
+    • Manages terminal dimensions and resizing
+
+template/*.html
+    • Export templates for various output formats
+    • template.html - basic export template
+    • template_v010.html - version 0.10 template
+    • template_v020.html - version 0.20 template
+
+8. Key Features
+---------------
+* Canvas-based item management with drag & drop
+* Multiple terminal implementations:
+  - Simple terminal (DPyL_terminal.py) for basic command execution
+  - Xterm terminal (DPyL_xterm_terminal.py) for full PTY support
+* Rich media support (images, videos, notes)
+* JSON-based project save/load
+* HTML export functionality
+* Snap-to-grid positioning
+* Item grouping and organization
+

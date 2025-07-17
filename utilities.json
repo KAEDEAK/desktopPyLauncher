@@ -1,0 +1,50 @@
+{
+  "fileinfo": {
+    "name": "desktopPyLauncher.py",
+    "info": "project data file",
+    "version": "1.1"
+  },
+  "items": [
+    {
+      "type": "advanced_terminal",
+      "x": 0.0,
+      "y": 0.0,
+      "width": 600,
+      "height": 400,
+      "workdir": "D:\\00_SOFTDEV\\00_local\\devLaunchers\\desktopPyLauncherDATA",
+      "terminal_type": "cmd",
+      "startup_command": "echo Welcome to Advanced Terminal",
+      "auto_start": false,
+      "as_admin": false,
+      "font_size": 12,
+      "background_color": "#000000",
+      "text_color": "#ffffff",
+      "caption": "Advanced Terminal",
+      "env_vars": {
+        "TERM": "xterm-256color",
+        "COLUMNS": "80",
+        "LINES": "24"
+      },
+      "claude_cli_path": "",
+      "interactive_mode": true,
+      "z": 0.0
+    },
+    {
+      "type": "xterm_terminal",
+      "x": 0.0,
+      "y": 0.0,
+      "width": 800,
+      "height": 600,
+      "workdir": "D:\\00_SOFTDEV\\00_local\\devLaunchers\\desktopPyLauncherTNG",
+      "terminal_type": "cmd",
+      "auto_start": true,
+      "caption": "XTerm Terminal",
+      "z": 0.0
+    }
+  ],
+  "window_geom": "AdnQywADAAAAAAIbAAAArwAACVUAAATgAAACGwAAAM4AAAlVAAAE4AAAAAAAAAAACgAAAAIbAAAAzgAACVUAAATg",
+  "background": {
+    "path": "C:/Users/EISEN/Pictures/wallpapers(modified)/wps_145.png",
+    "brightness": 15
+  }
+}

@@ -67,6 +67,20 @@ try:
 except ImportError:
     TerminalItem = None
 
+# 双方向通信ターミナルアイテムのインポート
+try:
+    from DPyL_interactive_terminal import InteractiveTerminalItem
+except ImportError:
+    InteractiveTerminalItem = None
+
+# Removed full_terminal and enhanced_terminal imports
+
+# xterm.js ベースターミナルのインポート
+try:
+    from DPyL_xterm_terminal import XtermTerminalItem
+except ImportError:
+    XtermTerminalItem = None
+
     
 EXPAND_STEP = 500  # 端に到達したときに拡張する幅・高さ（px）
 
@@ -1231,6 +1245,18 @@ class MainWindow(QMainWindow):
             return ArrowItem
         # ==========================================
 
+        # === 双方向通信ターミナル対応 ===
+        if t == "interactive_terminal":
+            return InteractiveTerminalItem
+        # ==========================================
+
+        # Removed full_terminal and enhanced_terminal type checks
+
+        # === XTerm Terminal対応 ===
+        if t == "xterm_terminal":
+            return XtermTerminalItem
+        # ==========================================
+
         # === ターミナルアイテム対応 ===
         if t == "terminal":
             return TerminalItem
@@ -1311,6 +1337,9 @@ class MainWindow(QMainWindow):
         act_marker = menu_obj.addAction("マーカー追加")
         act_note   = menu_obj.addAction("ノート追加")
         act_terminal = menu_obj.addAction("ターミナル追加")
+        act_interactive_terminal = menu_obj.addAction("双方向ターミナル追加")
+        # Removed full_terminal and enhanced_terminal menu items
+        act_xterm_terminal = menu_obj.addAction("XTerm Terminal追加")
         act_command_widget = menu_obj.addAction("コマンドウィジェット")
         menu_obj.addSeparator()  # セパレータで分ける
         act_rect   = menu_obj.addAction("矩形追加")
@@ -1319,6 +1348,9 @@ class MainWindow(QMainWindow):
         act_marker.triggered.connect(self._add_marker)
         act_note.triggered.connect(self._add_note)
         act_terminal.triggered.connect(self._add_terminal)
+        act_interactive_terminal.triggered.connect(self._add_interactive_terminal)
+        # Removed full_terminal and enhanced_terminal action connections
+        act_xterm_terminal.triggered.connect(self._add_xterm_terminal)
         act_command_widget.triggered.connect(self._add_command_widget)
         act_rect.triggered.connect(self._add_rect)
         act_arrow.triggered.connect(self._add_arrow)
@@ -2574,6 +2606,84 @@ class MainWindow(QMainWindow):
         
         # TerminalItem インスタンスを生成してシーンに追加
         item = TerminalItem(d, text_color=self.text_color)
+        self.scene.addItem(item)
+        self.data.setdefault("items", []).append(d)
+        
+        # 追加直後は編集モードでプロパティを設定できるようにする
+        item.set_run_mode(False)
+        item.setFlag(item.GraphicsItemFlag.ItemIsSelectable, True)
+        item.setFlag(item.GraphicsItemFlag.ItemIsMovable, True)
+
+    def _add_interactive_terminal(self):
+        """シーンの中央付近に、新規 InteractiveTerminalItem を追加する"""
+        if InteractiveTerminalItem is None:
+            QMessageBox.warning(
+                self, 
+                "Interactive Terminal Item Not Available", 
+                "InteractiveTerminalItem クラスがインポートできませんでした。\nDPyL_interactive_terminal.py が正しく配置されているか確認してください。"
+            )
+            return
+            
+        # 画面中心位置を取得
+        sp = self.view.mapToScene(self.view.viewport().rect().center())
+        
+        # デフォルトの設定辞書を構築
+        d = {
+            "type": "interactive_terminal",
+            "x": sp.x(),
+            "y": sp.y(),
+            "width": 600,
+            "height": 400,
+            "workdir": os.getcwd(),
+            "terminal_type": "pwsh",  # PowerShell Core (新しい方)をデフォルトに
+            "shell_command": "",
+            "auto_start": False,
+            "font_size": 10,
+            "background_color": "#1e1e1e",
+            "text_color": "#ffffff",
+            "caption": "Interactive Terminal"
+        }
+        
+        # InteractiveTerminalItem インスタンスを生成してシーンに追加
+        item = InteractiveTerminalItem(d, text_color=self.text_color)
+        self.scene.addItem(item)
+        self.data.setdefault("items", []).append(d)
+        
+        # 追加直後は編集モードでプロパティを設定できるようにする
+        item.set_run_mode(False)
+        item.setFlag(item.GraphicsItemFlag.ItemIsSelectable, True)
+        item.setFlag(item.GraphicsItemFlag.ItemIsMovable, True)
+
+    # Removed _add_full_terminal and _add_enhanced_terminal methods
+
+    def _add_xterm_terminal(self):
+        """シーンの中央付近に、新規 XtermTerminalItem を追加する"""
+        if XtermTerminalItem is None:
+            QMessageBox.warning(
+                self, 
+                "XTerm Terminal Item Not Available", 
+                "XtermTerminalItem クラスがインポートできませんでした。\nDPyL_xterm_terminal.py が正しく配置されているか、PyQt6WebEngineが利用可能か確認してください。"
+            )
+            return
+            
+        # 画面中心位置を取得
+        sp = self.view.mapToScene(self.view.viewport().rect().center())
+        
+        # デフォルトの設定辞書を構築
+        d = {
+            "type": "xterm_terminal",
+            "x": sp.x(),
+            "y": sp.y(),
+            "width": 800,
+            "height": 600,
+            "workdir": os.getcwd(),
+            "terminal_type": "cmd",
+            "auto_start": True,
+            "caption": "XTerm Terminal"
+        }
+        
+        # XtermTerminalItem インスタンスを生成してシーンに追加
+        item = XtermTerminalItem(d, text_color=self.text_color)
         self.scene.addItem(item)
         self.data.setdefault("items", []).append(d)
         

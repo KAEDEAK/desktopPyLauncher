@@ -212,13 +212,11 @@ class TerminalWidget(QPlainTextEdit):
                 self.command_history.append(command)
             self.history_index = len(self.command_history)
             
-            # コマンド実行シグナルを発行
+            # コマンド実行シグナルを発行（出力はadd_outputで処理される）
             self.command_executed.emit(command)
-        
-        # 新しい行とプロンプトを追加
-        self.appendPlainText("")
-        self.appendPlainText(self.prompt)
-        self.moveCursor(QTextCursor.MoveOperation.End)
+        else:
+            # コマンドが空の場合はそのまま新しいプロンプトを追加
+            self._add_new_prompt()
 
     def _navigate_history(self, direction):
         """コマンド履歴をナビゲート"""
@@ -249,23 +247,28 @@ class TerminalWidget(QPlainTextEdit):
 
     def add_output(self, text: str):
         """出力テキストを追加"""
-        # カーソルを最後の行の先頭に移動
+        # カーソルを末尾に移動
         cursor = self.textCursor()
         cursor.movePosition(QTextCursor.MoveOperation.End)
-        cursor.movePosition(QTextCursor.MoveOperation.StartOfLine)
         
-        # 出力テキストを挿入
-        cursor.insertText(text + "\n")
+        # 改行してから出力を追加
+        cursor.insertText("\n" + text)
         
-        # 新しいプロンプトを追加
-        cursor.insertText(self.prompt)
-        self.setTextCursor(cursor)
+        # 出力の後に新しいプロンプトを追加
+        self._add_new_prompt()
         
         # テキスト行数制限
         self.limit_text_lines(500)  # 最大500行に制限
         
         # 自動スクロール
         self.ensureCursorVisible()
+
+    def _add_new_prompt(self):
+        """新しいプロンプトを追加"""
+        cursor = self.textCursor()
+        cursor.movePosition(QTextCursor.MoveOperation.End)
+        cursor.insertText("\n" + self.prompt)
+        self.setTextCursor(cursor)
 
     def clear_terminal(self):
         """ターミナルをクリア"""
