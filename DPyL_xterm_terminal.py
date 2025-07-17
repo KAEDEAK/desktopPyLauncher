@@ -575,7 +575,7 @@ class XtermTerminalWidget(QWebEngineView if HAS_WEBENGINE else QObject):
         try:
             # 現在のスクリプトディレクトリを取得
             script_dir = Path(__file__).parent
-            html_path = script_dir / "lib" / "yterm_full.html"
+            html_path = script_dir / "lib" / "xterm_full.html"
             
             if html_path.exists():
                 with open(html_path, 'r', encoding='utf-8') as f:
