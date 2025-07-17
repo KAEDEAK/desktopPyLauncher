@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-DPyL_note.py ― NoteItem / NoteEditDialog (Qt6 / PyQt6 専用)
+DPyL_note.py ― NoteItem / NoteEditDialog (Qt6 / PySide6 専用)
 --------------------------------------------------------------------
 機能:
   - テキスト/Markdown 表示切替
@@ -21,7 +21,7 @@ import base64
 from typing import Any, List
 import markdown  # pip install markdown
 
-from PyQt6.QtWidgets import (
+from PySide6.QtWidgets import (
     QGraphicsItem,
     QGraphicsRectItem,
     QGraphicsTextItem,
@@ -44,9 +44,8 @@ from PyQt6.QtWidgets import (
     
     
 )
-from PyQt6.QtGui import QColor, QBrush, QPainterPath, QPen, QFont, QTextDocument, QKeyEvent, QFontMetrics
-from PyQt6.QtCore import Qt, QPointF, QRectF, QTimer, QEvent, QFileSystemWatcher
-from PyQt6 import sip
+from PySide6.QtGui import QColor, QBrush, QPainterPath, QPen, QFont, QTextDocument, QKeyEvent, QFontMetrics
+from PySide6.QtCore import Qt, QPointF, QRectF, QTimer, QEvent, QFileSystemWatcher
 import os
 # ------- internal modules -----------------------------------------
 from DPyL_classes import CanvasItem, CanvasResizeGrip

@@ -1,6 +1,6 @@
 """
 DPyL_video.py  ―  VideoItem / ResizeGrip / ポイント編集ダイアログ
-◎ Qt6 / PyQt6 専用
+◎ Qt6 / PySide6 専用
 
 
 留意事項
@@ -22,7 +22,7 @@ import os, copy
 from pathlib import Path
 from typing import Any
 
-from PyQt6.QtWidgets import (
+from PySide6.QtWidgets import (
     QApplication, QMainWindow, QGraphicsView, QGraphicsScene,
     QGraphicsItem, QGraphicsItemGroup, QGraphicsPixmapItem,
     QGraphicsTextItem, QGraphicsRectItem, QToolBar, QMessageBox,
@@ -32,16 +32,16 @@ from PyQt6.QtWidgets import (
     QWidget, QSlider, QGraphicsProxyWidget
 )
 
-from PyQt6.QtMultimedia import QMediaPlayer, QAudioOutput
-from PyQt6.QtMultimediaWidgets import (QVideoWidget, QGraphicsVideoItem)
-from PyQt6.QtGui import (
+from PySide6.QtMultimedia import QMediaPlayer, QAudioOutput
+from PySide6.QtMultimediaWidgets import (QVideoWidget, QGraphicsVideoItem)
+from PySide6.QtGui import (
     QPixmap, QPainter, QBrush, QColor, QPalette, QAction,
     QIcon, QImage, QPen, QTransform, QFont
 )
-from PyQt6.QtCore import (
+from PySide6.QtCore import (
     Qt, QSizeF, QPointF, QFileInfo, QProcess,
     QBuffer, QIODevice, QTimer, 
-    QUrl,pyqtSignal
+    QUrl,Signal
 )
 from functools import partial
 
@@ -147,7 +147,7 @@ class TimeLabel(QLabel):
     再生時刻表示用ラベル  
     ダブルクリックで現在時刻をコピーできる
     """
-    doubleClicked = pyqtSignal()
+    doubleClicked = Signal()
     # mouseDoubleClickEvent実装は省略・未使用
 
 class VideoItem(QGraphicsVideoItem):

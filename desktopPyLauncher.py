@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
 desktopPyLauncher.py ― エントリポイント
-◎ Qt6 / PyQt6 専用
+◎ Qt6 / PySide6 専用
 """
 from __future__ import annotations
 
@@ -12,7 +12,7 @@ from pathlib import Path
 import math
 import time
     
-from PyQt6.QtWidgets import (
+from PySide6.QtWidgets import (
     QApplication, QMainWindow, QGraphicsView, QGraphicsScene,
     QGraphicsItem, QGraphicsItemGroup, QGraphicsPixmapItem,
     QGraphicsTextItem, QGraphicsRectItem, QToolBar, QMessageBox,
@@ -21,13 +21,13 @@ from PyQt6.QtWidgets import (
     QToolButton, QMenu, QComboBox, QSpinBox, QCheckBox, QSizePolicy,
     QWidget, QSlider, QGraphicsProxyWidget
 )
-from PyQt6.QtMultimedia import QMediaPlayer, QAudioOutput
-from PyQt6.QtMultimediaWidgets import QVideoWidget, QGraphicsVideoItem
-from PyQt6.QtGui import (
+from PySide6.QtMultimedia import QMediaPlayer, QAudioOutput
+from PySide6.QtMultimediaWidgets import QVideoWidget, QGraphicsVideoItem
+from PySide6.QtGui import (
     QPixmap, QPainter, QBrush, QColor, QPalette, QAction,
     QIcon, QImage, QPen, QTransform, QFont, QRadialGradient
 )
-from PyQt6.QtCore import (
+from PySide6.QtCore import (
     Qt, QRectF, QSizeF, QPointF, QFileInfo, QProcess, 
     QCoreApplication, QEvent,
     QBuffer, QIODevice, QTimer, QUrl, QObject
@@ -1180,7 +1180,7 @@ class MainWindow(QMainWindow):
     def mouseReleaseEvent(self, ev):
         """
         5ボタンマウス（XButton1/XButton2）対応( 戻る／進む )
-        PyQt6 は mousePressEvent より、こっちのほうが安定するらしい。
+        PySide6 は mousePressEvent より、こっちのほうが安定するらしい。
         """
         # XButton1 → 戻る（_go_prev）、XButton2 → 進む（_go_next）
         if ev.button() == Qt.MouseButton.XButton1:
@@ -2662,7 +2662,7 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(
                 self, 
                 "XTerm Terminal Item Not Available", 
-                "XtermTerminalItem クラスがインポートできませんでした。\nDPyL_xterm_terminal.py が正しく配置されているか、PyQt6WebEngineが利用可能か確認してください。"
+                "XtermTerminalItem クラスがインポートできませんでした。\nDPyL_xterm_terminal.py が正しく配置されているか、PySide6WebEngineが利用可能か確認してください。"
             )
             return
             
@@ -3178,7 +3178,7 @@ class MainWindow(QMainWindow):
             show_export_html_notification("エクスポート処理中...", self)
             
             # イベントループを更新してUIの応答性を確保
-            from PyQt6.QtWidgets import QApplication
+            from PySide6.QtWidgets import QApplication
             QApplication.processEvents()
             
             # テンプレートファイルを読み込み

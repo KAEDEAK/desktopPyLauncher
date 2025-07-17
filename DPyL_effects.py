@@ -6,9 +6,9 @@ MainWindowでエフェクトインスタンスを管理し、
 アイテム間で共有する安全な設計
 """
 
-from PyQt6.QtWidgets import QGraphicsEffect
-from PyQt6.QtGui import QPainter, QPen, QColor
-from PyQt6.QtCore import QTimer, QPropertyAnimation, QEasingCurve, pyqtProperty, QPointF
+from PySide6.QtWidgets import QGraphicsEffect
+from PySide6.QtGui import QPainter, QPen, QColor
+from PySide6.QtCore import QTimer, QPropertyAnimation, QEasingCurve, Property, QPointF
 import math
 
 __all__ = [
@@ -39,7 +39,7 @@ class LaserRingEffect(QGraphicsEffect):
         self._fade_animation.setEasingCurve(QEasingCurve.Type.OutCubic)
         self._fade_animation.finished.connect(self._on_fade_finished)
     
-    @pyqtProperty(float)
+    @Property(float)
     def opacity(self):
         return self._opacity
     

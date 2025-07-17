@@ -27,24 +27,24 @@ except ImportError:
     if TERMINAL_DEBUG:
         print("winpty not available, using QProcess fallback")
 
-from PyQt6.QtCore import (
-    Qt, QObject, pyqtSignal, pyqtSlot, QTimer, QUrl, QThread, QProcess, QRectF, QProcessEnvironment
+from PySide6.QtCore import (
+    Qt, QObject, Signal, Slot, QTimer, QUrl, QThread, QProcess, QRectF, QProcessEnvironment
 )
-from PyQt6.QtGui import QColor, QBrush, QPen, QKeyEvent
-from PyQt6.QtWidgets import (
+from PySide6.QtGui import QColor, QBrush, QPen, QKeyEvent
+from PySide6.QtWidgets import (
     QGraphicsProxyWidget, QGraphicsRectItem, QGraphicsItem,
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QLineEdit, QComboBox, QCheckBox, QSpinBox, QFormLayout, QGroupBox, QTextEdit
 )
 try:
-    from PyQt6.QtWebEngineWidgets import QWebEngineView
-    from PyQt6.QtWebEngineCore import QWebEnginePage
-    from PyQt6.QtWebChannel import QWebChannel
+    from PySide6.QtWebEngineWidgets import QWebEngineView
+    from PySide6.QtWebEngineCore import QWebEnginePage
+    from PySide6.QtWebChannel import QWebChannel
     HAS_WEBENGINE = True
 except ImportError:
     HAS_WEBENGINE = False
     if TERMINAL_DEBUG:
-        print("Warning: PyQt6WebEngine not available. XTerm Terminal will not work.")
+        print("Warning: PySide6WebEngine not available. XTerm Terminal will not work.")
 
 # プロジェクト内モジュール
 try:
@@ -52,7 +52,7 @@ try:
     from DPyL_utils import warn, debug_print
 except ImportError:
     # テスト環境用の代替
-    from PyQt6.QtWidgets import QGraphicsItemGroup as CanvasItem
+    from PySide6.QtWidgets import QGraphicsItemGroup as CanvasItem
     def warn(msg): 
         if TERMINAL_DEBUG:
             print(f"WARN: {msg}")
@@ -82,7 +82,7 @@ class TerminalBackend(QObject):
     xterm.js と通信するためのバックエンドクラス
     winpty と QProcess の両方をサポート
     """
-    output_ready = pyqtSignal(str)
+    output_ready = Signal(str)
     
     def __init__(self):
         super().__init__()
@@ -125,7 +125,7 @@ class TerminalBackend(QObject):
         # print(f"Terminal dimensions: {cols}x{rows} (widget: {widget_width}x{widget_height}, usable: {usable_width}x{usable_height}, char: {char_width:.1f}x{char_height:.1f})")
         return (cols, rows)
         
-    @pyqtSlot(int, int)
+    @Slot(int, int)
     def set_terminal_size(self, width, height):
         """ターミナルサイズを設定"""
         self.widget_width = width
@@ -145,7 +145,7 @@ class TerminalBackend(QObject):
         # JavaScriptにもサイズ変更を通知
         self.resize_terminal_js()
         
-    @pyqtSlot(int)
+    @Slot(int)
     def update_terminal_columns(self, cols):
         """JavaScriptから計算された正しい列数を受信"""
         # print(f"Received correct column count from JavaScript: {cols}")
@@ -185,7 +185,7 @@ class TerminalBackend(QObject):
             if TERMINAL_DEBUG:
                 print(f"Failed to notify JavaScript about size change: {e}")
         
-    @pyqtSlot(str, str, result=bool)
+    @Slot(str, str, result=bool)
     def start_shell(self, shell_type: str = "cmd", working_dir: str = None):
         """シェルプロセスを開始"""
         if TERMINAL_DEBUG:
@@ -427,7 +427,7 @@ class TerminalBackend(QObject):
         self.pty_reader_thread = threading.Thread(target=read_pty_output, daemon=True)
         self.pty_reader_thread.start()
     
-    @pyqtSlot()
+    @Slot()
     def stop_shell(self):
         """シェルプロセスを停止"""
         self.is_running = False
@@ -453,7 +453,7 @@ class TerminalBackend(QObject):
         
         self.output_ready.emit("\\r\\n\\x1b[33mTerminal stopped.\\x1b[0m\\r\\n")
     
-    @pyqtSlot(str, result=bool)
+    @Slot(str, result=bool)
     def write_to_shell(self, data: str):
         """シェルに文字列を送信（JavaScript から呼び出される）"""
         if TERMINAL_DEBUG:
@@ -545,7 +545,7 @@ class XtermTerminalWidget(QWebEngineView if HAS_WEBENGINE else QObject):
     
     def __init__(self, parent=None):
         if not HAS_WEBENGINE:
-            raise ImportError("PyQt6WebEngine is required for XTerm Terminal")
+            raise ImportError("PySide6WebEngine is required for XTerm Terminal")
         super().__init__(parent)
         
         # カスタムページを設定
@@ -927,7 +927,7 @@ class XtermTerminalItem(CanvasItem):
 
     def contextMenuEvent(self, ev):
         """右クリックメニュー"""
-        from PyQt6.QtWidgets import QMenu
+        from PySide6.QtWidgets import QMenu
         
         menu = QMenu()
         

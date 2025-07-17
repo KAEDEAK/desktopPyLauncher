@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
 DPyL_classes.py  ―  desktopPyLauncher GUIアイテム/共通ダイアログ
-◎ Qt6 / PyQt6 専用
+◎ Qt6 / PySide6 専用
 """
 from __future__ import annotations
 import os,sys,json,base64
@@ -12,13 +12,13 @@ from shlex import split as shlex_split
 from win32com.client import Dispatch
 import subprocess
 
-from PyQt6.QtCore import (
+from PySide6.QtCore import (
     Qt, QPointF, QRectF, QSizeF, QTimer, QSize, QFileInfo, QBuffer, QByteArray, QIODevice, QProcess, QCoreApplication
 )
-from PyQt6.QtGui import (
+from PySide6.QtGui import (
     QPixmap, QPainter, QPalette, QColor, QBrush, QPen, QIcon, QMovie
 )
-from PyQt6.QtWidgets import (
+from PySide6.QtWidgets import (
     QApplication, QGraphicsItemGroup, QGraphicsPixmapItem, QGraphicsRectItem,
     QGraphicsSceneMouseEvent, QGraphicsItem,QGraphicsTextItem,
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
@@ -1665,7 +1665,7 @@ class LauncherItem(GifMixin, CanvasItem):
                         
                         # 直接実行（TerminalItemの_on_command_executedを回避）
                         try:
-                            from PyQt6.QtCore import QTimer
+                            from PySide6.QtCore import QTimer
                             import threading
                             
                             # 結果を保存する変数
@@ -1808,8 +1808,8 @@ class LauncherItem(GifMixin, CanvasItem):
     def _send_command_to_terminal_widget(self, widget, command):
         """TerminalWidgetにコマンドを直接送信"""
         try:
-            from PyQt6.QtCore import QTimer
-            from PyQt6.QtGui import QTextCursor
+            from PySide6.QtCore import QTimer
+            from PySide6.QtGui import QTextCursor
             
             warn(f"[LauncherItem] ターミナルに送信するコマンド: {command}")
             
@@ -1845,7 +1845,7 @@ class LauncherItem(GifMixin, CanvasItem):
     def _add_output_without_prompt(self, widget, text):
         """プロンプトを重複させずに出力を追加（HTML対応）"""
         try:
-            from PyQt6.QtGui import QTextCursor
+            from PySide6.QtGui import QTextCursor
             
             # カーソルを最後の行に移動
             cursor = widget.textCursor()

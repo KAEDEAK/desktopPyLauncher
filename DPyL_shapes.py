@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-DPyL_shapes.py ― カスタム描画アイテム（Qt6 / PyQt6 専用）
+DPyL_shapes.py ― カスタム描画アイテム（Qt6 / PySide6 専用）
 --------------------------------------------------------------------
 機能:
   - MarkerItemを継承したカスタム描画クラス
@@ -12,13 +12,13 @@ DPyL_shapes.py ― カスタム描画アイテム（Qt6 / PyQt6 専用）
 from __future__ import annotations
 import math
 from typing import Any, Dict
-from PyQt6.QtWidgets import (
+from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit,
     QPushButton, QCheckBox, QComboBox, QMessageBox, QSpinBox,
     QColorDialog, QGraphicsEllipseItem, QGraphicsPathItem, QGraphicsPolygonItem
 )
-from PyQt6.QtGui import QColor, QBrush, QPen, QPainter, QPainterPath, QPolygonF
-from PyQt6.QtCore import Qt, QPointF, QRectF
+from PySide6.QtGui import QColor, QBrush, QPen, QPainter, QPainterPath, QPolygonF
+from PySide6.QtCore import Qt, QPointF, QRectF
 
 from DPyL_marker import MarkerItem
 from DPyL_utils import warn

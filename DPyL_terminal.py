@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
 DPyL_terminal.py ― ターミナルアイテム（直接入力対応版）
-◎ Qt6 / PyQt6 専用
+◎ Qt6 / PySide6 専用
 """
 from __future__ import annotations
 import os
@@ -11,15 +11,15 @@ import subprocess
 from pathlib import Path
 from typing import Any, Callable
 
-from PyQt6.QtCore import (
+from PySide6.QtCore import (
     Qt, QPointF, QRectF, QSizeF, QTimer, QSize, QProcess, QIODevice, 
-    pyqtSignal, QObject, QEvent
+    Signal, QObject, QEvent
 )
-from PyQt6.QtGui import (
+from PySide6.QtGui import (
     QPixmap, QPainter, QColor, QBrush, QPen, QIcon, QFont, 
     QKeyEvent, QTextCursor, QTextCharFormat, QMouseEvent
 )
-from PyQt6.QtWidgets import (
+from PySide6.QtWidgets import (
     QGraphicsTextItem, QGraphicsRectItem, QGraphicsItemGroup,
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QLineEdit, QComboBox, QTextEdit, QCheckBox, QSpinBox,
@@ -34,8 +34,8 @@ try:
     from DPyL_utils import warn, debug_print
 except ImportError:
     # テスト環境用の代替
-    from PyQt6.QtWidgets import QGraphicsItemGroup as CanvasItem
-    from PyQt6.QtWidgets import QGraphicsItemGroup as NoteItem
+    from PySide6.QtWidgets import QGraphicsItemGroup as CanvasItem
+    from PySide6.QtWidgets import QGraphicsItemGroup as NoteItem
     def warn(msg): print(f"WARN: {msg}")
     def debug_print(msg): print(f"DEBUG: {msg}")
 
@@ -44,7 +44,7 @@ class TerminalWidget(QPlainTextEdit):
     """
     直接入力可能なターミナルウィジェット
     """
-    command_executed = pyqtSignal(str)  # コマンド実行時のシグナル
+    command_executed = Signal(str)  # コマンド実行時のシグナル
     
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -664,7 +664,7 @@ class TerminalItem(NoteItem):
 
     def contextMenuEvent(self, ev):
         """右クリックメニュー"""
-        from PyQt6.QtWidgets import QMenu
+        from PySide6.QtWidgets import QMenu
         
         menu = QMenu()
         
@@ -779,7 +779,7 @@ class TerminalEditDialog(QDialog):
         self.setLayout(layout)
 
     def _create_basic_group(self):
-        from PyQt6.QtWidgets import QGroupBox, QFormLayout
+        from PySide6.QtWidgets import QGroupBox, QFormLayout
         
         group = QGroupBox("Basic Settings")
         layout = QFormLayout()
@@ -799,7 +799,7 @@ class TerminalEditDialog(QDialog):
         return group
 
     def _create_terminal_group(self):
-        from PyQt6.QtWidgets import QGroupBox, QFormLayout
+        from PySide6.QtWidgets import QGroupBox, QFormLayout
         
         group = QGroupBox("Terminal Settings")
         layout = QFormLayout()
@@ -822,7 +822,7 @@ class TerminalEditDialog(QDialog):
         return group
 
     def _create_appearance_group(self):
-        from PyQt6.QtWidgets import QGroupBox, QFormLayout
+        from PySide6.QtWidgets import QGroupBox, QFormLayout
         
         group = QGroupBox("Appearance")
         layout = QFormLayout()
