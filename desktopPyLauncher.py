@@ -896,9 +896,19 @@ class CanvasView(QGraphicsView):
         super().mousePressEvent(ev)
 
     def mouseReleaseEvent(self, ev):
-        """Middle button toggle for edit/run mode"""
+        """Handle mouse release events.
+
+        - Middle button toggles edit/run mode.
+        - XButton1/XButton2 events are forwarded to the main window so that
+          PREV/NEXT navigation works even when the view has focus.
+        """
         if ev.button() == Qt.MouseButton.MiddleButton:
             self.win.a_run.trigger()
+            ev.accept()
+            return
+        elif ev.button() in (Qt.MouseButton.XButton1, Qt.MouseButton.XButton2):
+            # pass navigation buttons to the main window
+            self.win.mouseReleaseEvent(ev)
             ev.accept()
             return
         super().mouseReleaseEvent(ev)
