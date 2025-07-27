@@ -1,0 +1,242 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>XTerm Terminal</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            background-color: #000000;
+            font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
+            color: #ffffff;
+            overflow: hidden;
+        }
+        #terminal {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            padding: 10px;
+            box-sizing: border-box;
+        }
+        
+        /* xterm.js theme customization */
+        .xterm {
+            background-color: #000000;
+            color: #ffffff;
+            font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
+            font-size: 14px;
+            line-height: 1.2;
+        }
+        
+        .xterm-viewport {
+            background-color: #000000;
+        }
+        
+        .xterm-selection {
+            background-color: rgba(255, 255, 255, 0.3);
+        }
+        
+        .xterm-cursor {
+            background-color: #ffffff;
+            color: #000000;
+        }
+    </style>
+    <!-- xterm.js Local Files -->
+    <link rel="stylesheet" href="xterm.css" />
+    <script src="xterm.js"></script>
+    <script src="xterm-addon-fit.js"></script>
+</head>
+<body>
+    <div id="terminal"></div>
+    
+    <script src="qrc:///qtwebchannel/qwebchannel.js"></script>
+    <script>
+        console.log("XTerm Terminal starting...");
+        
+        // Global variables
+        let term;
+        let fitAddon;
+        let backend = null;
+        let currentInput = '';
+        let isWebChannelReady = false;
+        
+        // Initialize terminal
+        function initTerminal() {
+            console.log("Initializing xterm.js terminal...");
+            
+            // Create terminal instance
+            if (typeof Terminal === 'undefined') {
+                console.error('Terminal is not defined. xterm.js may not be loaded properly.');
+                return;
+            }
+            term = new Terminal({
+                cursorBlink: true,
+                convertEol: true,
+                fontFamily: 'Consolas, Monaco, "Courier New", monospace',
+                fontSize: 14,
+                lineHeight: 1.2,
+                cols: 80,
+                rows: 24,
+                scrollback: 1000,
+                allowTransparency: true,
+                macOptionIsMeta: true,
+                theme: {
+                    background: '#000000',
+                    foreground: '#ffffff',
+                    cursor: '#ffffff',
+                    cursorAccent: '#000000',
+                    selection: 'rgba(255, 255, 255, 0.3)',
+                    black: '#000000',
+                    red: '#cd3131',
+                    green: '#0dbc79',
+                    yellow: '#e5e510',
+                    blue: '#2472c8',
+                    magenta: '#bc3fbc',
+                    cyan: '#11a8cd',
+                    white: '#e5e5e5',
+                    brightBlack: '#666666',
+                    brightRed: '#f14c4c',
+                    brightGreen: '#23d18b',
+                    brightYellow: '#f5f543',
+                    brightBlue: '#3b8eea',
+                    brightMagenta: '#d670d6',
+                    brightCyan: '#29b8db',
+                    brightWhite: '#ffffff'
+                }
+            });
+            
+            // Create fit addon
+            if (typeof FitAddon === 'undefined') {
+                console.error('FitAddon is not defined. xterm-addon-fit.js may not be loaded properly.');
+                return;
+            }
+            fitAddon = new FitAddon.FitAddon();
+            term.loadAddon(fitAddon);
+            
+            // Open terminal
+            term.open(document.getElementById('terminal'));
+            
+            // Fit to container
+            fitAddon.fit();
+            
+            // Handle terminal data (user input)
+            term.onData(data => {
+                console.log("Terminal data:", data);
+                if (backend && isWebChannelReady) {
+                    backend.write_to_shell(data);
+                }
+            });
+            
+            // Handle special keys
+            term.attachCustomKeyEventHandler((event) => {
+                if (event.type === 'keydown') {
+                    // Let xterm.js handle scrolling internally
+                    if (event.key === 'PageUp') {
+                        // Scroll up in xterm.js buffer
+                        term.scrollPages(-1);
+                        return false; // Prevent default
+                    } else if (event.key === 'PageDown') {
+                        // Scroll down in xterm.js buffer
+                        term.scrollPages(1);
+                        return false; // Prevent default
+                    }
+                }
+                return true; // Let xterm.js handle other keys
+            });
+            
+            // Handle resize
+            term.onResize(({ cols, rows }) => {
+                console.log(`Terminal resized to ${cols}x${rows}`);
+                if (backend && isWebChannelReady) {
+                    // Convert cols/rows to pixel dimensions
+                    const charWidth = 8.0;  // xterm.js character width
+                    const charHeight = 16.8;  // xterm.js line height
+                    const width = cols * charWidth;
+                    const height = rows * charHeight;
+                    backend.set_terminal_size(width, height);
+                }
+            });
+            
+            // Focus terminal
+            term.focus();
+            
+            console.log("XTerm terminal initialized successfully");
+            
+            // Initial messages - commented out to avoid being cleared by resize
+            // term.write("\x1b[32mXTerm Terminal Ready\x1b[0m\r\n");
+            // term.write("\x1b[33mStarting shell...\x1b[0m\r\n");
+            
+            // Don't start shell here - it will be started by the Python side
+            // if (backend && isWebChannelReady) {
+            //     backend.start_shell("cmd", "");
+            // }
+        }
+        
+        // Handle window resize
+        window.addEventListener('resize', () => {
+            if (fitAddon) {
+                fitAddon.fit();
+            }
+        });
+        
+        // WebChannel setup
+        document.addEventListener('DOMContentLoaded', function() {
+            console.log("DOM loaded, setting up WebChannel...");
+            
+            new QWebChannel(qt.webChannelTransport, function(channel) {
+                console.log("WebChannel connected successfully");
+                backend = channel.objects.backend;
+                isWebChannelReady = true;
+                
+                console.log("Backend object:", backend);
+                
+                // Connect to backend signals
+                backend.output_ready.connect(function(data) {
+                    console.log("Received output from backend:", data);
+                    if (term) {
+                        // Let xterm.js handle all ANSI sequences automatically
+                        term.write(data);
+                    }
+                });
+                
+                // Initialize terminal after backend is ready
+                initTerminal();
+            });
+        });
+        
+        // Expose functions for Python to call
+        window.resizeTerminal = function() {
+            console.log("Terminal resize requested");
+            if (fitAddon) {
+                fitAddon.fit();
+            }
+        };
+        
+        window.updateTerminalDimensions = function() {
+            console.log("Terminal dimensions update requested");
+            if (fitAddon) {
+                fitAddon.fit();
+            }
+        };
+        
+        window.changeShell = function(shellType, workingDir) {
+            console.log("Changing shell to:", shellType, workingDir);
+            if (backend && isWebChannelReady) {
+                backend.start_shell(shellType, workingDir);
+            }
+        };
+        
+        window.clearTerminal = function() {
+            console.log("Clearing terminal");
+            if (term) {
+                term.clear();
+            }
+        };
+        
+        console.log("XTerm Terminal script loaded");
+    </script>
+</body>
+</html>

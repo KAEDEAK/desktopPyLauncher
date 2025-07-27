@@ -1,0 +1,1134 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<title><!-- title --></title>
+<!-- 
+===== TEMPLATE METADATA =====
+Template Version: 1.1-improved
+Template Date: 2025-07-12
+Improvements: Enhanced reproducibility, better placeholder handling, metadata support
+Compatible with: desktopPyLauncher data format v1.1
+============================
+-->
+<!-- Google Fonts: Noto Sans JP -->
+<!--
+  データフォーマット version 1.1 用のテンプレートです（再現性向上版）。
+  長いノートには対応していません。line-heightなどが異なるためです。
+  一応表示はできますが、枠でテキストを囲んだり、矢印で単語等を示してもずれます。
+  ずれないようにするには、短いノートを作って、そのノート自体を枠で囲ったりしてください。
+  
+  改善点:
+  - プレースホルダー処理の安全性向上
+  - エクスポートメタデータの記録
+  - より正確なレンダリング
+//-->
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;700&display=swap" rel="stylesheet">
+<style>
+/* グローバルフォント設定 - Noto Sans JPで統一 */
+html, body {
+    margin: 0;
+    padding: 0;
+    height: 100%;
+    overflow: hidden;
+    /* Noto Sans JPを最優先、フォールバックも指定 */
+    font-family: 'Noto Sans JP', 'Hiragino Kaku Gothic ProN', 'ヒラギノ角ゴ ProN W3', sans-serif;
+    background: #1e1e1e;
+    color: #eee;
+    /* フォントレンダリングを統一 */
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    text-rendering: optimizeLegibility;
+}
+
+#canvasWrapper {
+    position: relative;
+    width: 100%;
+    height: 100%;
+    overflow: hidden;
+    cursor: grab;
+    background: #2b2b2b;
+}
+
+#canvas {
+    position: relative;
+    min-width: 2000px;
+    min-height: 2000px;
+    /* 拡大縮小の原点を左上に固定 */
+    transform-origin: 0 0;
+}
+
+.item {
+    position: absolute;
+    box-sizing: border-box;
+    border-radius: 4px;
+    overflow: hidden;
+}
+
+.launcher img {
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+    display: block;
+}
+
+/* ノートのスタイルを改善（フォント統一版 + スクロールバー対策） */
+.note {
+    padding: 0;
+    margin: 0;
+    /* スクロールバー対策：overflowをhiddenに変更し、縦余裕を5px追加 */
+    overflow: hidden;
+    white-space: pre-wrap;
+    word-wrap: break-word;
+    /* 明示的にNoto Sans JPを指定 */
+    font-family: 'Noto Sans JP', 'Hiragino Kaku Gothic ProN', sans-serif;
+    line-height: 1.3; /* Noto Sans JP用に微調整 */
+    /* Webkitブラウザ対応 */
+    -webkit-text-size-adjust: 100%;
+    -webkit-font-smoothing: antialiased;
+    /* フォントメトリクスの統一 */
+    font-feature-settings: "palt" 1; /* プロポーショナルメトリクス */
+}
+
+/* ノートコンテンツのリセット */
+.note-content {
+    margin: 0;
+    padding: 4px; /* 5px→4pxに微調整してスクロールバー対策 */
+    box-sizing: border-box;
+    /* 行の高さを厳密に指定 */
+    line-height: 1.3;
+    /* 内部コンテンツのサイズ計算を調整 */
+    height: calc(100% - 2px); /* 親の高さから微調整 */
+    overflow-y: auto; /* 必要時のみスクロール */
+    overflow-x: hidden;
+}
+
+/* Markdown要素の厳密なリセット（Chrome対応） */
+.note-content * {
+    /* デフォルトマージン/パディングを完全リセット */
+    margin: 0;
+    padding: 0;
+    /* 親要素のフォントサイズと色を継承 */
+    font-size: inherit;
+    color: inherit;
+    line-height: 1.3;
+    /* フォントファミリーも継承 */
+    font-family: inherit;
+    /* Webkitのデフォルトスタイルを上書き */
+    -webkit-margin-before: 0;
+    -webkit-margin-after: 0;
+    -webkit-margin-start: 0;
+    -webkit-margin-end: 0;
+    -webkit-padding-before: 0;
+    -webkit-padding-after: 0;
+    -webkit-padding-start: 0;
+    -webkit-padding-end: 0;
+}
+
+/* Markdown の見出し（Python版に合わせて調整） */
+.note-content h1 { 
+    font-size: 1.8em; 
+    margin: 0.5em 0 0.3em 0; 
+    font-weight: 700; 
+    line-height: 1.2;
+    border-bottom: 1px solid #666;
+    padding-bottom: 0.2em;
+}
+.note-content h2 { 
+    font-size: 1.4em; 
+    margin: 0.4em 0 0.25em 0; 
+    font-weight: 700; 
+    line-height: 1.2;
+    border-bottom: 1px solid #555;
+    padding-bottom: 0.15em;
+}
+.note-content h3 { 
+    font-size: 1.2em; 
+    margin: 0.35em 0 0.2em 0; 
+    font-weight: 700; 
+    line-height: 1.2; 
+}
+.note-content h4 { 
+    font-size: 1.1em; 
+    margin: 0.3em 0 0.15em 0; 
+    font-weight: 700; 
+    line-height: 1.2; 
+}
+.note-content h5 { 
+    font-size: 1em; 
+    margin: 0.25em 0 0.1em 0; 
+    font-weight: 700; 
+    line-height: 1.2; 
+}
+.note-content h6 { 
+    font-size: 0.9em; 
+    margin: 0.2em 0 0.1em 0; 
+    font-weight: 700; 
+    line-height: 1.2; 
+}
+
+/* Markdown の段落（Python版のように適度な間隔だが、よりコンパクト） */
+.note-content p { 
+    margin: 0.6em 0;
+    line-height: 1.4;
+}
+.note-content p:first-child { margin-top: 0; }
+.note-content p:last-child { margin-bottom: 0; }
+
+/* リストの調整（Python版のスタイルだが、よりコンパクト） */
+.note-content ul, .note-content ol { 
+    margin: 0.6em 0; 
+    padding-left: 1.5em;
+    /* Chromeのデフォルトリストスタイルを上書き */
+    -webkit-padding-start: 1.5em;
+    list-style-position: outside;
+}
+.note-content ul { list-style-type: disc; }
+.note-content ol { list-style-type: decimal; }
+
+.note-content li { 
+    margin: 0.15em 0;
+    line-height: 1.4;
+    /* Chromeのリストアイテムのデフォルトマージンを除去 */
+    display: list-item;
+}
+.note-content ul:first-child, .note-content ol:first-child { margin-top: 0; }
+.note-content ul:last-child, .note-content ol:last-child { margin-bottom: 0; }
+
+/* ネストしたリストの調整 */
+.note-content li > ul, .note-content li > ol {
+    margin-top: 0.15em;
+    margin-bottom: 0.15em;
+}
+.note-content li > ul { list-style-type: circle; }
+.note-content li > ul > li > ul { list-style-type: square; }
+
+/* Markdown のテーブルスタイル（Python版風だが、よりコンパクト） */
+.note-content table {
+    border-collapse: collapse;
+    width: 100%;
+    margin: 0.6em 0;
+    /* テーブルのボックスモデルを統一 */
+    box-sizing: border-box;
+    line-height: 1.3;
+}
+.note-content table:first-child { margin-top: 0; }
+.note-content table:last-child { margin-bottom: 0; }
+.note-content table, .note-content th, .note-content td {
+    border: 1px solid #666;
+}
+.note-content th {
+    padding: 4px 8px;
+    background: rgba(255,255,255,0.1);
+    font-weight: 700;
+    text-align: left;
+}
+.note-content td {
+    padding: 4px 8px;
+}
+.note-content tr:nth-child(even) {
+    background: rgba(255,255,255,0.02);
+}
+
+/* コードブロックとインラインコード（Python版風だが、よりコンパクト） */
+.note-content code {
+    background: rgba(0,0,0,0.4);
+    padding: 0.1em 0.3em;
+    border-radius: 3px;
+    font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
+    font-size: 0.85em;
+    /* インラインコードの行高を調整 */
+    line-height: 1;
+    color: #f8f8f2;
+}
+.note-content pre {
+    background: rgba(0,0,0,0.4);
+    padding: 0.6em;
+    border-radius: 5px;
+    overflow-x: auto;
+    margin: 0.6em 0;
+    /* preタグ内の空白を保持 */
+    white-space: pre;
+    line-height: 1.3;
+    border: 1px solid #555;
+}
+.note-content pre:first-child { margin-top: 0; }
+.note-content pre:last-child { margin-bottom: 0; }
+.note-content pre code {
+    background: none;
+    padding: 0;
+    font-size: inherit;
+    border-radius: 0;
+}
+
+/* 水平線（Python版風） */
+.note-content hr {
+    border: none;
+    border-top: 2px solid #666;
+    margin: 1.2em 0;
+    /* Chromeのhrデフォルトスタイルを上書き */
+    height: 0;
+    box-sizing: content-box;
+}
+
+/* リンク（Python版風） */
+.note-content a {
+    color: #69b7ff;
+    text-decoration: none;
+    border-bottom: 1px solid #69b7ff;
+}
+.note-content a:hover {
+    color: #ffcc66;
+    border-bottom-color: #ffcc66;
+}
+
+/* 引用（Python版風だが、よりコンパクト） */
+.note-content blockquote {
+    border-left: 4px solid #666;
+    margin: 0.6em 0;
+    padding-left: 0.8em;
+    color: #ccc;
+    font-style: italic;
+}
+.note-content blockquote:first-child { margin-top: 0; }
+.note-content blockquote:last-child { margin-bottom: 0; }
+
+/* 強調・斜体 */
+.note-content strong, .note-content b { 
+    font-weight: 700; 
+    color: #fff;
+}
+.note-content em, .note-content i { 
+    font-style: italic; 
+}
+
+/* 画像 */
+.note-content img {
+    max-width: 100%;
+    height: auto;
+    vertical-align: middle;
+    border-radius: 4px;
+    margin: 0.3em 0;
+}
+
+/* アイテムタイプ別のスタイル */
+.launcher { border: 2px solid #6b6b6b; background-color: #333; }
+.image { border: 2px solid #4a8f4a; background-color: #333; }
+.note { background-color: #323334; border: 2px solid #5b5b5b; color: #CCCACD; }
+.marker { border: 2px solid #d4842e; background-color: #444; color: #CCCACD; }
+.video { border: 2px solid #ff6b6b; background-color: #333; }
+
+/* キャプション */
+.caption {
+    position: absolute;
+    font-size: 12px;
+    color: #ccc;
+    text-align: center;
+    background: rgba(0,0,0,0.8);
+    padding: 2px 4px;
+    border-radius: 3px;
+    white-space: nowrap;
+    max-width: 200px;
+}
+.marker-caption {
+    color: #d4842e;
+}
+
+/* ビデオプレースホルダー */
+.videoPlaceholder {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 100%;
+    height: 100%;
+    background: #444;
+    color: #ccc;
+    font-size: 14px;
+    text-align: center;
+}
+
+/* ミニマップ */
+#minimapCanvas {
+    position: absolute;
+    top: 10px;
+    right: 10px;
+    border: 2px solid #666;
+    background: rgba(0,0,0,0.8);
+    cursor: pointer;
+}
+</style>
+</head>
+
+<body>
+
+<div id="canvasWrapper">
+  <div id="canvas"></div>
+</div>
+
+<canvas id="minimapCanvas" width="180" height="180"></canvas>
+
+<script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+<script>
+// JSONデータをbase64エンコードして埋め込み
+const jsonDataBase64 = "<!-- embedded_json_data//-->";
+
+// UTF-8対応のbase64デコード関数
+function base64ToUtf8(base64) {
+  try {
+    // base64をバイナリ文字列にデコード
+    const binaryString = atob(base64);
+    // バイナリ文字列をUint8Arrayに変換
+    const bytes = new Uint8Array(binaryString.length);
+    for (let i = 0; i < binaryString.length; i++) {
+      bytes[i] = binaryString.charCodeAt(i);
+    }
+    // UTF-8としてデコード
+    return new TextDecoder('utf-8').decode(bytes);
+  } catch (e) {
+    console.error('Base64 decode error:', e);
+    return null;
+  }
+}
+
+const jsonDataText = jsonDataBase64 ? base64ToUtf8(jsonDataBase64) : null;
+// アイコン定義
+const definedIcons = {
+  ".bat":"res/batch-file.png", ".cmd":"res/batch-file.png", ".py":"res/python-file.png",
+  ".exe":"res/exe-file.png", ".url":"res/url-file.png", ".lnk":"res/shortcut-file.png",
+  ".txt":"res/text-file.png", ".md":"res/markdown-file.png", ".json":"res/json-file.png"
+};
+
+// DOM要素の参照
+const wrapper = document.getElementById("canvasWrapper");
+const canvas = document.getElementById("canvas");
+const mini = document.getElementById("minimapCanvas");
+const mCtx = mini.getContext("2d");
+
+// スクロールバーを消してホイールイベントを確実にキャッチ
+wrapper.style.overflow = "hidden";
+
+// グローバル状態
+let zoom = 1.0;
+let translateX = 0;
+let translateY = 0;
+const MIN_ZOOM = 0.2;
+const MAX_ZOOM = 5.0;
+let isDragging = false;
+let dragStartX = 0;
+let dragStartY = 0;
+let miniScale = 1;
+const markers = new Map();
+
+// Z値の管理用
+let zMin = 0;
+let zMax = 0;
+let zRange = 1;
+
+/**
+ * Z値を適用（0-1000の範囲にマッピング）
+ */
+function applyZIndex(element, zValue) {
+  if (typeof zValue === 'number') {
+    // Z値を0-1000の範囲にマッピング
+    const normalizedZ = zRange > 0 ? ((zValue - zMin) / zRange) * 1000 : 500;
+    element.style.zIndex = Math.round(normalizedZ);
+  } else {
+    element.style.zIndex = 500; // デフォルト値
+  }
+}
+
+/**
+ * キャプション追加
+ */
+function addCaption(d, text, isMarker = false) {
+  if (!text) return;
+  const cap = document.createElement("div");
+  cap.className = isMarker ? "caption marker-caption" : "caption";
+  cap.textContent = text;
+  cap.style.left = d.x + "px";
+  cap.style.top = (d.y + d.height + 2) + "px";
+  cap.style.width = d.width + "px";
+  
+  // キャプションのZ値は親アイテムより少し高く設定
+  if (typeof d.z === 'number') {
+    const normalizedZ = zRange > 0 ? ((d.z - zMin) / zRange) * 1000 : 500;
+    cap.style.zIndex = Math.round(normalizedZ) + 1;
+  } else {
+    cap.style.zIndex = 501; // デフォルト値 + 1
+  }
+  
+  canvas.appendChild(cap);
+}
+
+/**
+ * ダブルクリックでURLを開く
+ */
+function attachOpenUrl(el, url) {
+  if (!url || !url.trim()) return;
+  el.addEventListener("dblclick", () => window.open(url, "_blank"));
+}
+
+/**
+ * 明度調整を適用
+ */
+function applyBrightness(imgEl, brightness) {
+  brightness = brightness || 100;
+  if (brightness !== 100) {
+    imgEl.style.filter = `brightness(${brightness}%)`;
+  }
+}
+
+/**
+ * ミニマップクリック機能
+ */
+function onMinimapClick(e) {
+  const rect = mini.getBoundingClientRect();
+  const clickX = e.clientX - rect.left;
+  const clickY = e.clientY - rect.top;
+  
+  // ミニマップ座標をシーン座標に変換
+  const sceneX = clickX / miniScale;
+  const sceneY = clickY / miniScale;
+  
+  // ビューポートの中心がクリック位置になるように移動
+  const centerX = wrapper.clientWidth / 2;
+  const centerY = wrapper.clientHeight / 2;
+  
+  translateX = centerX - sceneX * zoom;
+  translateY = centerY - sceneY * zoom;
+  
+  canvas.style.transform = `translate(${translateX}px, ${translateY}px) scale(${zoom})`;
+  drawMini();
+}
+
+/**
+ * ドラッグ開始
+ */
+function onDragStart(e) {
+  if (e.button !== 0) return;
+  isDragging = true;
+  dragStartX = e.clientX;
+  dragStartY = e.clientY;
+  wrapper.style.cursor = "grabbing";
+  e.preventDefault();
+}
+
+/**
+ * ドラッグ中
+ */
+function onDragMove(e) {
+  if (!isDragging) return;
+  const dx = e.clientX - dragStartX;
+  const dy = e.clientY - dragStartY;
+  translateX += dx;
+  translateY += dy;
+  canvas.style.transform = `translate(${translateX}px, ${translateY}px) scale(${zoom})`;
+  dragStartX = e.clientX;
+  dragStartY = e.clientY;
+  drawMini();
+}
+
+/**
+ * ドラッグ終了
+ */
+function onDragEnd(e) {
+  if (!isDragging) return;
+  isDragging = false;
+  wrapper.style.cursor = "grab";
+  drawMini();
+}
+
+/**
+ * ホイールでズーム（中心をラッパー基準で計算）
+ */
+function onWheel(e) {
+  e.preventDefault();
+  const wR = wrapper.getBoundingClientRect();
+  const dx = e.clientX - wR.left;
+  const dy = e.clientY - wR.top;
+  const x = (dx - translateX) / zoom;
+  const y = (dy - translateY) / zoom;
+  const factor = e.deltaY < 0 ? 1.1 : 0.9;
+  const newZoom = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, zoom * factor));
+  translateX = dx - x * newZoom;
+  translateY = dy - y * newZoom;
+  zoom = newZoom;
+  canvas.style.transform = `translate(${translateX}px, ${translateY}px) scale(${zoom})`;
+  drawMini();
+}
+
+/**
+ * UI構築
+ */
+function buildUI(data) {
+  if (!data || !Array.isArray(data.items)) return;
+  canvas.innerHTML = "";
+  
+  // Z値の範囲を計算
+  const zValues = data.items.map(it => it.z || 0).filter(z => typeof z === 'number');
+  if (zValues.length > 0) {
+    zMin = Math.min(...zValues);
+    zMax = Math.max(...zValues);
+    zRange = zMax - zMin;
+    if (zRange === 0) zRange = 1; // 0除算を避ける
+  } else {
+    zMin = 0;
+    zMax = 0;
+    zRange = 1;
+  }
+  
+  let maxX = 0, maxY = 0;
+  data.items.forEach(it => {
+    maxX = Math.max(maxX, it.x + (it.width || 48));
+    maxY = Math.max(maxY, it.y + (it.height|| 48));
+  });
+  canvas.style.minWidth = (maxX + 400) + "px";
+  canvas.style.minHeight = (maxY + 400) + "px";
+  miniScale = Math.min(mini.width/(maxX+400), mini.height/(maxY+400));
+  
+  data.items.forEach(it => {
+    switch(it.type) {
+      case "launcher":
+      case "json":   addLauncher(it); break;
+      case "image":
+      case "gif":    addImage(it);    break;
+      case "note":   addNote(it);     break;
+      case "video":  addVideo(it);    break;
+      case "marker": addMarker(it);   break;
+      case "rect":   addRect(it);     break;
+      case "arrow":  addArrow(it);    break;
+      default: console.warn("unsupported type", it.type);
+    }
+  });
+  drawMini();
+}
+
+/**
+ * ミニマップ再描画
+ */
+function drawMini() {
+  mCtx.clearRect(0, 0, mini.width, mini.height);
+  mCtx.fillStyle = "#444"; 
+  mCtx.fillRect(0, 0, mini.width, mini.height);
+  
+  const rect = canvas.getBoundingClientRect();
+  canvas.querySelectorAll(".item").forEach(el => {
+    const r = el.getBoundingClientRect();
+    const x = (r.left - rect.left) * miniScale;
+    const y = (r.top - rect.top) * miniScale;
+    const w = r.width * miniScale;
+    const h = r.height * miniScale;
+    mCtx.fillStyle = el.classList.contains("marker")
+      ? "rgba(255,100,100,0.8)"
+      : "rgba(0,200,255,0.5)";
+    mCtx.fillRect(x, y, Math.max(2, w), Math.max(2, h));
+  });
+  
+  // ビューポート矩形（translate/zoom を逆算）
+  const vx = (-translateX / zoom) * miniScale;
+  const vy = (-translateY / zoom) * miniScale;
+  const vw = (wrapper.clientWidth / zoom) * miniScale;
+  const vh = (wrapper.clientHeight / zoom) * miniScale;
+  mCtx.strokeStyle = "#ff0"; 
+  mCtx.lineWidth = 1;
+  mCtx.strokeRect(vx, vy, vw, vh);
+}
+
+/**
+ * MarkerItem ジャンプ
+ */
+function jumpToMarker(id) {
+  const target = markers.get(id);
+  if (target) {
+    target.scrollIntoView({ behavior: "smooth", block: "center" });
+  }
+}
+
+/**
+ * LauncherItem 描画（マイグレーション対応版）
+ */
+function addLauncher(d) {
+  const el = document.createElement("div");
+  el.className = "item launcher";
+  Object.assign(el.style, {
+    left: d.x + "px",
+    top: d.y + "px",
+    width: d.width + "px",
+    height: d.height + "px"
+  });
+
+  // Z値を適用
+  applyZIndex(el, d.z);
+
+  let imgSrc;
+  
+  // マイグレーション後の新しいフィールドを優先的にチェック
+  if (d.image_embedded && d.image_embedded_data) {
+    // 新しいフォーマット: image_embedded_data + image_format
+    const format = d.image_format || "data:image/png;base64,";
+    imgSrc = format + d.image_embedded_data;
+  } else if (d.icon_embed || d.embed || d.data) {
+    // 古いフォーマット（互換性のため残す）
+    const iconData = d.icon_embed || d.embed || d.data;
+    let mimeType = "image/*";
+    
+    // base64データの最初の文字で画像形式を判定
+    if (iconData.startsWith("/9j/")) {
+      mimeType = "image/jpeg";
+    } else if (iconData.startsWith("iVBOR")) {
+      mimeType = "image/png";
+    } else if (iconData.startsWith("R0lGOD")) {
+      mimeType = "image/gif";
+    }
+    
+    imgSrc = `data:${mimeType};base64,${iconData}`;
+  } else if (d.path) {
+    // パスベースのアイコン
+    const ext = d.path.substring(d.path.lastIndexOf(".")).toLowerCase();
+    imgSrc = definedIcons[ext] || "res/default.png";
+  } else {
+    // デフォルトアイコン
+    imgSrc = "res/default.png";
+  }
+
+  const img = new Image();
+  img.src = imgSrc;
+  img.onload = () => { 
+    applyBrightness(img, d.brightness); 
+    drawMini(); 
+  };
+  img.onerror = () => {
+    console.warn("Launcher icon load error for:", d);
+    img.src = "data:image/svg+xml;base64," +
+      btoa('<svg xmlns="http://www.w3.org/2000/svg" width="48" height="48"><rect width="48" height="48" fill="#666"/><text x="24" y="28" fill="#ccc" font-size="12" text-anchor="middle">?</text></svg>');
+    applyBrightness(img, d.brightness);
+    drawMini();
+  };
+
+  el.appendChild(img);
+  canvas.appendChild(el);
+  addCaption(d, d.caption);
+  attachOpenUrl(el, d.path);
+}
+
+/**
+ * ImageItem 描画（マイグレーション対応版）
+ */
+function addImage(d) {
+  const box = document.createElement("div");
+  box.className = "item image";
+  Object.assign(box.style, {
+    left: d.x + "px",
+    top: d.y + "px",
+    width: d.width + "px",
+    height: d.height + "px"
+  });
+
+  // Z値を適用
+  applyZIndex(box, d.z);
+
+  const img = new Image();
+  img.style.width = "100%";
+  img.style.height = "100%";
+  img.style.objectFit = "contain";
+
+  // マイグレーション後の新しいフィールドを優先的にチェック
+  if (d.image_embedded && d.image_embedded_data) {
+    // 新しいフォーマット: image_embedded_data + image_format
+    const format = d.image_format || "data:image/*;base64,";
+    img.src = format + d.image_embedded_data;
+  } else if ((d.store === "embed" || !d.path) && (d.embed || d.data)) {
+    // 古いフォーマット（互換性のため残す）
+    let mimeType = "image/*";
+    const base64Data = d.embed || d.data;
+    
+    // typeに基づいてMIMEタイプを決定
+    if (d.type === "gif") {
+      mimeType = "image/gif";
+    } else if (d.type === "image") {
+      // base64データの最初の文字で画像形式を判定
+      if (base64Data.startsWith("/9j/")) {
+        mimeType = "image/jpeg";
+      } else if (base64Data.startsWith("iVBOR")) {
+        mimeType = "image/png";
+      } else if (base64Data.startsWith("R0lGOD")) {
+        mimeType = "image/gif";
+      } else {
+        mimeType = "image/jpeg"; // デフォルト
+      }
+    }
+    
+    img.src = `data:${mimeType};base64,${base64Data}`;
+  } else if (d.path) {
+    // パスベースの画像
+    img.src = d.path;
+  } else {
+    // フォールバック：エラー画像を表示
+    img.src = "data:image/svg+xml;base64," +
+      btoa('<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100"><rect width="100" height="100" fill="#333"/><text x="50" y="50" fill="#ccc" font-size="12" text-anchor="middle">画像読み込み失敗</text></svg>');
+  }
+
+  img.onload = () => { 
+    applyBrightness(img, d.brightness); 
+    drawMini(); 
+  };
+  img.onerror = () => {
+    console.warn("Image load error for:", d);
+    img.src = "data:image/svg+xml;base64," +
+      btoa('<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100"><rect width="100" height="100" fill="#333"/><text x="50" y="50" fill="#ccc" font-size="12" text-anchor="middle">画像読み込み失敗</text></svg>');
+    applyBrightness(img, d.brightness);
+    drawMini();
+  };
+
+  box.appendChild(img);
+  canvas.appendChild(box);
+  addCaption(d, d.caption);
+  attachOpenUrl(box, d.path);
+}
+
+/**
+ * VideoItem プレースホルダ
+ */
+function addVideo(d) {
+  const box = document.createElement("div");
+  box.className = "item video";
+  Object.assign(box.style, {
+    left: d.x + "px",
+    top: d.y + "px",
+    width: d.width + "px",
+    height: d.height + "px"
+  });
+
+  // Z値を適用
+  applyZIndex(box, d.z);
+
+  const ph = document.createElement("div");
+  ph.className = "videoPlaceholder";
+  ph.textContent = "📹 Video (Not Supported)";
+  box.appendChild(ph);
+  canvas.appendChild(box);
+  addCaption(d, d.caption || "Video");
+}
+
+/**
+ * MarkerItem 描画
+ */
+function addMarker(d) {
+  const el = document.createElement("div");
+  el.className = "item marker" + (d.jump_id != null ? " jump-marker" : "");
+  Object.assign(el.style, {
+    left: d.x + "px",
+    top: d.y + "px",
+    width: d.width + "px",
+    height: d.height + "px",
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    fontSize: Math.min(16, d.height * 0.4) + "px",
+    fontWeight: "bold"
+  });
+
+  // Z値を適用
+  applyZIndex(el, d.z);
+
+  const text = d.text || "🔹";
+  el.textContent = text;
+
+  if (d.jump_id != null) {
+    markers.set(d.jump_id, el);
+    el.style.cursor = "pointer";
+    el.addEventListener("click", () => jumpToMarker(d.jump_id));
+  }
+
+  canvas.appendChild(el);
+  addCaption(d, d.caption, true);
+  attachOpenUrl(el, d.path);
+}
+
+/**
+ * NoteItem 描画（改善版）
+ */
+function addNote(d) {
+  const el = document.createElement("div");
+  el.className = "item note";
+  
+  // 縦スクロールバー対策：高さを5px余裕を持たせる
+  const adjustedHeight = (d.height || 100) + 5;
+  
+  Object.assign(el.style, {
+    left: d.x + "px",
+    top: d.y + "px",
+    width: d.width + "px",
+    height: adjustedHeight + "px"
+  });
+
+  // Z値を適用
+  applyZIndex(el, d.z);
+
+  // カスタムスタイルの適用（背景色、フォントサイズ、テキスト色）
+  if (d.bgcolor) {
+    el.style.backgroundColor = d.bgcolor;
+  }
+  if (d.color) {
+    el.style.color = d.color;
+  }
+  if (d.fontsize) {
+    el.style.fontSize = d.fontsize + "px";
+  }
+
+  const contentDiv = document.createElement("div");
+  contentDiv.className = "note-content";
+
+  // 背景の塗りつぶし設定
+  if (d.fill_background === false || d.fill_bg === false) {
+    el.style.background = "transparent";
+    el.style.border = "none";
+  }
+
+  // Markdownまたはテキストの処理
+  if (d.format === "markdown") {
+    try {
+      contentDiv.innerHTML = marked.parse(d.text || "");
+    } catch (err) {
+      console.warn("Markdown parsing error:", err);
+      contentDiv.textContent = d.text || "";
+    }
+  } else {
+    contentDiv.textContent = d.text || "";
+  }
+
+  el.appendChild(contentDiv);
+
+  // ダブルクリックで編集モード切り替え
+  el.addEventListener("dblclick", e => {
+    if (contentDiv.isContentEditable) {
+      contentDiv.contentEditable = "false";
+      contentDiv.style.userSelect = "none";
+      el.style.userSelect = "none";
+    } else {
+      contentDiv.contentEditable = "true";
+      contentDiv.style.userSelect = "auto";
+      el.style.userSelect = "auto";
+      contentDiv.focus();
+      if (d.format === "text") {
+        const range = document.createRange();
+        range.selectNodeContents(contentDiv);
+        const sel = window.getSelection();
+        sel.removeAllRanges();
+        sel.addRange(range);
+      }
+    }
+    e.stopPropagation();
+  });
+
+  // 編集中のマウスイベント処理
+  el.addEventListener("mousedown", e => {
+    const contentDiv = el.querySelector('.note-content');
+    if (contentDiv && contentDiv.isContentEditable) {
+      e.stopPropagation();
+    }
+  });
+
+  canvas.appendChild(el);
+}
+
+/**
+ * RectItem 描画（矩形）
+ */
+function addRect(d) {
+  const el = document.createElement("div");
+  el.className = "item rect";
+  Object.assign(el.style, {
+    left: d.x + "px",
+    top: d.y + "px",
+    width: d.width + "px",
+    height: d.height + "px",
+    borderRadius: (d.corner_radius || 0) + "px",
+    position: "absolute"
+  });
+
+  if (typeof d.angle === "number" && d.angle % 360 !== 0) {
+    el.style.transform = `rotate(${d.angle}deg)`;
+    el.style.transformOrigin = `${d.width/2}px ${d.height/2}px`;
+  }
+
+  // Z値を適用
+  applyZIndex(el, d.z);
+
+  // 枠線の設定
+  const frameColor = d.frame_color || "#FF0000";
+  const frameWidth = d.frame_width || 2;
+  el.style.border = `${frameWidth}px solid ${frameColor}`;
+
+  // 背景の設定
+  if (d.background_transparent === false) {
+    el.style.backgroundColor = d.background_color || "#FFFFFF";
+  } else {
+    el.style.backgroundColor = "transparent";
+  }
+
+  canvas.appendChild(el);
+  addCaption(d, d.caption);
+  attachOpenUrl(el, d.path);
+}
+
+/**
+ * 与えられた角度で矢印が外接楕円に収まる長さを求める
+ */
+function calculateArrowLength(w, h, angle) {
+  if (w <= 0 || h <= 0) return Math.min(w, h) * 0.8;
+  const a = w / 2;
+  const b = h / 2;
+  const rad = angle * Math.PI / 180;
+  const cosT = Math.cos(rad);
+  const sinT = Math.sin(rad);
+  const denom = (cosT / a) ** 2 + (sinT / b) ** 2;
+  if (denom > 0) {
+    return (1 / Math.sqrt(denom)) * 2;
+  }
+  return Math.min(w, h) * 0.8;
+}
+
+/**
+ * ArrowItem 描画（矢印）
+ */
+function addArrow(d) {
+  const el = document.createElement("div");
+  el.className = "item arrow";
+  Object.assign(el.style, {
+    left: d.x + "px",
+    top: d.y + "px",
+    width: d.width + "px",
+    height: d.height + "px",
+    position: "absolute"
+  });
+
+  // Z値を適用
+  applyZIndex(el, d.z);
+
+  // SVGで矢印を描画
+  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  svg.setAttribute("width", d.width);
+  svg.setAttribute("height", d.height);
+  svg.style.width = "100%";
+  svg.style.height = "100%";
+
+  const angle = d.angle || 0;
+  const frameColor = d.frame_color || "#FF0000";
+  const frameWidth = d.frame_width || 2;
+  const bgColor = d.background_color || "#FFFFFF";
+  const bgTransparent = d.background_transparent !== false;
+  
+  const centerX = d.width / 2;
+  const centerY = d.height / 2;
+  const arrowLength = calculateArrowLength(d.width, d.height, angle) * (d.is_line ? 0.9 : 0.85);
+
+  if (d.is_line) {
+    // 直線矢印（→）
+    const arrowHeadSize = arrowLength * 0.3;
+    const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+    
+    // 矢印のパスを定義
+    const pathData = `
+      M ${centerX - arrowLength/2} ${centerY}
+      L ${centerX + arrowLength/2} ${centerY}
+      M ${centerX + arrowLength/2} ${centerY}
+      L ${centerX + arrowLength/2 - arrowHeadSize * 0.3} ${centerY - arrowHeadSize * 0.2}
+      M ${centerX + arrowLength/2} ${centerY}
+      L ${centerX + arrowLength/2 - arrowHeadSize * 0.3} ${centerY + arrowHeadSize * 0.2}
+    `;
+    
+    path.setAttribute("d", pathData);
+    path.setAttribute("stroke", frameColor);
+    path.setAttribute("stroke-width", frameWidth);
+    path.setAttribute("fill", "none");
+    path.setAttribute("transform", `rotate(${angle} ${centerX} ${centerY})`);
+    
+    svg.appendChild(path);
+  } else {
+    // ポリゴン矢印（⇒）
+    const arrowWidth = arrowLength * 0.4;
+    const arrowHeadLength = arrowLength * 0.3;
+    
+    const polygon = document.createElementNS("http://www.w3.org/2000/svg", "polygon");
+    
+    // 矢印の頂点を定義（横向き）
+    const points = [
+      [centerX - arrowLength/2, centerY - arrowWidth/4],
+      [centerX + arrowLength/2 - arrowHeadLength, centerY - arrowWidth/4],
+      [centerX + arrowLength/2 - arrowHeadLength, centerY - arrowWidth/2],
+      [centerX + arrowLength/2, centerY],
+      [centerX + arrowLength/2 - arrowHeadLength, centerY + arrowWidth/2],
+      [centerX + arrowLength/2 - arrowHeadLength, centerY + arrowWidth/4],
+      [centerX - arrowLength/2, centerY + arrowWidth/4]
+    ];
+    
+    const pointsStr = points.map(p => p.join(",")).join(" ");
+    polygon.setAttribute("points", pointsStr);
+    polygon.setAttribute("stroke", frameColor);
+    polygon.setAttribute("stroke-width", frameWidth);
+    polygon.setAttribute("fill", bgTransparent ? "none" : bgColor);
+    polygon.setAttribute("transform", `rotate(${angle} ${centerX} ${centerY})`);
+    
+    svg.appendChild(polygon);
+  }
+
+  el.appendChild(svg);
+  canvas.appendChild(el);
+  addCaption(d, d.caption);
+  attachOpenUrl(el, d.path);
+}
+
+/**
+ * エクスポートメタデータの表示
+ */
+function displayExportMetadata(data) {
+  const metadata = data._export_metadata;
+  if (metadata) {
+    console.log("=== Export Metadata ===");
+    console.log("Export Timestamp:", metadata.export_timestamp);
+    console.log("Template Version:", metadata.template_version);
+    console.log("Application Version:", metadata.application_version);
+    console.log("Source Project:", metadata.source_project);
+    console.log("Template Embedded:", metadata.template_embedded);
+    console.log("=====================");
+    
+    // HTMLにもメタデータを表示（オプション）
+    if (metadata.template_embedded) {
+      document.title = `${document.title} (Exported: ${metadata.export_timestamp})`;
+    }
+  }
+}
+
+// イベントリスナーの設定
+document.addEventListener("DOMContentLoaded", () => {
+  wrapper.addEventListener("mousedown", onDragStart);
+  wrapper.addEventListener("mousemove", onDragMove);
+  wrapper.addEventListener("mouseup", onDragEnd);
+  wrapper.addEventListener("mouseleave", onDragEnd);
+  wrapper.addEventListener("wheel", onWheel);
+
+  // ミニマップクリックイベントを追加
+  mini.addEventListener("click", onMinimapClick);
+
+  try {
+    if (jsonDataText && jsonDataText.trim()) {
+      const data = JSON.parse(jsonDataText);
+      
+      // エクスポートメタデータの表示
+      displayExportMetadata(data);
+      
+      buildUI(data);
+    }
+  } catch (err) {
+    console.error("JSON解析エラー:", err);
+  }
+
+  window.addEventListener("load", drawMini);
+});
+</script>
+
+</body>
+</html>

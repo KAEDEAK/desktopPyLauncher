@@ -1,0 +1,46 @@
+Pythonスクリプトをスタートにピン留めする方法
+====================================
+
+1. バッチファイルを作る（例：run_launcher.bat）
+
+   py desktopPyLauncher.py
+   
+   または、プロジェクトファイルを指定する場合：
+   py desktopPyLauncher.py --file ..\desktopPyLauncherDATA\default.json
+
+
+2. バッチファイルを右クリック → 「ショートカットの作成」
+
+3. 作成したショートカットを右クリック → 「プロパティ」  
+   → 「リンク先」の先頭に `cmd.exe /c` を追加する  
+    （例：cmd.exe /c C:\path\to\run_launcher.bat）
+
+4. 「アイコンの変更」で好みのアイコンにする（任意）
+
+5. ショートカットを右クリック → 「スタートにピン留めする」
+
+※ 実行後にタスクバーのアイコンを右クリック →「タスクバーにピン留め」も可能
+
+補足：`py` が使えない場合
+--------------------------
+環境によっては `py` が使えないことがあります。  
+その場合は以下のどれかを使ってください：
+
+
+python desktopPyLauncher.py
+python3 desktopPyLauncher.py
+
+プロジェクトファイルを指定する場合：
+python desktopPyLauncher.py --file ..\desktopPyLauncherDATA\default.json
+python3 desktopPyLauncher.py --file ..\desktopPyLauncherDATA\default.json
+
+
+有効なコマンドか確認するには、コマンドプロンプトで以下を実行します：
+
+
+py --version
+python --version
+python3 --version
+
+
+動作すれば利用できます。
