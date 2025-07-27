@@ -255,6 +255,11 @@ python desktopPyLauncher.py --help
 - **画像ペースト**：クリップボードからの直接貼り付け
 - **プロジェクト間移動**：異なるプロジェクト間でのアイテム移動
 
+### 🎬 **マルチメディア活用**
+- **チュートリアル管理**：動画・画像・説明ノートを一画面に配置
+- **プレゼン資料**：関連画像・動画・実行デモを統合表示
+- **学習環境**：参考動画、コード、ノート、実行環境を一元管理
+
 ---
 
 ## 📦 インストール
@@ -369,91 +374,50 @@ Windowsでは `.py` を直接ピン留めできないため、以下の手順で
 - **CommandWidget**：定型コマンドのワンクリック実行
   - 用途：よく使うコマンドの登録（pytest、black、flake8等）
   - 特徴：シェル選択可能（cmd/PowerShell/WSL）、カスタムコマンド登録
+  
+(ターミナル作ろうと思うと大体この流れになるんですよ・・・。あえてすべての実装して残しておきます。
+現状、プロジェクト内に配置することにより出力を受け取れるのは冒頭の TerminalItem のみです。)
 
-#### 🚀 **開発ワークフロー活用例**
-- **プロジェクト統合管理**：
-  - Pythonアプリ（.py）→ LauncherItem でワンクリック起動
-  - 関連フォルダ（src/、docs/、tests/）→ フォルダショートカット
-  - 仮想環境アクティベート → CommandWidget で`conda activate myenv`
-  - ドキュメント・APIリファレンス → URL LauncherItem
-- **仮想環境・パッケージ管理**：
-  ```bash
-  # CommandWidget 登録例
-  conda activate myproject          # 環境切り替え
-  pip install -r requirements.txt  # 依存パッケージ一括インストール
-  pip freeze > requirements.txt    # 依存関係出力
-  conda env export > environment.yml  # Conda環境エクスポート
-  ```
-- **デバッグ・テスト環境**：
-  - **XtermTerminalItem**：`python -m pdb script.py` でデバッガー起動
-  - **CommandWidget**：`pytest tests/ -v` でテスト実行
-  - **InteractiveTerminalItem**：`python -i` で対話型Python起動
-  - **LauncherItem**：ログファイル、エディタ（VS Code/PyCharm）の直接起動
+## 💡 TIPS
 
-#### 📊 **データサイエンス・機械学習**
-- **Jupyter環境統合**：
-  - CommandWidget：`jupyter lab`、`jupyter notebook` 起動
-  - LauncherItem：.ipynb ファイル直接開く
-  - VideoItem：解説動画、チュートリアル動画を並行表示
-- **実験環境管理**：
-  - 各実験フォルダ → 専用プロジェクト作成
-  - データセット、結果画像 → ImageItem で可視化
-  - 実行ログ → NoteItem で記録・表示
-- **モデル訓練・評価**：
-  ```python
-  # CommandWidget 登録例
-  python train.py --config config.json     # 訓練実行
-  tensorboard --logdir=logs               # TensorBoard 起動
-  python evaluate.py --model best.pth     # モデル評価
-  ```
+### 🌐 ネットワークドライブ運用TIPS
+Windowsではネットワークドライブをマウントしたままにしておくとネットワーク接続の問題でOSが固まる場合があります。
+必要な時のみマウント/アンマウントを行う運用が推奨されます。
 
-#### 🔧 **開発ツール連携**
-- **コード品質管理**：
-  - CommandWidget：`black .`、`flake8`、`mypy` で自動チェック
-  - LauncherItem：`pre-commit install` 等の設定スクリプト
-- **Git 操作**：
-  - CommandWidget：`git status`、`git add .`、`git commit -m "message"`
-  - XtermTerminalItem：`git log --oneline --graph` 等の複雑な表示
-- **Docker 統合**：
-  ```bash
-  # CommandWidget 登録例
-  docker build -t myapp .               # イメージビルド
-  docker run -p 8000:8000 myapp         # コンテナ起動
-  docker-compose up -d                  # 開発環境起動
-  ```
-
-#### 🎯 **プロジェクト別設定のコツ**
-- **環境ごとのプロジェクト作成**：開発/ステージング/本番で別プロジェクト
-- **ターミナル配置**：XtermTerminalItem を中央に、CommandWidget を端に配置
-- **ログ・出力管理**：NoteItem で README.md、CHANGELOG.md を表示
-- **視覚的管理**：プロジェクト構成図を ImageItem で表示、進捗を動画で記録
-
-### 🏢 業務効率化
-- **プロジェクトダッシュボード**：関連資料（画像・動画・Markdown）、実行ツール、フォルダアクセスを統合
-- **ネットワークドライブ管理**：
+- **マウント用バッチファイル**（mount_drives.bat）：
   ```batch
-  # mount_drives.bat
   @echo off
+  echo chcp 65001
   net use X: \\server\share1
   net use Y: \\server\share2
+  echo ネットワークドライブをマウントしました
   timeout /t 2
   ```
-- **定型作業自動化**：バッチファイル、PowerShellスクリプトの実行制御
 
-### 🎬 マルチメディア活用
-- **チュートリアル管理**：動画・画像・説明ノートを一画面に配置
-- **プレゼン資料**：関連画像・動画・実行デモを統合表示
-- **学習環境**：参考動画、コード、ノート、実行環境を一元管理
+- **アンマウント用バッチファイル**（unmount_drives.bat）：
+  ```batch
+  @echo off
+  echo chcp 65001
+  net use X: /delete /y
+  net use Y: /delete /y
+  echo ネットワークドライブをアンマウントしました
+  timeout /t 2
+  ```
 
-### 🛠️ システム管理
-- **非表示実行活用**：
+これらのバッチファイルをランチャーアイテムとして登録することで、ワンクリックでマウント/アンマウントが可能になります。
+
+### 🖥️ コンソールウィンドウ非表示起動
+Python製アプリケーションのため、通常起動時にコマンドプロンプトが表示されます。
+デスクトップランチャーとして使用する際は、このコンソールウィンドウを非表示にする方法が便利です。
+
+- **VBSスクリプトによる非表示起動**：
   ```vbs
   ' start_launcher.vbs - コマンドプロンプト非表示起動
   Set WshShell = CreateObject("WScript.Shell")
   WshShell.Run """desktopPyLauncher.bat""", 0, False
   ```
-- **スタートメニュー登録**：cmd /c でvbsファイルを実行するショートカット作成
-- **セキュリティ考慮**：管理者権限が必要なスクリプトの安全な実行
+- **スタートメニュー登録手順**：上記VBSファイルを実行するショートカットを作成
+- **使用場面**：常駐使用、プレゼンテーション時、クリーンなデスクトップ環境構築時
 
 ### 🔮 将来構想・拡張性
 - **Web API連携**：curlコマンド等でHTTP通信（現状でも可能）
@@ -461,23 +425,15 @@ Windowsでは `.py` を直接ピン留めできないため、以下の手順で
 - **埋め込みファイル管理**：アイコン・画像はBase64埋め込み対応（動画は実体ファイル必要）
 - **ネットワーク耐性**：ネットワークドライブ未接続でもフリーズしない設計
 
-## 🚧 今後の開発予定
-
-### 優先度：高
+## 🚧 開発方針・開発予定・メモ
 - **ファイル一覧表示**：フォルダ内ファイルのグリッド表示
-
-### 優先度：中
 - **ウィジェット機能**：リアルタイム情報表示（CPU使用率、メモリ、天気等）
 - **サムネイラー機能**：画像・動画・文書のプレビュー表示
-
-### 優先度：低
 - **テーマシステム**：ダーク/ライトモード、カスタムテーマ (一応実装はしてある。テストしてない)
 - **多言語対応**：現在は日本語専用 (これも一応実装はしてある。テストしてない)
 - **ファイル操作機能**：コピー・移動・削除・リネーム
 - **AI連携機能**：テキスト生成、コード補完、自動分類
 - **クラウド連携**：OneDrive、GoogleDrive等との同期 (基本やりたくない)
-
-### 技術的改善
 - **パフォーマンス最適化**：大量アイテム時の描画速度向上
 - **メモリ使用量削減**：動画・画像の効率的なメモリ管理
 - **安定性向上**：VideoItemの描画系統の改良
