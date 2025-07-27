@@ -1285,7 +1285,7 @@ class MainWindow(QMainWindow):
     def _new_project(self):
         # 新規プロジェクト作成
         path, _ = QFileDialog.getSaveFileName(
-            self, _("create_new_project"), "", "JSON Files (*.json)"
+            self, "create_new_project", "", "JSON Files (*.json)"
         )
         if not path:
             return
