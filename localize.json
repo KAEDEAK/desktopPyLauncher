@@ -58,7 +58,11 @@
     "url_open_failed": "URLオープンに失敗しました",
     "executed_in_terminal": "ターミナルで実行しました",
     "python_script_executed": "Pythonスクリプトを実行しました",
-    "python_script_execution_failed": "Pythonスクリプトの実行に失敗しました"
+    "python_script_execution_failed": "Pythonスクリプトの実行に失敗しました",
+    "window_mode": "ウィンドウモード",
+    "window_normal": "通常",
+    "window_stay_on_bottom": "最背面",
+    "window_stay_on_top": "最前面"
   },
   "en": {
     "loading_message": "LOADING...",
@@ -119,6 +123,10 @@
     "url_open_failed": "Failed to open URL",
     "executed_in_terminal": "Executed in terminal",
     "python_script_executed": "Python script executed",
-    "python_script_execution_failed": "Python script execution failed"
+    "python_script_execution_failed": "Python script execution failed",
+    "window_mode": "Window Mode",
+    "window_normal": "Normal",
+    "window_stay_on_bottom": "Stay on Bottom",
+    "window_stay_on_top": "Stay on Top"
   }
 }

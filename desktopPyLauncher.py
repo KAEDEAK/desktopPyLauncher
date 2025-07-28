@@ -1113,6 +1113,12 @@ class MainWindow(QMainWindow):
         # --- 履歴（ツールバーより先に初期化） ---
         self.history: list[Path] = []
         self.hidx: int = -1
+        
+        # --- ウィンドウモード用の位置・サイズ記憶変数 ---
+        self.normal_window_geometry = None  # 通常モード時のウィンドウ位置・サイズ
+        self.normal_window_state = None  # 通常モード時のウィンドウ状態（最大化など）
+        self.current_window_mode = 'normal'  # 現在のウィンドウモード
+        self.original_window_flags = None  # 初期のウィンドウフラグを保存
 
         # --- シーンとビューのセットアップ ---
         self.scene = QGraphicsScene(self)
@@ -1128,6 +1134,9 @@ class MainWindow(QMainWindow):
         self._toolbar()
         self.setWindowTitle(f"desktopPyLauncher - {self.json_path.name}")
         self.resize(900, 650)
+        
+        # --- 初期のウィンドウフラグを保存 ---
+        self.original_window_flags = self.windowFlags()
         
         # --- ミニマップを生成して右上に配置 ---
         if not SHOW_MINIMAP:
@@ -1401,6 +1410,27 @@ class MainWindow(QMainWindow):
         btn_effects.setMenu(menu_effects)
         tb.addWidget(btn_effects)
         
+        # === ウィンドウモード メニューを追加 ===
+        menu_window_mode = QMenu(self)
+        self.a_window_normal = menu_window_mode.addAction(f"🪟{_('window_normal')}")
+        self.a_window_normal.setCheckable(True)
+        self.a_window_normal.setChecked(True)  # デフォルトは通常モード
+        self.a_window_normal.triggered.connect(lambda: self._set_window_mode('normal'))
+        
+        self.a_window_bottom = menu_window_mode.addAction(f"⬇️{_('window_stay_on_bottom')}")
+        self.a_window_bottom.setCheckable(True)
+        self.a_window_bottom.triggered.connect(lambda: self._set_window_mode('bottom'))
+        
+        self.a_window_top = menu_window_mode.addAction(f"⬆️{_('window_stay_on_top')}")
+        self.a_window_top.setCheckable(True)
+        self.a_window_top.triggered.connect(lambda: self._set_window_mode('top'))
+        
+        btn_window_mode = QToolButton(self)
+        btn_window_mode.setText(_("window_mode"))
+        btn_window_mode.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        btn_window_mode.setMenu(menu_window_mode)
+        tb.addWidget(btn_window_mode)
+        
         self.add_toolbar_spacer(tb, width=24)
 
         act(f"▶{_('play_all')}",   self._play_all_videos)
@@ -1427,6 +1457,95 @@ class MainWindow(QMainWindow):
     def _toggle_spark_effect(self, checked):
         '''Spark エフェクトのオン/オフ切り替え'''
         self.view.toggle_spark_effect(checked)
+
+    def _set_window_mode(self, mode):
+        '''ウィンドウモードの切り替え (normal/bottom/top)'''
+        # 既に同じモードの場合は何もしない
+        if self.current_window_mode == mode:
+            return
+            
+        # 通常モードから他のモードに変更する場合、現在の位置・サイズ・状態を保存
+        if self.current_window_mode == 'normal' and mode != 'normal':
+            if not self.isMaximized() and not self.isMinimized():
+                # 通常状態の場合のみジオメトリを保存
+                self.normal_window_geometry = self.geometry()
+            self.normal_window_state = self.windowState()
+        
+        # 現在のウィンドウ状態を保存（復元用）
+        current_state = self.windowState()
+        
+        # すべてのチェックを一旦解除
+        self.a_window_normal.setChecked(False)
+        self.a_window_bottom.setChecked(False) 
+        self.a_window_top.setChecked(False)
+        
+        # 元のウィンドウフラグをベースにする
+        if self.original_window_flags is not None:
+            base_flags = self.original_window_flags
+        else:
+            # フォールバック：現在のフラグからStayOnTop/Bottomを除去
+            base_flags = self.windowFlags() & ~Qt.WindowType.WindowStaysOnTopHint & ~Qt.WindowType.WindowStaysOnBottomHint
+        
+        if mode == 'normal':
+            # 通常モード - 元のフラグに戻す
+            self.a_window_normal.setChecked(True)
+            
+            # Windows の正しい順序: 1. 最大化解除 → 2. フラグ変更 → 3. 再表示 → 4. 状態復元
+            if self.isMaximized():
+                self.showNormal()  # 最大化を解除
+            
+            self.setWindowFlags(base_flags)  # フラグ変更
+            self.show()  # 再表示
+            
+            # 保存された状態を復元
+            if self.normal_window_state is not None:
+                if self.normal_window_state & Qt.WindowState.WindowMaximized:
+                    self.showMaximized()
+                elif self.normal_window_state & Qt.WindowState.WindowMinimized:
+                    self.showMinimized()
+                else:
+                    # 通常状態でジオメトリがあれば復元
+                    if self.normal_window_geometry is not None:
+                        self.setGeometry(self.normal_window_geometry)
+                        
+        elif mode == 'bottom':
+            # 最背面モード
+            self.a_window_bottom.setChecked(True)
+            
+            # Windows の正しい順序: 1. 最大化解除 → 2. フラグ変更 → 3. 再表示 → 4. 状態復元
+            was_maximized = self.isMaximized()
+            if was_maximized:
+                self.showNormal()  # 最大化を解除
+                
+            self.setWindowFlags(base_flags | Qt.WindowType.WindowStaysOnBottomHint)  # フラグ変更
+            self.show()  # 再表示
+            
+            # 状態を復元
+            if was_maximized:
+                self.showMaximized()
+            else:
+                self.setWindowState(current_state)
+            
+        elif mode == 'top':
+            # 最前面モード
+            self.a_window_top.setChecked(True)
+            
+            # Windows の正しい順序: 1. 最大化解除 → 2. フラグ変更 → 3. 再表示 → 4. 状態復元
+            was_maximized = self.isMaximized()
+            if was_maximized:
+                self.showNormal()  # 最大化を解除
+                
+            self.setWindowFlags(base_flags | Qt.WindowType.WindowStaysOnTopHint)  # フラグ変更
+            self.show()  # 再表示
+            
+            # 状態を復元
+            if was_maximized:
+                self.showMaximized()
+            else:
+                self.setWindowState(current_state)
+        
+        # 現在のモードを更新
+        self.current_window_mode = mode
 
     def _show_about(self):
         """アプリのバージョン情報を表示"""
