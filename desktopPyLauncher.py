@@ -23,7 +23,8 @@ from PySide6.QtWidgets import (
     QFileDialog, QFileIconProvider, QStyleFactory, QDialog,
     QLabel, QLineEdit, QTextEdit, QPushButton, QVBoxLayout, QHBoxLayout,
     QToolButton, QMenu, QComboBox, QSpinBox, QCheckBox, QSizePolicy,
-    QWidget, QSlider, QGraphicsProxyWidget
+    QWidget, QSlider, QGraphicsProxyWidget, QListWidget, QListWidgetItem,
+    QGroupBox, QGridLayout, QTabWidget
 )
 from PySide6.QtMultimedia import QMediaPlayer, QAudioOutput
 from PySide6.QtMultimediaWidgets import QVideoWidget, QGraphicsVideoItem
@@ -1086,6 +1087,206 @@ class CanvasView(QGraphicsView):
             super().mouseDoubleClickEvent(event)
 
 # ==============================================================
+#  SearchDialog - 検索ダイアログ
+# ==============================================================
+class SearchDialog(QDialog):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle(_("search_maintenance"))
+        self.setModal(False)
+        self.resize(700, 600)
+        
+        # 検索結果を親ウィンドウに通知するためのコールバック
+        self.parent_window = parent
+        
+        self._setup_ui()
+        
+    def _setup_ui(self):
+        layout = QVBoxLayout(self)
+        
+        # タブウィジェット作成
+        self.tab_widget = QTabWidget()
+        
+        # 検索タブ
+        self._setup_search_tab()
+        
+        # メンテナンスタブ
+        self._setup_maintenance_tab()
+        
+        layout.addWidget(self.tab_widget)
+        
+        # 閉じるボタン
+        close_btn = QPushButton(_("close"))
+        close_btn.clicked.connect(self.close)
+        layout.addWidget(close_btn)
+        
+    def _setup_search_tab(self):
+        """検索タブの設定"""
+        search_tab = QWidget()
+        layout = QVBoxLayout(search_tab)
+        
+        # 検索フォーム
+        form_group = QGroupBox(_("search_options"))
+        form_layout = QGridLayout(form_group)
+        
+        # 検索文字列
+        form_layout.addWidget(QLabel(_("search_text")), 0, 0)
+        self.search_input = QLineEdit()
+        self.search_input.returnPressed.connect(self.perform_search)
+        form_layout.addWidget(self.search_input, 0, 1, 1, 2)
+        
+        # 検索オプション
+        self.exact_match_cb = QCheckBox(_("exact_match"))
+        self.case_sensitive_cb = QCheckBox(_("case_sensitive"))
+        self.include_object_id_cb = QCheckBox(_("include_object_id"))
+        self.include_workdir_cb = QCheckBox(_("include_workdir"))
+        self.include_content_cb = QCheckBox(_("include_content"))
+        
+        form_layout.addWidget(self.exact_match_cb, 1, 0)
+        form_layout.addWidget(self.case_sensitive_cb, 1, 1)
+        form_layout.addWidget(self.include_object_id_cb, 2, 0)
+        form_layout.addWidget(self.include_workdir_cb, 2, 1)
+        form_layout.addWidget(self.include_content_cb, 2, 2)
+        
+        # 検索ボタン
+        search_btn = QPushButton(_("search"))
+        search_btn.clicked.connect(self.perform_search)
+        form_layout.addWidget(search_btn, 3, 0, 1, 3)
+        
+        layout.addWidget(form_group)
+        
+        # 検索結果リスト
+        results_group = QGroupBox(_("search_results"))
+        results_layout = QVBoxLayout(results_group)
+        
+        self.search_results_list = QListWidget()
+        self.search_results_list.itemDoubleClicked.connect(self.on_search_result_selected)
+        results_layout.addWidget(self.search_results_list)
+        
+        layout.addWidget(results_group)
+        
+        self.tab_widget.addTab(search_tab, _("search"))
+        
+    def _setup_maintenance_tab(self):
+        """メンテナンスタブの設定"""
+        maintenance_tab = QWidget()
+        layout = QVBoxLayout(maintenance_tab)
+        
+        # エラーチェックボタン
+        error_check_btn = QPushButton(_("error_check"))
+        error_check_btn.clicked.connect(self.perform_error_check)
+        layout.addWidget(error_check_btn)
+        
+        # 検査結果リスト
+        results_group = QGroupBox(_("error_check_results"))
+        results_layout = QVBoxLayout(results_group)
+        
+        self.maintenance_results_list = QListWidget()
+        self.maintenance_results_list.itemDoubleClicked.connect(self.on_maintenance_result_selected)
+        results_layout.addWidget(self.maintenance_results_list)
+        
+        layout.addWidget(results_group)
+        
+        self.tab_widget.addTab(maintenance_tab, _("maintenance"))
+        
+    def perform_search(self):
+        """検索を実行"""
+        if not self.parent_window:
+            return
+            
+        search_text = self.search_input.text().strip()
+        if not search_text:
+            return
+            
+        # 検索オプション
+        options = {
+            'exact_match': self.exact_match_cb.isChecked(),
+            'case_sensitive': self.case_sensitive_cb.isChecked(),
+            'include_object_id': self.include_object_id_cb.isChecked(),
+            'include_workdir': self.include_workdir_cb.isChecked(),
+            'include_content': self.include_content_cb.isChecked()
+        }
+        
+        # 親ウィンドウの検索メソッドを呼び出し
+        results = self.parent_window._search_items(search_text, options)
+        
+        # 結果を表示
+        self.display_search_results(results)
+        
+    def display_search_results(self, results):
+        """検索結果を表示"""
+        self.search_results_list.clear()
+        
+        for result in results:
+            item_text = f"{result['object_id']}: {result['caption']} ({result['match_type']})"
+            if result['match_count'] > 1:
+                item_text += f" - {result['match_count']} matches"
+                
+            list_item = QListWidgetItem(item_text)
+            list_item.setData(Qt.ItemDataRole.UserRole, result)
+            self.search_results_list.addItem(list_item)
+        
+        # 検索結果が1件以上ある場合、最初の結果を自動選択してスクロール
+        if len(results) > 0:
+            # 最初のアイテムを選択
+            first_item = self.search_results_list.item(0)
+            self.search_results_list.setCurrentItem(first_item)
+            
+            # 自動的に最初の結果にスクロール
+            self.on_search_result_selected(first_item)
+            
+    def on_search_result_selected(self, item):
+        """検索結果が選択された時の処理"""
+        result_data = item.data(Qt.ItemDataRole.UserRole)
+        if result_data and self.parent_window:
+            # アイテムを中央に表示
+            self.parent_window._center_on_item(result_data['item'])
+    
+    def perform_error_check(self):
+        """エラーチェックを実行"""
+        if not self.parent_window:
+            return
+        
+        # 親ウィンドウのエラーチェックメソッドを呼び出し
+        error_results = self.parent_window._check_path_errors()
+        
+        # 結果を表示
+        self.display_error_results(error_results)
+        
+    def display_error_results(self, results):
+        """エラーチェック結果を表示"""
+        self.maintenance_results_list.clear()
+        
+        if not results:
+            # エラーがない場合
+            list_item = QListWidgetItem(_("no_errors_found"))
+            self.maintenance_results_list.addItem(list_item)
+            return
+        
+        for result in results:
+            item_text = f"{result['object_id']}: {result['caption']} - {result['error_type']}: {result['path']}"
+                
+            list_item = QListWidgetItem(item_text)
+            list_item.setData(Qt.ItemDataRole.UserRole, result)
+            self.maintenance_results_list.addItem(list_item)
+        
+        # エラー結果が1件以上ある場合、最初の結果を自動選択してスクロール
+        if len(results) > 0:
+            # 最初のアイテムを選択
+            first_item = self.maintenance_results_list.item(0)
+            self.maintenance_results_list.setCurrentItem(first_item)
+            
+            # 自動的に最初の結果にスクロール
+            self.on_maintenance_result_selected(first_item)
+            
+    def on_maintenance_result_selected(self, item):
+        """メンテナンス結果が選択された時の処理"""
+        result_data = item.data(Qt.ItemDataRole.UserRole)
+        if result_data and self.parent_window:
+            # アイテムを中央に表示
+            self.parent_window._center_on_item(result_data['item'])
+
+# ==============================================================
 #  MainWindow - メインウィンドウ
 # ==============================================================
 class MainWindow(QMainWindow):
@@ -1183,6 +1384,9 @@ class MainWindow(QMainWindow):
         
         # エフェクトマネージャーを作成
         #self.effect_manager = EffectManager(parent=self)
+        
+        # 検索ダイアログを初期化
+        self.search_dialog = None
         
     def _position_minimap(self):
         """
@@ -1362,6 +1566,11 @@ class MainWindow(QMainWindow):
         self.prev_action.triggered.connect(self._go_prev)
         self.next_action.triggered.connect(self._go_next)
         # ---
+        
+        self.add_toolbar_spacer(tb, width=24)
+        
+        # 検索ボタン
+        act(f"🔍{_('search')}", self._show_search_dialog)
         
         self.add_toolbar_spacer(tb, width=24)
 
@@ -3850,6 +4059,230 @@ Original template file: {template_path.name}
             show_error_notification(f"プロジェクトの読み込みに失敗しました: {str(e)}", self)
             import traceback
             traceback.print_exc()
+    
+    # ==============================================================
+    #  検索機能
+    # ==============================================================
+    
+    def _show_search_dialog(self):
+        """検索ダイアログを表示"""
+        if not self.search_dialog:
+            self.search_dialog = SearchDialog(self)
+        
+        self.search_dialog.show()
+        self.search_dialog.raise_()
+        self.search_dialog.activateWindow()
+        
+    def _search_items(self, search_text, options):
+        """アイテムを検索して結果を返す"""
+        results = []
+        
+        # 検索対象のすべてのアイテムを取得
+        items = []
+        for item in self.scene.items():
+            if hasattr(item, 'TYPE_NAME'):
+                items.append(item)
+        
+        for item in items:
+            match_info = self._check_item_match(item, search_text, options)
+            if match_info:
+                results.append(match_info)
+        
+        # 結果をソート（完全一致、部分一致の順）
+        results.sort(key=lambda x: (
+            0 if x['match_type'] == '完全一致' else
+            1 if x['match_type'] == '先頭一致' else
+            2 if x['match_type'] == '中間一致' else
+            3 if x['match_type'] == '後方一致' else 4
+        ))
+        
+        return results
+    
+    def _check_item_match(self, item, search_text, options):
+        """個別アイテムのマッチをチェック"""
+        if not options['case_sensitive']:
+            search_text = search_text.lower()
+        
+        search_fields = []
+        match_count = 0
+        match_types = []
+        
+        # キャプション
+        caption = getattr(item, 'caption', '')
+        if caption:
+            search_fields.append(('caption', caption))
+        
+        # オブジェクトID
+        if options['include_object_id']:
+            object_id = getattr(item, 'object_id', '')
+            if object_id:
+                search_fields.append(('object_id', object_id))
+        
+        # ファイル名・プログラム名
+        file_path = getattr(item, 'path', '') or getattr(item, 'file_path', '')
+        if file_path:
+            if hasattr(item, 'TYPE_NAME'):
+                if item.TYPE_NAME in ['launcher', 'json', 'image', 'gif', 'video']:
+                    filename = Path(file_path).name if file_path else ''
+                    if filename:
+                        search_fields.append(('filename', filename))
+        
+        # 作業ディレクトリ
+        if options['include_workdir']:
+            workdir = getattr(item, 'workdir', '') or getattr(item, 'working_directory', '')
+            if workdir:
+                search_fields.append(('workdir', workdir))
+        
+        # ノートのコンテンツ
+        if options['include_content'] and hasattr(item, 'TYPE_NAME') and item.TYPE_NAME == 'note':
+            content = getattr(item, 'content', '') or getattr(item, 'text', '')
+            if content:
+                search_fields.append(('content', content))
+        
+        # 検索実行
+        for field_name, field_value in search_fields:
+            if not options['case_sensitive']:
+                field_value = field_value.lower()
+            
+            match_type = self._get_match_type(field_value, search_text, options['exact_match'])
+            if match_type:
+                match_count += 1
+                match_types.append(match_type)
+        
+        if match_count > 0:
+            # 最も良いマッチタイプを使用
+            best_match_type = min(match_types, key=lambda x: (
+                0 if x == '完全一致' else
+                1 if x == '先頭一致' else
+                2 if x == '中間一致' else
+                3 if x == '後方一致' else 4
+            ))
+            
+            return {
+                'item': item,
+                'object_id': getattr(item, 'object_id', ''),
+                'caption': caption or 'No Caption',
+                'match_type': best_match_type,
+                'match_count': match_count
+            }
+        
+        return None
+    
+    def _get_match_type(self, text, search_text, exact_match):
+        """マッチタイプを判定"""
+        if exact_match:
+            return '完全一致' if text == search_text else None
+        else:
+            if text == search_text:
+                return '完全一致'
+            elif text.startswith(search_text):
+                return '先頭一致'
+            elif text.endswith(search_text):
+                return '後方一致'
+            elif search_text in text:
+                return '中間一致'
+        return None
+    
+    def _center_on_item(self, item):
+        """アイテムを画面中央に表示"""
+        if not item:
+            return
+        
+        try:
+            # アイテムの境界矩形を取得
+            item_rect = item.boundingRect()
+            
+            # アイテムのシーン座標での中心点を計算
+            if hasattr(item, 'scenePos'):
+                item_pos = item.scenePos()
+            else:
+                item_pos = item.pos()
+            
+            # アイテムの中心点を計算
+            item_center = item_pos + item_rect.center()
+            
+            # ビューを指定した座標に中央揃え
+            self.view.centerOn(item_center)
+            
+            # ズームが極端に小さい場合は適度にズームイン
+            if hasattr(self.view, '_zoom') and self.view._zoom < 0.5:
+                # 現在のズームレベルを1.0に設定
+                zoom_factor = 1.0 / self.view._zoom
+                self.view.scale(zoom_factor, zoom_factor)
+                self.view._zoom = 1.0
+                if hasattr(self.view, '_update_render_hints'):
+                    self.view._update_render_hints()
+            
+            # アイテムを選択状態にする
+            self.scene.clearSelection()
+            if hasattr(item, 'setSelected'):
+                item.setSelected(True)
+                
+            # フォーカスをビューに設定
+            self.view.setFocus()
+            
+        except Exception as e:
+            print(f"Error centering on item: {e}")
+            # フォールバック：単純にアイテムの位置にスクロール
+            if hasattr(item, 'pos'):
+                self.view.centerOn(item.pos())
+    
+    def _check_path_errors(self):
+        """存在しないパスを参照しているオブジェクトをチェック"""
+        error_results = []
+        
+        # 検索対象のすべてのアイテムを取得
+        items = []
+        for item in self.scene.items():
+            if hasattr(item, 'TYPE_NAME'):
+                items.append(item)
+        
+        for item in items:
+            errors = self._check_item_paths(item)
+            error_results.extend(errors)
+        
+        return error_results
+    
+    def _check_item_paths(self, item):
+        """個別アイテムのパスエラーをチェック"""
+        errors = []
+        caption = getattr(item, 'caption', 'No Caption')
+        object_id = getattr(item, 'object_id', '')
+        
+        # ファイルパスのチェック
+        file_path = getattr(item, 'path', '') or getattr(item, 'file_path', '')
+        if file_path:
+            # 相対パスを絶対パスに変換
+            if not os.path.isabs(file_path):
+                file_path = os.path.abspath(file_path)
+            
+            if not os.path.exists(file_path):
+                errors.append({
+                    'item': item,
+                    'object_id': object_id,
+                    'caption': caption,
+                    'error_type': _("file_not_found"),
+                    'path': file_path
+                })
+        
+        # 作業ディレクトリのチェック
+        workdir = getattr(item, 'workdir', '') or getattr(item, 'working_directory', '')
+        if workdir:
+            # 相対パスを絶対パスに変換
+            if not os.path.isabs(workdir):
+                workdir = os.path.abspath(workdir)
+            
+            if not os.path.exists(workdir):
+                errors.append({
+                    'item': item,
+                    'object_id': object_id,
+                    'caption': caption,
+                    'error_type': _("workdir_not_found"),
+                    'path': workdir
+                })
+        
+        return errors
+
 # ==============================================================
 #  App helper - 補助関数
 # ==============================================================
