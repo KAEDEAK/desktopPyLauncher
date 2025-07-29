@@ -1,2 +1,2 @@
 Set WshShell = CreateObject("WScript.Shell")
-WshShell.Run """launch.bat""", 0, False
+WshShell.Run """desktopPyLauncher.bat""", 0, False

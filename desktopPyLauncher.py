@@ -29,7 +29,7 @@ from PySide6.QtMultimedia import QMediaPlayer, QAudioOutput
 from PySide6.QtMultimediaWidgets import QVideoWidget, QGraphicsVideoItem
 from PySide6.QtGui import (
     QPixmap, QPainter, QBrush, QColor, QPalette, QAction,
-    QIcon, QImage, QPen, QTransform, QFont, QRadialGradient
+    QIcon, QImage, QPen, QTransform, QFont, QRadialGradient, QCursor
 )
 from PySide6.QtCore import (
     Qt, QRectF, QSizeF, QPointF, QFileInfo, QProcess, 
@@ -1129,6 +1129,14 @@ class MainWindow(QMainWindow):
         # --- 背景リサイズ用タイマー ---
         self._resize_timer = QTimer(self); self._resize_timer.setSingleShot(True)
         self._resize_timer.timeout.connect(self._apply_background)
+        
+        # --- ツールバー自動表示/非表示用 ---
+        self._mouse_timer = QTimer(self)
+        self._mouse_timer.timeout.connect(self._check_mouse_position)
+        self._toolbar_visible = True  # ツールバーの表示状態
+        self._toolbar_hide_timer = QTimer(self)
+        self._toolbar_hide_timer.setSingleShot(True)
+        self._toolbar_hide_timer.timeout.connect(self._hide_toolbar_delayed)
 
         # --- UI初期化 ---
         self._toolbar()
@@ -1327,6 +1335,7 @@ class MainWindow(QMainWindow):
             initialize_localizer(_language_setting)
         
         tb = QToolBar("Main", self); self.addToolBar(tb)
+        self.toolbar = tb  # ツールバーの参照を保存
         def act(text, slot, *, chk=False):
             a = QAction(text, self, checkable=chk); a.triggered.connect(slot)
             tb.addAction(a); return a
@@ -1509,7 +1518,7 @@ class MainWindow(QMainWindow):
                         self.setGeometry(self.normal_window_geometry)
                         
         elif mode == 'bottom':
-            # 最背面モード
+            # 最背面モード（外枠線なし）
             self.a_window_bottom.setChecked(True)
             
             # Windows の正しい順序: 1. 最大化解除 → 2. フラグ変更 → 3. 再表示 → 4. 状態復元
@@ -1517,7 +1526,8 @@ class MainWindow(QMainWindow):
             if was_maximized:
                 self.showNormal()  # 最大化を解除
                 
-            self.setWindowFlags(base_flags | Qt.WindowType.WindowStaysOnBottomHint)  # フラグ変更
+            # 最背面 + フレームレス（外枠線なし）
+            self.setWindowFlags(base_flags | Qt.WindowType.WindowStaysOnBottomHint | Qt.WindowType.FramelessWindowHint)
             self.show()  # 再表示
             
             # 状態を復元
@@ -1546,6 +1556,71 @@ class MainWindow(QMainWindow):
         
         # 現在のモードを更新
         self.current_window_mode = mode
+        
+        # ツールバー自動表示/非表示の制御
+        self._update_toolbar_auto_hide()
+
+    def _update_toolbar_auto_hide(self):
+        '''ウィンドウモードに応じてツールバーの自動表示/非表示を制御'''
+        if self.current_window_mode == 'bottom':
+            # 最背面モードの場合、マウス監視開始 & ツールバー非表示
+            self._mouse_timer.start(100)  # 100msごとにマウス位置をチェック
+            self._hide_toolbar()
+        else:
+            # 通常・最前面モードの場合、マウス監視停止 & ツールバー表示
+            self._mouse_timer.stop()
+            self._show_toolbar()
+    
+    def _check_mouse_position(self):
+        '''マウス位置をチェックしてツールバーの表示/非表示を制御'''
+        if self.current_window_mode != 'bottom':
+            return
+            
+        # グローバルマウス位置を取得
+        global_pos = QCursor.pos()
+        # ウィンドウローカル座標に変換
+        local_pos = self.mapFromGlobal(global_pos)
+        
+        # ウィンドウ上部30ピクセル以内にマウスがあるかチェック
+        is_in_top_area = (0 <= local_pos.x() <= self.width() and 0 <= local_pos.y() <= 30)
+        
+        if is_in_top_area:
+            # マウスが上部エリアにある場合
+            if not self._toolbar_visible:
+                self._show_toolbar()
+            # 非表示タイマーを停止
+            self._toolbar_hide_timer.stop()
+        else:
+            # マウスが上部エリアから離れた場合
+            if self._toolbar_visible and not self._toolbar_hide_timer.isActive():
+                # タイマーがまだ動いていない場合のみ開始
+                self._toolbar_hide_timer.start(2000)  # 2秒後に非表示
+    
+    def _show_toolbar(self):
+        '''ツールバーを表示'''
+        if hasattr(self, 'toolbar') and not self._toolbar_visible:
+            self.toolbar.setVisible(True)
+            self._toolbar_visible = True
+    
+    def _hide_toolbar(self):
+        '''ツールバーを非表示'''
+        if hasattr(self, 'toolbar') and self._toolbar_visible:
+            self.toolbar.setVisible(False)
+            self._toolbar_visible = False
+    
+    def _hide_toolbar_delayed(self):
+        '''遅延ツールバー非表示（タイマー用）'''
+        # 最背面モードでない場合は何もしない
+        if self.current_window_mode != 'bottom':
+            return
+            
+        # マウスがまだ上部エリアにない場合のみ非表示
+        global_pos = QCursor.pos()
+        local_pos = self.mapFromGlobal(global_pos)
+        is_in_top_area = (0 <= local_pos.x() <= self.width() and 0 <= local_pos.y() <= 30)
+        
+        if not is_in_top_area:
+            self._hide_toolbar()
 
     def _show_about(self):
         """アプリのバージョン情報を表示"""
