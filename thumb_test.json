@@ -1,0 +1,38 @@
+{
+  "fileinfo": {
+    "name": "desktopPyLauncher.py",
+    "info": "project data file",
+    "version": "1.1"
+  },
+  "items": [
+    {
+      "type": "thumbnail_view",
+      "x": 0.0,
+      "y": 86.0,
+      "width": 514,
+      "height": 435,
+      "directory_path": "C:/Users/EISEN/Pictures/wallpapers(modified)",
+      "thumbnail_size": 128,
+      "margin": 8,
+      "linked_image_item_id": 1,
+      "z": 0.0
+    },
+    {
+      "type": "image",
+      "path": "C:\\Users\\EISEN\\Pictures\\wallpapers(modified)\\Prinz_Eugen.webp",
+      "image_embedded": false,
+      "brightness": 50,
+      "x": 604.6,
+      "y": 99.00000000000006,
+      "width": 548,
+      "height": 440,
+      "z": 0.0,
+      "id": 1
+    }
+  ],
+  "window_geom": "AdnQywADAAAAAAKuAAAAqwAACegAAATcAAACrgAAAMoAAAnoAAAE3AAAAAAAAAAACgAAAAKuAAAAygAACegAAATc",
+  "background": {
+    "path": "C:/Users/EISEN/Pictures/wallpapers(modified)/wps_145.png",
+    "brightness": 15
+  }
+}

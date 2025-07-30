@@ -7,6 +7,11 @@ from __future__ import annotations
 
 # --- 標準・サードパーティライブラリ ---
 import sys, json, base64, os, inspect, traceback, argparse
+
+# libpng警告とQt画像警告を抑制
+os.environ['QT_IMAGEIO_MAXALLOC'] = '268435456'  # 256MB
+os.environ['QT_LOGGING_RULES'] = 'qt.gui.imageio.debug=false;qt.gui.imageio.warning=false'
+
 from localization import _, initialize_localizer
 
 # グローバル設定
@@ -58,6 +63,7 @@ from module.DPyL_note    import (NoteItem,NOTE_BG_COLOR,NOTE_FG_COLOR)
 from module.DPyL_video   import VideoItem
 from module.DPyL_marker import MarkerItem
 from module.DPyL_group import GroupItem
+from module.DPyL_thumbnailView import ThumbnailViewItem
 from configparser import ConfigParser
 from urllib.parse import urlparse
 
@@ -128,6 +134,7 @@ def detect_image_format(data: bytes) -> str:
     else:
         # デフォルトはPNG
         return "data:image/png;base64,"
+
         
 def migrate_item_to_v1_1(item_data: dict) -> dict:
     """
@@ -1501,6 +1508,11 @@ class MainWindow(QMainWindow):
             return TerminalItem
         # ===============================
 
+        # === ThumbnailView対応 ===
+        if t == "thumbnail_view":
+            return ThumbnailViewItem
+        # ==============================
+
         return None
 
     def _new_project(self):
@@ -1591,6 +1603,7 @@ class MainWindow(QMainWindow):
         act_xterm_terminal = menu_obj.addAction(_("add_xterm_terminal"))
         act_command_widget = menu_obj.addAction(_("command_widget"))
         menu_obj.addSeparator()  # セパレータで分ける
+        act_thumbnail = menu_obj.addAction(_("add_thumbnail"))
         act_rect   = menu_obj.addAction(_("add_rectangle"))
         act_arrow  = menu_obj.addAction(_("add_arrow"))
     
@@ -1601,6 +1614,7 @@ class MainWindow(QMainWindow):
         # Removed full_terminal and enhanced_terminal action connections
         act_xterm_terminal.triggered.connect(self._add_xterm_terminal)
         act_command_widget.triggered.connect(self._add_command_widget)
+        act_thumbnail.triggered.connect(self._add_thumbnail)
         act_rect.triggered.connect(self._add_rect)
         act_arrow.triggered.connect(self._add_arrow)
 
@@ -1901,6 +1915,38 @@ class MainWindow(QMainWindow):
 
         # RectItem インスタンスを生成してシーンに追加
         item = RectItem(d, text_color=self.text_color)
+        self.scene.addItem(item)
+        item.setZValue(d["z"])
+        self.data.setdefault("items", []).append(d)
+
+        # 追加直後は編集モードにする
+        item.set_run_mode(False)
+        item.setFlag(item.GraphicsItemFlag.ItemIsSelectable, True)
+        item.setFlag(item.GraphicsItemFlag.ItemIsMovable, True)
+
+    def _add_thumbnail(self):
+        """
+        シーンの中央付近に新規 ThumbnailViewItem を追加する。
+        """
+        # 画面中心位置を取得
+        sp = self.view.mapToScene(self.view.viewport().rect().center())
+
+        # デフォルトの辞書を構築
+        d = {
+            "type": "thumbnail_view",
+            "x": sp.x(),
+            "y": sp.y(),
+            "width": 300,
+            "height": 200,
+            "directory_path": "",
+            "thumbnail_size": 128,
+            "margin": 8,
+            "linked_image_item_id": "",
+            "z": 0,
+        }
+
+        # ThumbnailViewItem インスタンスを生成してシーンに追加
+        item = ThumbnailViewItem(d, text_color=self.text_color)
         self.scene.addItem(item)
         item.setZValue(d["z"])
         self.data.setdefault("items", []).append(d)
@@ -2952,6 +2998,37 @@ class MainWindow(QMainWindow):
         #self._set_mode(edit=True)
         it.set_run_mode(False)
 
+    # --- サムネイルビュー追加 ---
+    def _add_thumbnail(self):
+        """シーンの中央付近に、新規 ThumbnailViewItem を追加する。"""
+        # 画面中心位置を取得
+        sp = self.view.mapToScene(self.view.viewport().rect().center())
+
+        # デフォルトの辞書を構築
+        d = {
+            "type": "thumbnail_view",
+            "x": sp.x(),
+            "y": sp.y(),
+            "width": 300,
+            "height": 200,
+            "directory_path": "",
+            "thumbnail_size": 128,
+            "margin": 8,
+            "linked_image_item_id": "",
+            "z": 0,
+        }
+
+        # ThumbnailViewItem インスタンスを生成してシーンに追加
+        item = ThumbnailViewItem(d, text_color=self.text_color)
+        self.scene.addItem(item)
+        item.setZValue(d["z"])
+        self.data.setdefault("items", []).append(d)
+
+        # 追加直後は編集モードでプロパティを設定できるようにする
+        item.set_run_mode(False)
+        item.setFlag(item.GraphicsItemFlag.ItemIsSelectable, True)
+        item.setFlag(item.GraphicsItemFlag.ItemIsMovable, True)
+
     # --- マーカー追加 ---
     def _add_marker(self):
         """
@@ -3570,6 +3647,10 @@ class MainWindow(QMainWindow):
             pos = it.pos()
             it.d["x"], it.d["y"] = pos.x(), pos.y()
             it.d["z"] = it.zValue()
+            
+            # ThumbnailViewItem のデバッグ
+            if hasattr(it, 'TYPE_NAME') and it.TYPE_NAME == 'thumbnail_view':
+                print(f"[SAVE_DEBUG] ThumbnailViewItem data: {it.d}")
 
             if isinstance(it, NoteItem):
                 if it.watch_file:
@@ -4231,6 +4312,11 @@ Original template file: {template_path.name}
         """存在しないパスを参照しているオブジェクトをチェック"""
         error_results = []
         
+        # まず全アイテムのERRORラベルを非表示にする
+        for item in self.scene.items():
+            if hasattr(item, 'set_error_visible'):
+                item.set_error_visible(False)
+        
         # 検索対象のすべてのアイテムを取得
         items = []
         for item in self.scene.items():
@@ -4239,6 +4325,10 @@ Original template file: {template_path.name}
         
         for item in items:
             errors = self._check_item_paths(item)
+            if errors:
+                # エラーがある場合はERRORラベルを表示
+                if hasattr(item, 'set_error_visible'):
+                    item.set_error_visible(True)
             error_results.extend(errors)
         
         return error_results
@@ -4252,34 +4342,42 @@ Original template file: {template_path.name}
         # ファイルパスのチェック
         file_path = getattr(item, 'path', '') or getattr(item, 'file_path', '')
         if file_path:
-            # 相対パスを絶対パスに変換
-            if not os.path.isabs(file_path):
-                file_path = os.path.abspath(file_path)
-            
-            if not os.path.exists(file_path):
-                errors.append({
-                    'item': item,
-                    'object_id': object_id,
-                    'caption': caption,
-                    'error_type': _("file_not_found"),
-                    'path': file_path
-                })
+            # URLの場合はチェックをスキップ
+            if file_path.startswith(('http://', 'https://', 'ftp://', 'ftps://')):
+                pass
+            else:
+                # 相対パスを絶対パスに変換
+                if not os.path.isabs(file_path):
+                    file_path = os.path.abspath(file_path)
+                
+                if not os.path.exists(file_path):
+                    errors.append({
+                        'item': item,
+                        'object_id': object_id,
+                        'caption': caption,
+                        'error_type': _("file_not_found"),
+                        'path': file_path
+                    })
         
         # 作業ディレクトリのチェック
         workdir = getattr(item, 'workdir', '') or getattr(item, 'working_directory', '')
         if workdir:
-            # 相対パスを絶対パスに変換
-            if not os.path.isabs(workdir):
-                workdir = os.path.abspath(workdir)
-            
-            if not os.path.exists(workdir):
-                errors.append({
-                    'item': item,
-                    'object_id': object_id,
-                    'caption': caption,
-                    'error_type': _("workdir_not_found"),
-                    'path': workdir
-                })
+            # URLの場合はチェックをスキップ
+            if workdir.startswith(('http://', 'https://', 'ftp://', 'ftps://')):
+                pass
+            else:
+                # 相対パスを絶対パスに変換
+                if not os.path.isabs(workdir):
+                    workdir = os.path.abspath(workdir)
+                
+                if not os.path.exists(workdir):
+                    errors.append({
+                        'item': item,
+                        'object_id': object_id,
+                        'caption': caption,
+                        'error_type': _("workdir_not_found"),
+                        'path': workdir
+                    })
         
         return errors
 

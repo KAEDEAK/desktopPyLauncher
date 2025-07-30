@@ -812,6 +812,10 @@ class GifMixin:
         # EDITラベル位置更新（LauncherItem用）
         if hasattr(self, "_edit_label") and self._edit_label:
             self._edit_label.setPos(2, 2)
+        
+        # ERRORラベル位置更新（LauncherItem用）
+        if hasattr(self, "_error_label") and self._error_label:
+            self._error_label.setPos(2, 20)
 
 
 # --------------------------------------------------
@@ -931,6 +935,16 @@ class LauncherItem(GifMixin, CanvasItem):
         self._edit_label.setHtml('<span style="background-color:#0044cc;color:#ffff00;">EDIT</span>')
         self._edit_label.setVisible(self.is_editable)
         
+        # ERRORラベル作成
+        self._error_label = QGraphicsTextItem("ERROR", self)
+        self._error_label.setDefaultTextColor(QColor("#ffffff"))
+        error_font = self._error_label.font()
+        error_font.setPointSize(8)
+        self._error_label.setFont(error_font)
+        self._error_label.setZValue(9999)
+        self._error_label.setHtml('<span style="background-color:#cc3333;color:#ffffff;">ERROR</span>')
+        self._error_label.setVisible(False)
+        
         # ピクスマップアイテム
         self._pix_item = QGraphicsPixmapItem(parent=self)
         self._pix_item.setTransformationMode(Qt.TransformationMode.SmoothTransformation)
@@ -977,6 +991,10 @@ class LauncherItem(GifMixin, CanvasItem):
         if hasattr(self, "_edit_label") and self._edit_label:
             self._edit_label.setVisible(self.is_editable)
             self._edit_label.setPos(2, 2)
+        
+        # ERRORラベル位置を更新
+        if hasattr(self, "_error_label") and self._error_label:
+            self._error_label.setPos(2, 20)
 
     def _try_load_gif(self) -> bool:
         """GIFの読み込みを試行 - 詳細なエラーログ付き"""
@@ -1278,6 +1296,18 @@ class LauncherItem(GifMixin, CanvasItem):
         """EDITラベルの位置を更新"""
         if hasattr(self, "_edit_label") and self._edit_label:
             self._edit_label.setPos(2, 2)
+    
+    def _update_error_label_pos(self):
+        """ERRORラベルの位置を更新"""
+        if hasattr(self, "_error_label") and self._error_label:
+            self._error_label.setPos(2, 20)
+    
+    def set_error_visible(self, visible: bool):
+        """ERRORラベルの表示・非表示を設定"""
+        if hasattr(self, "_error_label") and self._error_label:
+            self._error_label.setVisible(visible)
+            if visible:
+                self._update_error_label_pos()
 
     def on_edit(self):
         """編集ダイアログを開く"""
@@ -2120,6 +2150,7 @@ class ImageItem(CanvasItem):
             "brightness": 50,
             "x": sp.x(), "y": sp.y(),
             "width": 200, "height": 200
+            # IDは__init__で自動生成される
         }
         return cls(d, win.text_color), d
 
@@ -2130,6 +2161,11 @@ class ImageItem(CanvasItem):
         text_color: QColor | None = None
     ):
         super().__init__(d, cb_resize, text_color)
+        
+        # IDを自動生成（まだない場合のみ）
+        if "id" not in self.d:
+            self.d["id"] = self._generate_unique_id()
+        
         self.brightness = self.d.get("brightness", 50)
         self.path = self.d.get("path", "")
         # 古いembedフィールドは使用しない
@@ -2146,6 +2182,37 @@ class ImageItem(CanvasItem):
         
         # 現在のスケール因子を追跡
         self._current_lod_scale = 1.0
+
+    def _generate_unique_id(self) -> int:
+        """
+        ImageItem用の一意なID生成
+        シーン内の既存のImageItemのIDを確認して重複しないIDを生成
+        """
+        try:
+            existing_ids = set()
+            
+            # シーンが利用可能な場合、既存のImageItemのIDを収集
+            scene = self.scene()
+            if scene:
+                for item in scene.items():
+                    if hasattr(item, 'TYPE_NAME') and item.TYPE_NAME == 'image':
+                        item_id = item.d.get("id", 0)
+                        if isinstance(item_id, int) and item_id > 0:
+                            existing_ids.add(item_id)
+            
+            # 最小の空いているIDを探す
+            new_id = 1
+            while new_id in existing_ids:
+                new_id += 1
+            
+            warn(f"[ImageItem] Generated unique ID: {new_id}")
+            return new_id
+            
+        except Exception as e:
+            warn(f"[ImageItem] Error generating unique ID: {e}")
+            # フォールバック: 現在時刻ベースのID
+            import time
+            return int(time.time() * 1000) % 100000
 
     def _scale_pixmap_with_quality_CUSTOM(self, pixmap: QPixmap, target_w: int, target_h: int) -> QPixmap:
         """

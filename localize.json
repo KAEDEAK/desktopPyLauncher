@@ -7,6 +7,7 @@
     "add_interactive_terminal": "双方向ターミナル追加",
     "add_xterm_terminal": "XTerm Terminal追加",
     "command_widget": "コマンドウィジェット",
+    "add_thumbnail": "サムネイル追加",
     "add_rectangle": "矩形追加",
     "add_arrow": "矢印追加",
     "add_object": "オブジェクト追加",
