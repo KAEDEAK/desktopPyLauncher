@@ -36,13 +36,19 @@ def force_debug(msg):
 
 
 class ThumbnailWorker(QObject):
-    """サムネイル生成用のワーカークラス"""
-    thumbnail_ready = Signal(str, object)  # image_path, QImage (not QPixmap)
+    """サムネイル生成用のワーカークラス（QPixmap直接送信版）"""
+    thumbnail_ready = Signal(str, object)  # image_path, QPixmap (converted in worker thread)
     finished = Signal()
+    process_request = Signal(str, int)  # image_path, thumbnail_size - 単一ファイル処理用
     
     def __init__(self):
         super().__init__()
         self._should_stop = False
+        self.pending_requests = []  # 処理待ちリクエスト
+        self.is_processing = False  # 処理中フラグ
+        
+        # 内部シグナル接続
+        self.process_request.connect(self.add_single_request)
         
     def generate_thumbnails(self, image_files, thumbnail_size):
         """サムネイルを順次生成（QImageを使用してスレッドセーフに）"""
@@ -72,17 +78,21 @@ class ThumbnailWorker(QObject):
                         Qt.TransformationMode.SmoothTransformation
                     )
                     
-                    # メインスレッドにQImageを送信
+                    # ワーカースレッド内でQPixmapに変換してメインスレッドの負荷を軽減
+                    from PySide6.QtGui import QPixmap
+                    pixmap = QPixmap.fromImage(scaled_image)
+                    
+                    # メインスレッドにQPixmapを送信
                     if not self._should_stop:
-                        self.thumbnail_ready.emit(image_path, scaled_image)
+                        self.thumbnail_ready.emit(image_path, pixmap)
                         
                         # 10枚ごとに進捗ログ（ログ量を削減）
                         if (i + 1) % 10 == 0:
                             force_debug(f"ThumbnailWorker: Generated {i+1}/{len(image_files)} thumbnails")
                         
-                        # CPU使用率を下げるため少し待機
+                        # Windows環境での応答なし回避：大幅な待機時間で負荷軽減
                         import time
-                        time.sleep(0.02)  # 20ms待機に短縮
+                        time.sleep(0.5)  # 500ms待機でWindows環境での応答なしを完全回避
                 else:
                     # エラー画像の場合もシグナルを送信（Noneで）
                     if not self._should_stop:
@@ -101,6 +111,76 @@ class ThumbnailWorker(QObject):
         """ワーカーの停止要求"""
         force_debug("ThumbnailWorker: Stop requested")
         self._should_stop = True
+    
+    def add_single_request(self, image_path, thumbnail_size):
+        """単一ファイルのサムネイル生成リクエストを追加"""
+        self.pending_requests.append((image_path, thumbnail_size))
+        force_debug(f"Added thumbnail request: {os.path.basename(image_path)} (queue size: {len(self.pending_requests)})")
+        
+        # 処理中でなければ開始
+        if not self.is_processing:
+            self.process_pending_requests()
+    
+    def process_pending_requests(self):
+        """待機中のリクエストを順次処理"""
+        if self.is_processing or not self.pending_requests or self._should_stop:
+            return
+        
+        self.is_processing = True
+        force_debug(f"Starting to process {len(self.pending_requests)} pending thumbnail requests")
+        
+        # 全ての待機中リクエストを処理
+        while self.pending_requests and not self._should_stop:
+            image_path, thumbnail_size = self.pending_requests.pop(0)
+            self._generate_single_thumbnail(image_path, thumbnail_size)
+        
+        self.is_processing = False
+        force_debug("Finished processing all pending thumbnail requests")
+    
+    def _generate_single_thumbnail(self, image_path, thumbnail_size):
+        """単一ファイルのサムネイル生成"""
+        from PySide6.QtGui import QImage, QImageReader, QPixmap
+        
+        try:
+            force_debug(f"Generating thumbnail for: {os.path.basename(image_path)}")
+            
+            # QImageReaderを使用してスレッドセーフに画像を読み込み
+            reader = QImageReader(image_path)
+            reader.setAutoTransform(True)  # EXIF回転情報を自動適用
+            
+            # 元画像を読み込み
+            image = reader.read()
+            
+            if not image.isNull():
+                # QImageでリサイズ（スレッドセーフ）
+                scaled_image = image.scaled(
+                    thumbnail_size - 2, 
+                    thumbnail_size - 2, 
+                    Qt.AspectRatioMode.KeepAspectRatio, 
+                    Qt.TransformationMode.SmoothTransformation
+                )
+                
+                # ワーカースレッド内でQPixmapに変換
+                pixmap = QPixmap.fromImage(scaled_image)
+                
+                # メインスレッドにQPixmapを送信
+                if not self._should_stop:
+                    self.thumbnail_ready.emit(image_path, pixmap)
+                    force_debug(f"Thumbnail generated and sent: {os.path.basename(image_path)}")
+            else:
+                # エラー画像の場合
+                if not self._should_stop:
+                    self.thumbnail_ready.emit(image_path, None)
+                    force_debug(f"Failed to load image: {os.path.basename(image_path)}")
+                    
+        except Exception as e:
+            force_debug(f"Error generating thumbnail for {os.path.basename(image_path)}: {e}")
+            if not self._should_stop:
+                self.thumbnail_ready.emit(image_path, None)
+        
+        # Windows環境での負荷軽減
+        import time
+        time.sleep(0.1)
 
 
 class ClickableLabel(QLabel):
@@ -351,15 +431,20 @@ class ThumbnailWidget(QWidget):
         self.worker_thread = None
         self.thumbnail_labels = {}  # image_path -> ClickableLabel のマッピング
         
-        # 更新制御用の変数
-        self.update_suspended = False
-        self.pending_thumbnails = []  # (image_path, image) のキュー
+        # 1件ずつ処理では更新制御は不要（即座表示）
         
-        # 非同期UI更新用のタイマー
-        self.ui_update_timer = QTimer()
-        self.ui_update_timer.timeout.connect(self._process_thumbnail_queue)
-        self.ui_update_timer.setSingleShot(False)
-        self.thumbnails_per_update = 5  # 1回の更新で処理するアイテム数
+        # 1件ずつ処理用のタイマー（Windows環境対応）
+        self.file_scan_timer = QTimer()
+        self.file_scan_timer.timeout.connect(self._process_next_file)
+        self.file_scan_timer.setSingleShot(True)
+        
+        # ディレクトリスキャン関連
+        self.current_directory = ""
+        self.file_iterator = None
+        self.processed_files = []
+        self.grid_position = 0  # 現在のグリッド位置
+        self.grid_cols = 1     # グリッドの列数
+        self.is_processing_files = False  # ファイル処理中フラグ
         
         # スクロールエリアを作成
         from PySide6.QtWidgets import QScrollArea, QGridLayout
@@ -418,45 +503,7 @@ class ThumbnailWidget(QWidget):
             self.worker_thread = None
             force_debug("ThumbnailWidget: Worker thread stopped")
     
-    def _process_thumbnail_queue(self):
-        """タイマーベースでキューから少しずつサムネイルを処理"""
-        if not self.pending_thumbnails:
-            # キューが空の場合はタイマーを停止
-            self.ui_update_timer.stop()
-            return
-        
-        # 指定した数だけ処理
-        processed_count = 0
-        while self.pending_thumbnails and processed_count < self.thumbnails_per_update:
-            image_path, image = self.pending_thumbnails.pop(0)
-            self._apply_thumbnail_to_ui_batch(image_path, image)
-            processed_count += 1
-        
-        # まだキューに残りがある場合は継続
-        if not self.pending_thumbnails:
-            self.ui_update_timer.stop()
-            force_debug(f"ThumbnailWidget: Async queue processing completed")
     
-    def beginUpdate(self):
-        """更新処理を一時停止（サムネイル処理をキューに保存）"""
-        self.update_suspended = True
-        self.pending_thumbnails.clear()
-        force_debug("ThumbnailWidget: Update suspended - thumbnails will be queued")
-    
-    def endUpdate(self):
-        """更新処理を再開（非同期でキューに溜まったサムネイルを処理）"""
-        if not self.update_suspended:
-            return
-            
-        self.update_suspended = False
-        force_debug(f"ThumbnailWidget: Update resumed - starting async processing of {len(self.pending_thumbnails)} queued thumbnails")
-        
-        # キューが空でない場合は非同期タイマーを開始
-        if self.pending_thumbnails:
-            # 10ms間隔で少しずつ処理（UIの応答性を確保）
-            self.ui_update_timer.start(10)
-        else:
-            force_debug("ThumbnailWidget: No thumbnails to process")
     
     def resizeEvent(self, event):
         """リサイズイベントを検出してタイマーで遅延実行"""
@@ -472,6 +519,11 @@ class ThumbnailWidget(QWidget):
     
     def _on_resize_timeout(self):
         """リサイズ完了後のサムネイル再計算"""
+        # ファイル処理中はリサイズによる再生成を無効化
+        if self.is_processing_files:
+            force_debug("Resize timeout - skipping recalculation during file processing")
+            return
+            
         force_debug("Resize timeout - recalculating thumbnails")
         self._update_thumbnails()
     
@@ -628,21 +680,8 @@ class ThumbnailWidget(QWidget):
             self.status_label.setStyleSheet("color: white; background-color: gray; font-size: 12px; border: 1px solid gray; padding: 2px;")
             return
         
-        # 画像ファイルを検索
-        image_files = self._find_image_files(self.directory_path)
-        
-        if not image_files:
-            self.status_label.setText(f"No images in:\n{os.path.basename(self.directory_path)}")
-            self.status_label.setStyleSheet("color: white; background-color: orange; font-size: 10px; border: 1px solid orange; padding: 2px;")
-            return
-        
-        # プレースホルダーサムネイルを即座に作成
-        self._create_placeholder_thumbnails(image_files)
-        self.status_label.setText(f"Loading {len(image_files)} images from:\n{os.path.basename(self.directory_path)}")
-        self.status_label.setStyleSheet("color: white; background-color: blue; font-size: 10px; border: 1px solid blue; padding: 2px;")
-        
-        # バックグラウンドでサムネイル生成を開始
-        self._start_thumbnail_generation(image_files)
+        # 1件ずつ処理を開始（UX改善）
+        self._start_progressive_scan(self.directory_path)
     
     def _clear_thumbnails(self):
         while self.grid_layout.count():
@@ -650,10 +689,20 @@ class ThumbnailWidget(QWidget):
             if child.widget():
                 child.widget().deleteLater()
         self.thumbnail_labels.clear()
+        
+        # 1件ずつ処理用の変数をリセット
+        self.processed_files = []
+        self.grid_position = 0
+        self.is_processing_files = False
     
-    def _create_placeholder_thumbnails(self, image_files):
-        """プレースホルダーサムネイルを即座に作成"""
-        # 利用可能な幅を正確に計算
+    def _start_progressive_scan(self, directory_path):
+        """1件ずつファイルを処理する段階的スキャンを開始"""
+        self.current_directory = directory_path
+        self.processed_files = []
+        self.grid_position = 0
+        self.is_processing_files = True  # ファイル処理開始
+        
+        # グリッドレイアウトの列数を計算（処理開始時に固定）
         available_width = self.width()
         if hasattr(self, 'scroll_area') and self.scroll_area.viewport():
             viewport_width = self.scroll_area.viewport().width()
@@ -661,134 +710,211 @@ class ThumbnailWidget(QWidget):
                 available_width = viewport_width
         
         available_width = max(100, available_width - 20)
-        cols = max(1, available_width // (self.thumbnail_size + self.margin))
+        self.grid_cols = max(1, available_width // (self.thumbnail_size + self.margin))
         
-        if cols == 1 and available_width > (self.thumbnail_size + self.margin) * 2:
-            cols = 2
+        if self.grid_cols == 1 and available_width > (self.thumbnail_size + self.margin) * 2:
+            self.grid_cols = 2
         
-        force_debug(f"Creating {len(image_files)} placeholder thumbnails in {cols} columns")
+        force_debug(f"Fixed grid columns for processing: {self.grid_cols} (available_width: {available_width})")
         
-        for i, image_path in enumerate(image_files):
-            row = i // cols
-            col = i % cols
+        # ディレクトリスキャンを開始
+        try:
+            self.file_iterator = self._create_file_iterator(directory_path)
+            self.status_label.setText(f"Scanning directory:\n{os.path.basename(directory_path)}")
+            self.status_label.setStyleSheet("color: white; background-color: blue; font-size: 10px; border: 1px solid blue; padding: 2px;")
             
-            # プレースホルダーラベルを作成
-            thumb_label = ClickableLabel()
-            thumb_label.setFixedSize(self.thumbnail_size, self.thumbnail_size)
-            thumb_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            thumb_label.setStyleSheet("border: 2px dashed #ccc; background-color: #f8f8f8; color: #666;")
-            thumb_label.setCursor(Qt.CursorShape.PointingHandCursor)
+            force_debug(f"Starting progressive scan of directory: {directory_path}")
             
-            # ファイル名を表示
-            filename = os.path.basename(image_path)
-            if len(filename) > 15:
-                filename = filename[:12] + "..."
-            thumb_label.setText(f"Loading...\n{filename}")
+            # 最初のファイル処理を開始
+            self._process_next_file()
             
-            # 画像パスを保存
-            thumb_label.image_path = image_path
-            
-            # ツールチップでフルパスを表示
-            thumb_label.setToolTip(image_path)
-            
-            # グリッドに配置
-            self.grid_layout.addWidget(thumb_label, row, col)
-            
-            # マッピングに追加
-            self.thumbnail_labels[image_path] = thumb_label
+        except Exception as e:
+            force_debug(f"Error starting progressive scan: {e}")
+            self.status_label.setText(f"Error scanning:\n{os.path.basename(directory_path)}")
+            self.status_label.setStyleSheet("color: white; background-color: red; font-size: 10px; border: 1px solid red; padding: 2px;")
     
-    def _start_thumbnail_generation(self, image_files):
-        """バックグラウンドでサムネイル生成を開始"""
-        # 更新処理を一時停止してキューイングモードに切り替え
-        self.beginUpdate()
+    def _create_file_iterator(self, directory_path):
+        """ディレクトリから画像ファイルを1件ずつ返すイテレータを作成"""
+        image_extensions = {'.jpg', '.jpeg', '.png', '.bmp', '.gif', '.webp', '.tiff', '.ico'}
         
-        # ワーカーとスレッドを作成
+        try:
+            files = os.listdir(directory_path)
+            for file in files:
+                if os.path.splitext(file)[1].lower() in image_extensions:
+                    full_path = os.path.join(directory_path, file)
+                    yield full_path
+        except (OSError, PermissionError):
+            pass
+    
+    def _process_next_file(self):
+        """次のファイルを1件処理（プレースホルダー作成 + サムネイル生成）"""
+        try:
+            if self.file_iterator is None:
+                return
+            
+            # 次のファイルを取得
+            try:
+                image_path = next(self.file_iterator)
+            except StopIteration:
+                # 全ファイル処理完了
+                self._on_scan_completed()
+                return
+            
+            # 処理数制限（Windows環境対応）
+            if len(self.processed_files) >= 50:
+                force_debug("Reached file limit (50) for Windows environment")
+                self._on_scan_completed()
+                return
+            
+            # プレースホルダーを即座に作成
+            self._create_single_placeholder(image_path)
+            
+            # サムネイル生成を即座に開始
+            self._start_single_thumbnail_generation(image_path)
+            
+            # 処理済みファイルに追加
+            self.processed_files.append(image_path)
+            self.grid_position += 1
+            
+            # 次のファイル処理をスケジュール（50ms間隔でスムーズに）
+            self.file_scan_timer.start(50)
+            
+            force_debug(f"Processed file {len(self.processed_files)}: {os.path.basename(image_path)}")
+            
+        except Exception as e:
+            force_debug(f"Error processing next file: {e}")
+            # エラーが発生しても次のファイル処理は継続
+            self.file_scan_timer.start(100)
+    
+    def _create_single_placeholder(self, image_path):
+        """単一ファイル用のプレースホルダーを作成"""
+        row = self.grid_position // self.grid_cols
+        col = self.grid_position % self.grid_cols
+        
+        force_debug(f"Creating placeholder for {os.path.basename(image_path)} at position ({row}, {col}) - grid_position: {self.grid_position}, grid_cols: {self.grid_cols}")
+        
+        # プレースホルダーラベルを作成
+        thumb_label = ClickableLabel()
+        thumb_label.setFixedSize(self.thumbnail_size, self.thumbnail_size)
+        thumb_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        thumb_label.setStyleSheet("border: 2px dashed #ccc; background-color: #f8f8f8; color: #666;")
+        thumb_label.setCursor(Qt.CursorShape.PointingHandCursor)
+        
+        # ファイル名を表示
+        filename = os.path.basename(image_path)
+        if len(filename) > 15:
+            filename = filename[:12] + "..."
+        thumb_label.setText(f"Loading...\n{filename}")
+        
+        # 画像パスを保存
+        thumb_label.image_path = image_path
+        
+        # ツールチップでフルパスを表示
+        thumb_label.setToolTip(image_path)
+        
+        # グリッドに配置
+        self.grid_layout.addWidget(thumb_label, row, col)
+        
+        # マッピングに追加
+        self.thumbnail_labels[image_path] = thumb_label
+        
+        # Windows環境での固まり回避
+        QApplication.processEvents()
+    
+    def _start_single_thumbnail_generation(self, image_path):
+        """単一ファイル用のサムネイル生成を開始"""
+        # 既存のワーカーがない場合は作成
+        if not hasattr(self, 'worker') or not self.worker or not hasattr(self, 'worker_thread') or not self.worker_thread or not self.worker_thread.isRunning():
+            self._create_thumbnail_worker()
+        
+        # 単一ファイルの生成をワーカーに依頼
+        force_debug(f"Requesting thumbnail generation for: {os.path.basename(image_path)}")
+        
+        # ワーカーに単一ファイルの処理を依頼
+        QTimer.singleShot(10, lambda: self._request_single_thumbnail(image_path))
+    
+    def _request_single_thumbnail(self, image_path):
+        """ワーカーに単一サムネイル生成を依頼"""
+        if self.worker and self.worker_thread and self.worker_thread.isRunning():
+            try:
+                # シグナルを使用してワーカースレッド内で処理
+                self.worker.process_request.emit(image_path, self.thumbnail_size)
+                force_debug(f"Sent single thumbnail request to worker: {os.path.basename(image_path)}")
+            except Exception as e:
+                force_debug(f"Error sending single thumbnail request: {e}")
+        else:
+            force_debug("Worker not available for thumbnail generation")
+    
+    def _create_thumbnail_worker(self):
+        """サムネイル生成ワーカーを作成（1件ずつ処理用）"""
+        # 既存のワーカーがあれば停止
+        self._stop_worker_thread()
+        
         self.worker = ThumbnailWorker()
         self.worker_thread = QThread()
+        
+        # Windows対応：スレッド優先度をLowに設定
+        self.worker_thread.setPriority(QThread.Priority.LowPriority)
         
         # ワーカーをスレッドに移動
         self.worker.moveToThread(self.worker_thread)
         
-        # シグナル接続（Qt.QueuedConnectionで非同期処理）
+        # シグナル接続（1件ずつ処理用に統一）
         self.worker.thumbnail_ready.connect(self._on_thumbnail_ready, Qt.ConnectionType.QueuedConnection)
-        self.worker.finished.connect(self._on_generation_finished, Qt.ConnectionType.QueuedConnection)
-        self.worker_thread.started.connect(
-            lambda: self.worker.generate_thumbnails(image_files, self.thumbnail_size)
-        )
         
         # スレッド開始
         self.worker_thread.start()
-        force_debug(f"Started thumbnail generation thread for {len(image_files)} images")
+        force_debug("Created thumbnail worker for single-file progressive processing")
     
-    def _on_thumbnail_ready(self, image_path, image):
-        """ワーカーからサムネイルが完成した時の処理（完全非同期対応）"""
-        # 常にキューに追加（即座に処理はしない）
-        self.pending_thumbnails.append((image_path, image))
-        
-        # キューサイズログも間引き（10の倍数のみ）
-        if len(self.pending_thumbnails) % 10 == 0:
-            force_debug(f"Queued thumbnails: {len(self.pending_thumbnails)} items")
-        
-        # update_suspendedでない場合は非同期タイマーを開始
-        if not self.update_suspended and not self.ui_update_timer.isActive():
-            self.ui_update_timer.start(10)
-    
-    def _apply_thumbnail_to_ui(self, image_path, image):
-        """サムネイルをUIに適用する実際の処理"""
-        if image_path not in self.thumbnail_labels:
-            return
-            
-        thumb_label = self.thumbnail_labels[image_path]
-        
-        if image is not None:
-            # QImageをQPixmapに変換（メインスレッドで安全に実行）
-            from PySide6.QtGui import QPixmap
-            pixmap = QPixmap.fromImage(image)
-            
-            # 正常に生成されたサムネイルを設定
-            thumb_label.setPixmap(pixmap)
-            thumb_label.setText("")  # テキストをクリア
-            thumb_label.setStyleSheet("border: 1px solid #ccc; background-color: #f0f0f0;")
-            force_debug(f"Updated thumbnail: {os.path.basename(image_path)}")
-        else:
-            # エラーの場合
-            thumb_label.setText("Error")
-            thumb_label.setStyleSheet("border: 1px solid #f00; background-color: #ffe0e0; color: red;")
-            force_debug(f"Error loading thumbnail: {os.path.basename(image_path)}")
-        
-        # UIの応答性を確保するためイベントループを処理
-        # QApplication.processEvents()  # 時間がかかるためコメントアウト
-    
-    def _apply_thumbnail_to_ui_batch(self, image_path, image):
-        """バッチ処理用の軽量サムネイル適用（processEventsなし）"""
-        if image_path not in self.thumbnail_labels:
-            return
-            
-        thumb_label = self.thumbnail_labels[image_path]
-        
-        if image is not None:
-            # QImageをQPixmapに変換（メインスレッドで安全に実行）
-            from PySide6.QtGui import QPixmap
-            pixmap = QPixmap.fromImage(image)
-            
-            # 正常に生成されたサムネイルを設定
-            thumb_label.setPixmap(pixmap)
-            thumb_label.setText("")  # テキストをクリア
-            thumb_label.setStyleSheet("border: 1px solid #ccc; background-color: #f0f0f0;")
-        else:
-            # エラーの場合
-            thumb_label.setText("Error")
-            thumb_label.setStyleSheet("border: 1px solid #f00; background-color: #ffe0e0; color: red;")
-    
-    def _on_generation_finished(self):
-        """サムネイル生成完了時の処理"""
-        # 更新処理を再開してキューに溜まったサムネイルを一括処理
-        self.endUpdate()
-        
-        image_count = len(self.thumbnail_labels)
-        self.status_label.setText(f"{image_count} images in:\n{os.path.basename(self.directory_path)}")
+    def _on_scan_completed(self):
+        """ディレクトリスキャン完了時の処理"""
+        total_files = len(self.processed_files)
+        self.status_label.setText(f"Found {total_files} images in:\n{os.path.basename(self.current_directory)}")
         self.status_label.setStyleSheet("color: white; background-color: green; font-size: 10px; border: 1px solid green; padding: 2px;")
-        force_debug("Thumbnail generation completed")
+        
+        force_debug(f"Progressive scan completed: {total_files} files processed")
+        
+        # ファイルイテレータをクリア
+        self.file_iterator = None
+        self.is_processing_files = False  # ファイル処理完了
+    
+    
+    
+    
+    
+    def _on_thumbnail_ready(self, image_path, pixmap):
+        """ワーカーからサムネイルが完成した時の処理（1件ずつ即座表示版）"""
+        force_debug(f"Received thumbnail for: {os.path.basename(image_path)}")
+        
+        # 1件ずつ処理システムでは即座にUIに反映
+        self._apply_thumbnail_to_ui_immediate(image_path, pixmap)
+    
+    def _apply_thumbnail_to_ui_immediate(self, image_path, pixmap):
+        """サムネイルをUIに即座に適用（1件ずつ処理用）"""
+        if image_path not in self.thumbnail_labels:
+            force_debug(f"Warning: Label not found for {os.path.basename(image_path)}")
+            return
+            
+        thumb_label = self.thumbnail_labels[image_path]
+        
+        if pixmap is not None and not pixmap.isNull():
+            # 正常に生成されたサムネイルを設定
+            thumb_label.setPixmap(pixmap)
+            thumb_label.setText("")  # テキストをクリア
+            thumb_label.setStyleSheet("border: 1px solid #ccc; background-color: #f0f0f0;")
+            
+            force_debug(f"Successfully applied thumbnail: {os.path.basename(image_path)}")
+        else:
+            # エラーの場合
+            thumb_label.setText("Error")
+            thumb_label.setStyleSheet("border: 1px solid #f00; background-color: #ffe0e0; color: red;")
+            force_debug(f"Error applying thumbnail: {os.path.basename(image_path)}")
+        
+        # 即座にUIを更新
+        thumb_label.update()
+        QApplication.processEvents()
+    
+    
     
     def _find_image_files(self, directory: str):
         image_extensions = {'.jpg', '.jpeg', '.png', '.bmp', '.gif', '.webp', '.tiff', '.ico'}
@@ -801,7 +927,13 @@ class ThumbnailWidget(QWidget):
         except (OSError, PermissionError):
             pass
         
-        return sorted(image_files)  # 制限なし
+        # Windows環境での固まり回避のため、初回読み込み時は50枚に制限
+        sorted_files = sorted(image_files)
+        if len(sorted_files) > 50:
+            force_debug(f"Windows environment: Limiting thumbnails to 50 out of {len(sorted_files)} images")
+            return sorted_files[:50]
+        
+        return sorted_files
     
     def _on_thumbnail_clicked(self, image_path: str):
         """サムネイルクリック時の処理"""
