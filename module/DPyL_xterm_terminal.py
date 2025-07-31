@@ -995,6 +995,68 @@ class XtermTerminalItem(CanvasItem):
                 print(f"Key event handling failed: {e}")
             super().keyPressEvent(event)
 
+    def delete_self(self):
+        """XTermターミナル削除時のクリーンアップ処理"""
+        try:
+            # バックエンドのシェルプロセスを停止
+            if hasattr(self, '_terminal_widget') and self._terminal_widget:
+                if hasattr(self._terminal_widget, 'backend') and self._terminal_widget.backend:
+                    # シェルプロセスが実行中の場合は停止
+                    if self._terminal_widget.backend.is_running:
+                        self._terminal_widget.backend.stop_shell()
+                    
+                    # バックエンドの各種シグナル切断
+                    try:
+                        if hasattr(self._terminal_widget.backend, 'output_ready'):
+                            self._terminal_widget.backend.output_ready.disconnect()
+                    except Exception:
+                        pass
+                    
+                    # winptyプロセスとQProcessの強制終了
+                    if hasattr(self._terminal_widget.backend, 'pty_process') and self._terminal_widget.backend.pty_process:
+                        try:
+                            self._terminal_widget.backend.pty_process.terminate()
+                        except Exception:
+                            pass
+                        self._terminal_widget.backend.pty_process = None
+                    
+                    if hasattr(self._terminal_widget.backend, 'process') and self._terminal_widget.backend.process:
+                        try:
+                            self._terminal_widget.backend.process.kill()
+                            self._terminal_widget.backend.process.waitForFinished(3000)
+                        except Exception:
+                            pass
+                        self._terminal_widget.backend.process = None
+                    
+                    self._terminal_widget.backend = None
+                
+                # WebEngineページの削除
+                if hasattr(self._terminal_widget, 'page'):
+                    try:
+                        page = self._terminal_widget.page()
+                        if page:
+                            # WebChannelのクリーンアップ
+                            if hasattr(page, 'setWebChannel'):
+                                page.setWebChannel(None)
+                            # ページを削除
+                            page.deleteLater()
+                    except Exception:
+                        pass
+                
+                self._terminal_widget = None
+            
+            # プロキシウィジェットのクリーンアップ
+            if hasattr(self, '_proxy_widget') and self._proxy_widget:
+                if self._proxy_widget.scene():
+                    self._proxy_widget.scene().removeItem(self._proxy_widget)
+                self._proxy_widget = None
+            
+        except Exception as e:
+            warn(f"Error during XtermTerminalItem cleanup: {e}")
+        
+        # 基底クラスの削除処理を呼び出し
+        super().delete_self()
+
 
 class XtermTerminalEditDialog(QDialog):
     """XTerm ターミナル設定編集ダイアログ"""

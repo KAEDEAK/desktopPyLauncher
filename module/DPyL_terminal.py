@@ -735,6 +735,38 @@ class TerminalItem(NoteItem):
         else:
             super().keyPressEvent(event)
 
+    def delete_self(self):
+        """ターミナル削除時のクリーンアップ処理"""
+        try:
+            # プロセスを確実に終了
+            if hasattr(self, '_process') and self._process:
+                if self._process.state() != QProcess.ProcessState.NotRunning:
+                    self._process.kill()
+                    self._process.waitForFinished(3000)  # 3秒待機
+                self._process = None
+            
+            # ターミナルウィジェットのクリーンアップ
+            if hasattr(self, '_terminal_widget') and self._terminal_widget:
+                # QProcess系のシグナル切断
+                try:
+                    if hasattr(self._terminal_widget, 'command_executed'):
+                        self._terminal_widget.command_executed.disconnect()
+                except Exception:
+                    pass
+                self._terminal_widget = None
+            
+            # プロキシウィジェットのクリーンアップ
+            if hasattr(self, '_proxy_widget') and self._proxy_widget:
+                if self._proxy_widget.scene():
+                    self._proxy_widget.scene().removeItem(self._proxy_widget)
+                self._proxy_widget = None
+            
+        except Exception as e:
+            warn(f"Error during TerminalItem cleanup: {e}")
+        
+        # 基底クラスの削除処理を呼び出し
+        super().delete_self()
+
 
 class TerminalEditDialog(QDialog):
     """ターミナル設定編集ダイアログ"""

@@ -889,6 +889,45 @@ class InteractiveTerminalItem(NoteItem):
             print(f"Key event handling failed: {e}")
             super().keyPressEvent(event)
 
+    def delete_self(self):
+        """インタラクティブターミナル削除時のクリーンアップ処理"""
+        try:
+            # ターミナルウィジェット内のプロセスを停止
+            if hasattr(self, '_terminal_widget') and self._terminal_widget:
+                # プロセスが実行中の場合は停止
+                if hasattr(self._terminal_widget, 'is_process_running') and self._terminal_widget.is_process_running:
+                    self._terminal_widget.stop_process()
+                
+                # 各種シグナルの切断
+                try:
+                    if hasattr(self._terminal_widget, 'output_ready'):
+                        self._terminal_widget.output_ready.disconnect()
+                except Exception:
+                    pass
+                
+                # プロセス関連リソースのクリーンアップ
+                if hasattr(self._terminal_widget, 'process') and self._terminal_widget.process:
+                    try:
+                        self._terminal_widget.process.kill()
+                        self._terminal_widget.process.waitForFinished(3000)
+                    except Exception:
+                        pass
+                    self._terminal_widget.process = None
+                
+                self._terminal_widget = None
+            
+            # プロキシウィジェットのクリーンアップ
+            if hasattr(self, '_proxy_widget') and self._proxy_widget:
+                if self._proxy_widget.scene():
+                    self._proxy_widget.scene().removeItem(self._proxy_widget)
+                self._proxy_widget = None
+            
+        except Exception as e:
+            warn(f"Error during InteractiveTerminalItem cleanup: {e}")
+        
+        # 基底クラスの削除処理を呼び出し
+        super().delete_self()
+
 
 class InteractiveTerminalEditDialog(QDialog):
     """双方向通信ターミナル設定編集ダイアログ"""

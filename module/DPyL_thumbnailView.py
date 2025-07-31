@@ -472,10 +472,18 @@ class ThumbnailWidget(QWidget):
         main_layout.addWidget(self.scroll_area)
         
         # ステータスラベル
-        self.status_label = QLabel("ThumbnailView")
+        self.status_label = QLabel("ThumbnailView ∶∶ ドラッグ移動可能エリア")
         self.status_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.status_label.setStyleSheet("color: white; background-color: gray; font-size: 12px; border: 1px solid gray; padding: 2px;")
+        self.status_label.setStyleSheet("""
+            color: white; 
+            background-color: #404040; 
+            font-size: 10px; 
+            border: 1px solid #666; 
+            padding: 2px;
+            border-radius: 3px;
+        """)
         self.status_label.setMaximumHeight(30)
+        self.status_label.setToolTip("この帯部分をドラッグしてアイテムを移動できます")
         main_layout.addWidget(self.status_label)
     
     def __del__(self):
@@ -1181,6 +1189,9 @@ class ThumbnailViewItem(CanvasItem):
             self.mouse_press_pos = None
             self.is_dragging = False
             
+            # ホバーイベントを有効化
+            self.setAcceptHoverEvents(True)
+            
             # デフォルト値を設定（既存の値がない場合のみ）
             if "directory_path" not in self.d:
                 self.d["directory_path"] = ""
@@ -1334,10 +1345,111 @@ class ThumbnailViewItem(CanvasItem):
         
         return None
     
+    def _is_status_label_area(self, pos):
+        """ステータスラベル領域かどうかを判定（ドラッグ移動可能領域）"""
+        try:
+            # ThumbnailViewItemの高さを取得
+            item_height = self.d.get("height", 200)
+            
+            # ステータスラベルは下端の30pxの高さ
+            status_label_top = item_height - 30
+            
+            if pos.y() >= status_label_top:
+                force_debug(f"Status label area detected: pos.y()={pos.y()}, threshold={status_label_top}")
+                return True
+            
+            return False
+        except Exception as e:
+            force_debug(f"Error checking status label area: {e}")
+            return False
+    
+    def _is_proxy_margin_area(self, local_pos):
+        """プロキシウィジェット内の外枠部分かどうかを判定（ドラッグ移動可能領域）"""
+        try:
+            # スクロールエリアの位置とサイズを取得
+            scroll_area = self.thumbnail_widget.scroll_area
+            if not scroll_area:
+                return False
+            
+            scroll_rect = scroll_area.geometry()
+            margin = 5  # 外枠として判定するマージン幅
+            
+            # スクロールエリアの外側（プロキシウィジェット内のマージン部分）
+            if (local_pos.x() < scroll_rect.x() + margin or 
+                local_pos.x() > scroll_rect.right() - margin or
+                local_pos.y() < scroll_rect.y() + margin or
+                local_pos.y() > scroll_rect.bottom() - margin):
+                
+                force_debug(f"Proxy margin area detected: pos=({local_pos.x()}, {local_pos.y()}), scroll_rect={scroll_rect}")
+                return True
+            
+            return False
+        except Exception as e:
+            force_debug(f"Error checking proxy margin area: {e}")
+            return False
+    
+    def hoverMoveEvent(self, event):
+        """マウスホバー時のカーソル変更とビジュアルフィードバック"""
+        try:
+            # ドラッグ可能エリアの判定
+            is_status_area = self._is_status_label_area(event.pos())
+            is_margin_area = False
+            
+            if not is_status_area:
+                local_pos = self.proxy.mapFromScene(event.scenePos())
+                is_margin_area = self._is_proxy_margin_area(local_pos)
+            
+            # ドラッグ可能エリアではカーソルを変更
+            if is_status_area or is_margin_area:
+                self.setCursor(Qt.CursorShape.SizeAllCursor)
+                if is_status_area:
+                    # ステータスラベルのスタイルを強調
+                    self.thumbnail_widget.status_label.setStyleSheet("""
+                        color: white; 
+                        background-color: #555555; 
+                        font-size: 10px; 
+                        border: 1px solid #888; 
+                        padding: 2px;
+                        border-radius: 3px;
+                    """)
+            else:
+                self.setCursor(Qt.CursorShape.ArrowCursor)
+                # ステータスラベルのスタイルを通常に戻す
+                self.thumbnail_widget.status_label.setStyleSheet("""
+                    color: white; 
+                    background-color: #404040; 
+                    font-size: 10px; 
+                    border: 1px solid #666; 
+                    padding: 2px;
+                    border-radius: 3px;
+                """)
+            
+            super().hoverMoveEvent(event)
+            
+        except Exception as e:
+            force_debug(f"Error in hoverMoveEvent: {e}")
+    
+    def hoverLeaveEvent(self, event):
+        """ホバー終了時の処理"""
+        try:
+            # カーソルとスタイルを通常に戻す
+            self.setCursor(Qt.CursorShape.ArrowCursor)
+            self.thumbnail_widget.status_label.setStyleSheet("""
+                color: white; 
+                background-color: #404040; 
+                font-size: 10px; 
+                border: 1px solid #666; 
+                padding: 2px;
+                border-radius: 3px;
+            """)
+            super().hoverLeaveEvent(event)
+        except Exception as e:
+            force_debug(f"Error in hoverLeaveEvent: {e}")
+    
     def mousePressEvent(self, ev):
         """
         ThumbnailViewItem内でのマウスクリック処理
-        実行モードでのみサムネイルクリック機能を有効化
+        スクロール機能とドラッグ移動の両立
         """
         force_debug(f"ThumbnailViewItem mousePressEvent: button={ev.button()}, pos={ev.pos()}")
         force_debug(f"Current run_mode: {getattr(self, 'run_mode', 'undefined')}")
@@ -1346,11 +1458,24 @@ class ThumbnailViewItem(CanvasItem):
         self.mouse_press_pos = ev.pos()
         self.is_dragging = False
         
+        # ステータスラベル領域でのクリックをチェック（下端の帯部分）
+        if self._is_status_label_area(ev.pos()):
+            force_debug("Click in status label area - allowing item drag")
+            super().mousePressEvent(ev)
+            return
+        
         # プロキシウィジェット内の位置を計算
         local_pos = self.proxy.mapFromScene(ev.scenePos())
         
-        # サムネイル領域内かチェック
+        # プロキシウィジェット領域内かチェック
         if self.proxy.contains(local_pos):
+            # スクロールエリア外枠部分でのクリックをチェック
+            if self._is_proxy_margin_area(local_pos):
+                force_debug("Click in proxy margin area - allowing item drag")
+                super().mousePressEvent(ev)
+                return
+            
+            # サムネイルコンテンツ領域内での処理
             # ドラッグスクロール用のイベントをチェック
             if ev.button() == Qt.MouseButton.MiddleButton or \
                (ev.button() == Qt.MouseButton.LeftButton and ev.modifiers() & Qt.KeyboardModifier.ControlModifier):
@@ -1372,7 +1497,7 @@ class ThumbnailViewItem(CanvasItem):
                 ev.accept()
                 return
             
-            # 常にThumbnailWidgetにイベントを転送してドラッグスクロール処理を有効にする
+            # 通常のサムネイル操作はThumbnailWidgetに転送
             widget_pos = self.thumbnail_widget.mapFromParent(local_pos.toPoint())
             from PySide6.QtCore import QPointF
             mouse_event = QMouseEvent(
@@ -1387,6 +1512,7 @@ class ThumbnailViewItem(CanvasItem):
             ev.accept()
             return
         
+        # プロキシウィジェット外の場合は通常のCanvasItemドラッグ移動
         super().mousePressEvent(ev)
     
     def mouseMoveEvent(self, ev):
@@ -1397,6 +1523,13 @@ class ThumbnailViewItem(CanvasItem):
             if drag_distance > 3:  # 3ピクセル以上移動したらドラッグとみなす
                 self.is_dragging = True
                 force_debug("Drag detected - setting is_dragging=True")
+                
+                # ステータスラベル領域またはプロキシマージン領域でのドラッグの場合
+                if (self._is_status_label_area(self.mouse_press_pos) or 
+                    self._is_proxy_margin_area(self.proxy.mapFromScene(ev.scenePos()))):
+                    force_debug("Item drag detected in allowed area")
+                    super().mouseMoveEvent(ev)
+                    return
         
         if hasattr(self, 'thumbnail_widget') and self.thumbnail_widget.drag_scrolling:
             # ドラッグスクロール中の場合はThumbnailWidgetに転送
@@ -1421,11 +1554,25 @@ class ThumbnailViewItem(CanvasItem):
     
     def mouseReleaseEvent(self, ev):
         """ドラッグスクロール終了処理とクリック判定"""
-        # ドラッグ中の場合はクリック処理をスキップ
+        force_debug(f"ThumbnailViewItem mouseReleaseEvent: pos={ev.pos()}, is_dragging={self.is_dragging}")
+        
+        # ドラッグ中の場合の処理
         if self.is_dragging:
-            force_debug("Mouse release after drag - skipping click processing")
+            force_debug("Mouse release after drag")
+            
+            # ステータスラベル領域またはプロキシマージン領域でのドラッグ終了の場合
+            if (self._is_status_label_area(ev.pos()) or 
+                self._is_proxy_margin_area(self.proxy.mapFromScene(ev.scenePos()))):
+                force_debug("Item drag release in allowed area")
+                super().mouseReleaseEvent(ev)
+                self.mouse_press_pos = None
+                self.is_dragging = False
+                return
+            
+            # その他のエリアでのドラッグ終了はクリック処理をスキップ
             self.mouse_press_pos = None
             self.is_dragging = False
+            return
             
         if hasattr(self, 'thumbnail_widget') and self.thumbnail_widget.drag_scrolling:
             # ドラッグスクロール中の場合はThumbnailWidgetに転送
