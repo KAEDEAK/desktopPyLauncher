@@ -63,6 +63,9 @@
         let currentInput = '';
         let isWebChannelReady = false;
         
+        // Claude CLI問題調査のためデバッグモードを自動有効化
+        window.claudeDebugMode = true;
+        
         // Initialize terminal
         function initTerminal() {
             console.log("Initializing xterm.js terminal...");
@@ -74,15 +77,25 @@
             }
             term = new Terminal({
                 cursorBlink: true,
-                convertEol: true,
+                convertEol: false,  // Claude CLIのカーソル制御を阻害しないように無効化
                 fontFamily: 'Consolas, Monaco, "Courier New", monospace',
                 fontSize: 14,
                 lineHeight: 1.2,
-                cols: 80,
-                rows: 24,
+                cols: 120,  // Claude CLI用に広めに設定
+                rows: 50,   // Claude CLIが使用する44行目以上をカバー
                 scrollback: 1000,
                 allowTransparency: true,
                 macOptionIsMeta: true,
+                disableStdin: false,  // 入力を有効化
+                cursorStyle: 'block', // カーソルスタイルを明示的に設定
+                // Claude CLI対応のため、より厳密なエスケープシーケンス処理
+                fastScrollModifier: 'alt',
+                fastScrollSensitivity: 5,
+                scrollSensitivity: 1,
+                altClickMovesCursor: false,
+                rightClickSelectsWord: false,
+                // 重要：エスケープシーケンス処理の設定
+                windowsMode: true,  // Windows特有の処理を有効化
                 theme: {
                     background: '#000000',
                     foreground: '#ffffff',
@@ -195,10 +208,27 @@
                 
                 // Connect to backend signals
                 backend.output_ready.connect(function(data) {
-                    console.log("Received output from backend:", data);
+                    if (window.claudeDebugMode) {
+                        console.log("Raw data from backend:", JSON.stringify(data));
+                        const sequences = analyzeEscapeSequences(data);
+                        if (sequences.length > 0) {
+                            console.log("Escape sequences found:", sequences);
+                        }
+                    }
                     if (term) {
-                        // Let xterm.js handle all ANSI sequences automatically
-                        term.write(data);
+                        // Claude CLI特有の問題に対処
+                        // カーソル位置制御の直前に改行が来ている場合の処理
+                        let processedData = data;
+                        
+                        // パターン: \r\n の直後にカーソル位置制御が来る場合
+                        // これがスクロールを引き起こしている可能性
+                        if (processedData.includes('\r\n\x1b[')) {
+                            console.log("FOUND PROBLEMATIC PATTERN: \\r\\n followed by escape sequence");
+                            // \r\n\x1b[29;1H\x1b[K のような場合、\r\nを削除してみる
+                            processedData = processedData.replace(/\r\n(\x1b\[[0-9]+;[0-9]+H)/g, '$1');
+                        }
+                        
+                        term.write(processedData);
                     }
                 });
                 
@@ -236,7 +266,50 @@
             }
         };
         
-        console.log("XTerm Terminal script loaded");
+        // Claude CLI問題対策用のデバッグ機能
+        window.debugClaudeIssues = function(enable) {
+            if (enable) {
+                console.log("Claude CLI debug mode enabled - showing escape sequences");
+                window.claudeDebugMode = true;
+            } else {
+                console.log("Claude CLI debug mode disabled");
+                window.claudeDebugMode = false;
+            }
+        };
+        
+        // エスケープシーケンス解析用ヘルパー
+        window.analyzeEscapeSequences = function(data) {
+            const sequences = [];
+            const escapePattern = /\x1b\[[0-9;]*[a-zA-Z]/g;
+            let match;
+            while ((match = escapePattern.exec(data)) !== null) {
+                sequences.push({
+                    sequence: match[0],
+                    position: match.index,
+                    description: getEscapeDescription(match[0])
+                });
+            }
+            return sequences;
+        };
+        
+        function getEscapeDescription(seq) {
+            if (seq.match(/\x1b\[[0-9]+;[0-9]+H/)) return "Cursor Position";
+            if (seq.match(/\x1b\[2J/)) return "Clear Screen";
+            if (seq.match(/\x1b\[K/)) return "Clear Line";
+            if (seq.match(/\x1b\[[ABCD]/)) return "Cursor Move";
+            if (seq.match(/\x1b\[H/)) return "Cursor Home";
+            return "Other";
+        }
+        
+        window.syncTerminal = function() {
+            console.log("Synchronizing terminal for Claude CLI compatibility");
+            if (fitAddon && term) {
+                term.clear();
+                fitAddon.fit();
+            }
+        };
+        
+        console.log("XTerm Terminal script loaded with Claude CLI compatibility");
     </script>
 </body>
 </html>

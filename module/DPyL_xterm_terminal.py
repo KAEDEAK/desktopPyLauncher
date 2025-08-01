@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 # デバッグログの表示/非表示を制御
-TERMINAL_DEBUG = False
+TERMINAL_DEBUG = False  # Claude CLI問題の詳細調査
 
 # PTY support for Windows
 try:
@@ -118,9 +118,9 @@ class TerminalBackend(QObject):
         usable_width = widget_width - padding
         usable_height = widget_height - padding
         
-        # 行列数を計算（JavaScript実測値に基づく）
-        cols = max(80, int(usable_width // char_width))  # 最小80文字（標準的なターミナル幅）
-        rows = max(24, int(usable_height // char_height))  # 最小24行（標準的なターミナル高さ）
+        # 行列数を計算（Claude CLI互換性を重視）
+        cols = max(120, int(usable_width // char_width))  # Claude CLI用最小120文字
+        rows = max(50, int(usable_height // char_height))  # Claude CLI用最小50行
         
         # print(f"Terminal dimensions: {cols}x{rows} (widget: {widget_width}x{widget_height}, usable: {usable_width}x{usable_height}, char: {char_width:.1f}x{char_height:.1f})")
         return (cols, rows)
@@ -383,35 +383,14 @@ class TerminalBackend(QObject):
                             else:
                                 decoded_output = output
                             
-                            # デバッグ出力を簡潔に
-                            if len(decoded_output) > 100:
-                                # print(f"PTY output: {repr(decoded_output[:100])}... ({len(decoded_output)} chars)")
-                                pass
-                            else:
-                                # バックスペースを含む場合のみデバッグ出力
-                                if '\x08' in decoded_output or '\x7f' in decoded_output or '\x1b[D' in decoded_output or '\x1b[P' in decoded_output or '\x1b[K' in decoded_output:
-                                    if TERMINAL_DEBUG:
-                                        print(f"PTY output with backspace/control: {repr(decoded_output)}")
-                                # PSReadLine関連のエスケープシーケンスを検出
-                                if self.shell_type == "pwsh" and ('\x1b[' in decoded_output or '\x1b]' in decoded_output):
-                                    if TERMINAL_DEBUG:
-                                        print(f"PowerShell escape sequence: {repr(decoded_output)}")
-                                # バックスペース後の出力も確認
-                                if ' \x08' in decoded_output or '\x08 ' in decoded_output or '\x08 \x08' in decoded_output:
-                                    if TERMINAL_DEBUG:
-                                        print(f"PTY backspace with space pattern: {repr(decoded_output)}")
-                                # スペースのみの出力も確認（バックスペース関連の可能性）
-                                if decoded_output in [' ', '  ', '   ']:
-                                    if TERMINAL_DEBUG:
-                                        print(f"PTY space-only output: {repr(decoded_output)}")
-                                # 短い出力の場合は常に表示（デバッグ用）
-                                if len(decoded_output) <= 10:
-                                    if TERMINAL_DEBUG:
-                                        print(f"PTY short output: {repr(decoded_output)}")
-                                # 空の出力も記録
-                                if len(decoded_output) == 0:
-                                    if TERMINAL_DEBUG:
-                                        print("PTY sent empty output")
+                            # デバッグ出力
+                            if TERMINAL_DEBUG:
+                                if len(decoded_output) > 100:
+                                    print(f"PTY output: {repr(decoded_output[:100])}... ({len(decoded_output)} chars)")
+                                else:
+                                    print(f"PTY output: {repr(decoded_output)}")
+                                # エスケープシーケンス解析
+                                self._log_escape_sequences(decoded_output)
                             
                             # シグナルで GUI スレッドに送信
                             self.output_ready.emit(decoded_output)
@@ -506,6 +485,8 @@ class TerminalBackend(QObject):
                     text = bytes(data).decode('utf-8', errors='replace')
                     if TERMINAL_DEBUG:
                         print(f"_read_stdout: received {len(text)} chars: {repr(text)}")
+                        # エスケープシーケンスを詳細ログ出力
+                        self._log_escape_sequences(text)
                     # JavaScript で処理しやすいようにエスケープ (二重エスケープを避ける)
                     self.output_ready.emit(text)
                 except Exception as e:
@@ -536,6 +517,49 @@ class TerminalBackend(QObject):
         """プロセスエラー時の処理"""
         self.is_running = False
         self.output_ready.emit(f"\\r\\n\\x1b[31mProcess error: {error}\\x1b[0m\\r\\n")
+    
+    def _log_escape_sequences(self, text):
+        """エスケープシーケンスを解析してログ出力"""
+        import re
+        
+        # 主要なエスケープシーケンスパターン
+        patterns = {
+            r'\x1b\[([0-9]+);([0-9]+)H': 'Cursor Position (row {}, col {})',
+            r'\x1b\[([0-9]+)A': 'Cursor Up {}',
+            r'\x1b\[([0-9]+)B': 'Cursor Down {}', 
+            r'\x1b\[([0-9]+)C': 'Cursor Right {}',
+            r'\x1b\[([0-9]+)D': 'Cursor Left {}',
+            r'\x1b\[H': 'Cursor Home',
+            r'\x1b\[2J': 'Clear Screen',
+            r'\x1b\[K': 'Clear Line (from cursor)',
+            r'\x1b\[0K': 'Clear Line (from cursor to end)',
+            r'\x1b\[1K': 'Clear Line (from start to cursor)',
+            r'\x1b\[2K': 'Clear Line (entire line)',
+            r'\x1b\[([0-9]+)J': 'Clear Display {}',
+            r'\x1b\[\?25l': 'Hide Cursor',
+            r'\x1b\[\?25h': 'Show Cursor',
+        }
+        
+        sequences_found = []
+        for pattern, description in patterns.items():
+            matches = re.finditer(pattern, text)
+            for match in matches:
+                try:
+                    if '{}' in description:
+                        if len(match.groups()) == 2:
+                            desc = description.format(match.group(1), match.group(2))
+                        else:
+                            desc = description.format(match.group(1))
+                    else:
+                        desc = description
+                    sequences_found.append(f"  {match.group(0)} -> {desc}")
+                except:
+                    sequences_found.append(f"  {match.group(0)} -> {description}")
+        
+        if sequences_found:
+            print("ESCAPE SEQUENCES DETECTED:")
+            for seq in sequences_found:
+                print(seq)
 
 
 class XtermTerminalWidget(QWebEngineView if HAS_WEBENGINE else QObject):
@@ -717,9 +741,9 @@ class XtermTerminalItem(CanvasItem):
         if d is None:
             d = {}
         
-        # ターミナル固有のデフォルト値
-        d.setdefault("width", 1000)  # より大きな初期サイズ
-        d.setdefault("height", 700)
+        # ターミナル固有のデフォルト値（Claude CLI対応）
+        d.setdefault("width", 1200)  # Claude CLI用により大きなサイズ
+        d.setdefault("height", 900)  # 50行をカバーするサイズ
         d.setdefault("workdir", os.getcwd())
         d.setdefault("terminal_type", "cmd")
         d.setdefault("startup_command", "")
@@ -819,9 +843,9 @@ class XtermTerminalItem(CanvasItem):
         
     def snap_resize_size(self, w: int, h: int):
         """リサイズ時のサイズ調整"""
-        # 最小サイズを強制
-        min_width = 400
-        min_height = 300
+        # Claude CLI用最小サイズを強制
+        min_width = 1000   # 120文字をカバー
+        min_height = 850   # 50行をカバー
         
         w = max(min_width, w)
         h = max(min_height, h)
@@ -853,6 +877,10 @@ class XtermTerminalItem(CanvasItem):
 
     def _start_initial_shell(self):
         """初期シェルを起動"""
+        print("=" * 60)
+        print("XTERM TERMINAL STARTING WITH CLAUDE CLI DEBUG")
+        print("All escape sequences will be logged to this console")
+        print("=" * 60)
         if TERMINAL_DEBUG:
             print("_start_initial_shell called")
             print(f"Current terminal settings: {self.d}")
