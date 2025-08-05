@@ -67,6 +67,30 @@ NOTE_MODE_SCROLL= 1
 NOTE_MODE_EDIT  = 2
 
 # =====================================================================
+#   Note用のヘルパー関数
+# =====================================================================
+
+class CustomQGraphicsTextItem(QGraphicsTextItem):
+    """カーソル表示を改善したカスタムQGraphicsTextItem"""
+    
+    def __init__(self, parent=None):
+        super().__init__(parent)
+    
+    def focusInEvent(self, event):
+        """フォーカス取得時にカーソルを確実に表示"""
+        # 重要: 親クラスのfocusInEventを最後に呼び出す
+        super().focusInEvent(event)
+        
+        # カーソルを確実に表示するための追加処理
+        if self.textInteractionFlags() & Qt.TextInteractionFlag.TextEditorInteraction:
+            cursor = self.textCursor()
+            # カーソル位置を再設定してカーソル表示をトリガー
+            pos = cursor.position()
+            cursor.setPosition(pos)
+            self.setTextCursor(cursor)
+            self.update()
+
+# =====================================================================
 #   NoteItem
 # =====================================================================
 class NoteItem(CanvasItem):
@@ -98,8 +122,8 @@ class NoteItem(CanvasItem):
             
             # EDITモード遷移中フラグを追加
             self._entering_edit_mode: bool = False
-            # "|" を使った仮キャレットを挿入したかどうか
-            self._temp_caret_added: bool = False
+            
+            # テキスト領域監視は既存のイベント処理を使用
             
             #
             # ★好みに応じて True にするとドラッグスクロールを完全に無効化し
@@ -143,8 +167,9 @@ class NoteItem(CanvasItem):
             self.clip_item.setPen(QPen(Qt.PenStyle.NoPen))
 
             # --- テキスト本体 ---
-            self.txt_item = QGraphicsTextItem(parent=self.clip_item)
-            self.txt_item.setPos(0, 0)
+            self.txt_item = CustomQGraphicsTextItem(parent=self.clip_item)
+            # カーソル表示用のマージンを追加（左端のカーソルがクリップされるのを防ぐ）
+            self.txt_item.setPos(2, 2)
             
             # ★重要：GraphicsItemフラグを先に設定
             self.txt_item.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsFocusable, True)
@@ -155,6 +180,10 @@ class NoteItem(CanvasItem):
             
             # ★NoteItem自体もフォーカス可能にする（これも順序重要）
             self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsFocusable, True)
+            
+            # カーソル表示設定を最適化
+            if hasattr(self.txt_item, 'setCursorWidth'):
+                self.txt_item.setCursorWidth(2)  # カーソル幅を設定
             
             # 初期状態ではテキストアイテムのマウスイベントを無効化
             self.txt_item.setAcceptedMouseButtons(Qt.MouseButton.NoButton)
@@ -232,17 +261,10 @@ class NoteItem(CanvasItem):
             & Qt.TextInteractionFlag.TextEditorInteraction
         )
 
-        # 既にEDIT中で仮キャレットが残っている場合は削除
-        insert_placeholder = False
-        if already_editing and self._temp_caret_added:
-            text = self.txt_item.toPlainText()
-            idx = text.find("|")
-            if idx >= 0:
-                cursor_cleanup = self.txt_item.textCursor()
-                cursor_cleanup.setPosition(idx)
-                cursor_cleanup.deleteChar()
-            insert_placeholder = True
-            self._temp_caret_added = False      
+        # 既に編集中の場合の処理
+        if already_editing:
+            # 既存のテキストをそのまま使用
+            pass      
         
         # ★重要：まずGraphicsItemフラグを確認・設定
         self.txt_item.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsFocusable, True)
@@ -252,12 +274,20 @@ class NoteItem(CanvasItem):
             Qt.TextInteractionFlag.TextEditorInteraction
         )
         
+        # カーソル表示の最適化
+        if hasattr(self.txt_item, 'setCursorWidth'):
+            self.txt_item.setCursorWidth(2)  # カーソル幅を設定
+        
         if not already_editing:
             # テキストを設定（初回のみ）
             self.txt_item.setPlainText(self.text)
         
-        # フォーカスを設定
+        # フォーカスを設定してカーソルを表示
         self.txt_item.setFocus(Qt.FocusReason.MouseFocusReason)
+        
+        # カーソルの点滅を有効化
+        if hasattr(self.txt_item, 'document'):
+            self.txt_item.document().setUseDesignMetrics(True)
         
         # カーソル位置を設定
         cursor = self.txt_item.textCursor()
@@ -320,29 +350,41 @@ class NoteItem(CanvasItem):
         # カーソルを設定
         self.txt_item.setTextCursor(cursor)
         
-        # 親アイテムのマウスイベントを無効化
-        self.setAcceptedMouseButtons(Qt.MouseButton.NoButton)
+        # 親アイテムも両方ともマウスイベントを受け取れるようにする
+        self.setAcceptedMouseButtons(Qt.MouseButton.AllButtons)
         
         # テキストアイテムをクリッカブルにする
         self.txt_item.setAcceptedMouseButtons(Qt.MouseButton.AllButtons)
         
-        # ★キャレット位置に | を挿入して選択
-        cursor.insertText("|")
-        # 挿入した | を選択状態にする
-        cursor.movePosition(cursor.MoveOperation.Left, cursor.MoveMode.MoveAnchor)
-        cursor.movePosition(cursor.MoveOperation.Right, cursor.MoveMode.KeepAnchor)
+        # txt_itemのフォーカス範囲を制限して、親にもイベントが伝わるようにする
+        self.txt_item.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsPanel, False)
+        self.txt_item.setFlag(QGraphicsItem.GraphicsItemFlag.ItemClipsToShape, False)
+        
+        # EDITモード時はカーソル表示のためクリップを緩和
+        self._adjust_clipping_for_cursor(True)
+        
+        # カーソルを設定（| 文字挿入なし）
         self.txt_item.setTextCursor(cursor)
         
-        if not already_editing or insert_placeholder:
-            # ★キャレット位置に | を挿入して選択
-            cursor.insertText("|")
-            cursor.movePosition(cursor.MoveOperation.Left, cursor.MoveMode.MoveAnchor)
-            cursor.movePosition(cursor.MoveOperation.Right, cursor.MoveMode.KeepAnchor)
-            self.txt_item.setTextCursor(cursor)
-            self._temp_caret_added = True    
+        # カーソルが確実に表示されるように強制更新
+        # 1. 明示的なフォーカス理由を指定してフォーカス設定
+        self.txt_item.setFocus(Qt.FocusReason.MouseFocusReason)
+        
+        # 2. シーンレベルでのフォーカス設定も確実に行う
+        if self.scene():
+            self.scene().setFocusItem(self.txt_item)
+        
+        # 3. カーソル点滅を強制的に開始
+        self.txt_item.update()    # 描画更新
+        
+        # 4. 少し遅延してカーソル点滅を確実に開始
+        QTimer.singleShot(50, self._ensure_cursor_blinking)
 
         # 選択枠を更新
         self._update_selection_frame()
+        
+        # MainWindowにEDITモード開始を通知
+        self._notify_edit_mode_start()
         
         # フラグクリア（少し遅延）
         QTimer.singleShot(100, lambda: setattr(self, '_entering_edit_mode', False))        
@@ -354,23 +396,15 @@ class NoteItem(CanvasItem):
         # テキストを取得
         text = self.txt_item.toPlainText()
         
-        # カーソル位置の | を削除
-        cursor = self.txt_item.textCursor()
-        if cursor.hasSelection() and cursor.selectedText() == "|":
-            # 選択されている | を削除
-            cursor.removeSelectedText()
-            text = self.txt_item.toPlainText()
-        elif "|" in text:
-            # 選択されていない | がある場合も削除（念のため）
-            text = text.replace("|", "")
-        self._temp_caret_added = False
-        
         # テキストを保存
         self.text = text
         self.d["text"] = self.text
         
         # テキストの編集を無効化
         self.txt_item.setTextInteractionFlags(Qt.TextInteractionFlag.NoTextInteraction)
+        
+        # クリプ設定を元に戻す
+        self._adjust_clipping_for_cursor(False)
         
         # 親アイテムのマウスイベントを復活
         self.setAcceptedMouseButtons(Qt.MouseButton.AllButtons)
@@ -391,8 +425,6 @@ class NoteItem(CanvasItem):
         """キー入力イベント処理"""
         if self._mode == NOTE_MODE_EDIT:
             # EDITモード時はテキストアイテムにキー入力を転送
-            if self._temp_caret_added:
-                self._temp_caret_added = False            
             self.txt_item.keyPressEvent(event)
         else:
             super().keyPressEvent(event)
@@ -697,16 +729,12 @@ class NoteItem(CanvasItem):
                 if text_rect.contains(local_pos):
                     # テキストエリア内のクリック
                     # 既にEDITモードなので、カーソル位置だけ更新
-                    self._temp_caret_added=True
                     self._enter_edit_mode(ev.scenePos())
                     ev.accept()
                     return
                 else:
                     # テキストエリア外のクリックは編集モード終了
-                    self._exit_edit_mode()
-                    self._mode = NOTE_MODE_WALK
-                    self._update_mode_label()
-                    self._update_selection_frame()
+                    self._exit_to_walk_mode()
                     ev.accept()
                     return
                     
@@ -738,13 +766,105 @@ class NoteItem(CanvasItem):
             super().focusOutEvent(event)
             return
         
-        if self._mode == NOTE_MODE_EDIT:
-            # 編集モードでフォーカスを失ったら編集終了
-            self._exit_edit_mode()
-            self._mode = NOTE_MODE_WALK
-            self._update_mode_label()
-            self._update_selection_frame()
+        # フォーカスを失った時は常にWALKモードに戻す
+        if self._mode != NOTE_MODE_WALK:
+            self._exit_to_walk_mode()
+            
         super().focusOutEvent(event)
+    
+    def _restore_parent_event_handling(self):
+        """親への適切なイベント伝搬を復元（WALKモード用）"""
+        # テキストアイテムのマウスイベントを無効化
+        self.txt_item.setAcceptedMouseButtons(Qt.MouseButton.NoButton)
+        
+        # 親アイテム（NoteItem）のマウスイベントを復活
+        self.setAcceptedMouseButtons(Qt.MouseButton.AllButtons)
+        
+        # テキストインタラクションを無効化
+        self.txt_item.setTextInteractionFlags(Qt.TextInteractionFlag.NoTextInteraction)
+        
+        # フォーカスをクリア
+        self.txt_item.clearFocus()
+        self.clearFocus()
+        
+        warn("[NoteItem] Restored parent event handling for WALK mode")
+    
+    def _exit_to_walk_mode(self):
+        """EDITモードからWALKモードに戻る統一処理"""
+        if self._mode == NOTE_MODE_EDIT:
+            # 編集終了処理
+            self._exit_edit_mode()
+            
+        # WALKモードに戻す（ドラッグによる画面移動・親イベント伝搬可能）
+        self._mode = NOTE_MODE_WALK
+        self._update_mode_label()
+        self._update_selection_frame()
+        
+        # 親への適切なイベント伝搬を確保
+        self._restore_parent_event_handling()
+        
+        # MainWindowにEDITモード終了を通知
+        self._notify_edit_mode_end()
+    
+    def _notify_edit_mode_start(self):
+        """MainWindowにEDITモード開始を通知"""
+        try:
+            scene = self.scene()
+            if scene and scene.views():
+                win = scene.views()[0].window()
+                if hasattr(win, 'register_edit_item'):
+                    win.register_edit_item(self)
+        except Exception as e:
+            warn(f"[NoteItem] _notify_edit_mode_start error: {e}")
+    
+    def _adjust_clipping_for_cursor(self, editing_mode):
+        """EDITモード時のカーソル表示のためクリップ設定を調整"""
+        try:
+            if editing_mode:
+                # EDITモード時：カーソル表示のためクリップを緩和
+                # clip_itemを少し大きくしてカーソル用のマージンを確保
+                rect = self.clip_item.rect()
+                expanded_rect = rect.adjusted(-1, -1, 1, 1)  # 各方向に1px拡大
+                self.clip_item.setRect(expanded_rect)
+                warn("[NoteItem] Clipping adjusted for cursor visibility")
+            else:
+                # WALKモード時：元のクリップ設定に戻す
+                w = int(self.d.get("width", 160))
+                h = int(self.d.get("height", 120))
+                self.clip_item.setRect(0, 0, w, h)
+                warn("[NoteItem] Clipping restored to normal")
+        except Exception as e:
+            warn(f"[NoteItem] _adjust_clipping_for_cursor error: {e}")
+    
+    def _ensure_cursor_blinking(self):
+        """カーソル点滅を確実に開始する"""
+        try:
+            if self._mode == NOTE_MODE_EDIT:
+                # カーソル位置を現在位置に再設定（カーソル表示をトリガー）
+                cursor = self.txt_item.textCursor()
+                pos = cursor.position()
+                cursor.setPosition(pos)
+                self.txt_item.setTextCursor(cursor)
+                
+                # フォーカスが確実に設定されていることを確認
+                if not self.txt_item.hasFocus():
+                    self.txt_item.setFocus(Qt.FocusReason.MouseFocusReason)
+                
+                self.txt_item.update()
+                warn("[NoteItem] Cursor blinking ensured")
+        except Exception as e:
+            warn(f"[NoteItem] _ensure_cursor_blinking error: {e}")
+    
+    def _notify_edit_mode_end(self):
+        """MainWindowにEDITモード終了を通知"""
+        try:
+            scene = self.scene()
+            if scene and scene.views():
+                win = scene.views()[0].window()
+                if hasattr(win, 'unregister_edit_item'):
+                    win.unregister_edit_item(self)
+        except Exception as e:
+            warn(f"[NoteItem] _notify_edit_mode_end error: {e}")
 
     def init_mouse_passthrough(self):
         """マウス透過の初期化をオーバーライド"""
@@ -764,12 +884,9 @@ class NoteItem(CanvasItem):
         
         self._scroll_ready = False
         
-        if self._mode == NOTE_MODE_EDIT:
-            # EDITモードから抜ける際は必ず_exit_edit_modeを呼ぶ
-            self._exit_edit_mode()
-        
-        self._mode = NOTE_MODE_WALK
-        self._update_mode_label()
+        # モードが変更されている場合のみ処理
+        if self._mode != NOTE_MODE_WALK:
+            self._exit_to_walk_mode()
         
         return super().hoverLeaveEvent(ev)
         

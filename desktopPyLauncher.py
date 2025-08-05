@@ -679,6 +679,10 @@ class CanvasView(QGraphicsView):
         self.spark_effect = None
         self.spark_enabled = False
         
+        # フォーカス状態に関係なくマウスイベントを処理するため
+        # self.installEventFilter(self)  # MainWindowのeventFilterに統一のため無効化
+        
+        
         self.setAcceptDrops(True)
         self.viewport().setAcceptDrops(True)
         # 拡大率に応じて補間方法を切り替える
@@ -1092,6 +1096,24 @@ class CanvasView(QGraphicsView):
         else:
             # アイテムの上なら既存挙動（選択など）を維持
             super().mouseDoubleClickEvent(event)
+    
+    # def eventFilter(self, obj, event):
+    #     """CanvasViewのイベントフィルター - MainWindowに統一のため無効化"""
+    #     # mousePressEventに統一したため、この処理は不要
+    #     return super().eventFilter(obj, event)
+    
+    def mouseMoveEvent(self, ev):
+        super().mouseMoveEvent(ev)
+
+        # ビューポートに映っているシーン領域を取得
+        rect = self.mapToScene(self.viewport().rect()).boundingRect()
+        scene = self.scene()
+        if scene:
+            scene_rect = scene.sceneRect()
+            # ビューに映る領域がシーン外ならシーンを拡張
+            if not scene_rect.contains(rect):
+                new_rect = scene_rect.united(rect)
+                scene.setSceneRect(new_rect)
 
 # ==============================================================
 #  SearchDialog - 検索ダイアログ
@@ -1373,7 +1395,11 @@ class MainWindow(QMainWindow):
         self._load()
         self._set_mode(edit=False)
         
-        #self.view.installEventFilter(self)
+        # --- EDITモード管理 ---
+        self._current_edit_item = None  # 現在EDITモードのNoteItem
+        
+        # --- アプリケーション全体のイベント監視 ---
+        self.installEventFilter(self)
         
         self.notification_manager = NotificationManager(self.scene, self.view)
         
@@ -1875,10 +1901,10 @@ class MainWindow(QMainWindow):
     # --- 3. 新規追加メソッド ---
     def _add_rect(self):
         """
-        シーンの中央付近に新規 RectItem を追加する。
+        マウスカーソル位置に新規 RectItem を追加する。
         """
-        # 画面中心位置を取得
-        sp = self.view.mapToScene(self.view.viewport().rect().center())
+        # マウスカーソル位置を取得
+        sp = self._get_cursor_scene_position()
 
         # 既存の図形IDを調べ、最大ID + 10 を新規IDとする
         existing_ids = []
@@ -1926,10 +1952,10 @@ class MainWindow(QMainWindow):
 
     def _add_thumbnail(self):
         """
-        シーンの中央付近に新規 ThumbnailViewItem を追加する。
+        マウスカーソル位置に新規 ThumbnailViewItem を追加する。
         """
-        # 画面中心位置を取得
-        sp = self.view.mapToScene(self.view.viewport().rect().center())
+        # マウスカーソル位置を取得
+        sp = self._get_cursor_scene_position()
 
         # デフォルトの辞書を構築
         d = {
@@ -1958,10 +1984,10 @@ class MainWindow(QMainWindow):
 
     def _add_arrow(self):
         """
-        シーンの中央付近に新規 ArrowItem を追加する。
+        マウスカーソル位置に新規 ArrowItem を追加する。
         """
-        # 画面中心位置を取得
-        sp = self.view.mapToScene(self.view.viewport().rect().center())
+        # マウスカーソル位置を取得
+        sp = self._get_cursor_scene_position()
 
         # 既存の図形IDを調べ、最大ID + 10 を新規IDとする
         existing_ids = []
@@ -2973,9 +2999,28 @@ class MainWindow(QMainWindow):
 
         return best_w, best_h
 
+    def _get_cursor_scene_position(self):
+        """
+        マウスカーソルのシーン座標を取得する。
+        カーソルがビューポート外にある場合はビューポート中央を返す。
+        """
+        # グローバルマウス位置を取得
+        global_pos = QCursor.pos()
+        # ビューのローカル座標に変換
+        local_pos = self.view.mapFromGlobal(global_pos)
+        
+        # ビューポート内にマウスがあるかチェック
+        viewport_rect = self.view.viewport().rect()
+        if viewport_rect.contains(local_pos):
+            # マウス位置をシーン座標に変換
+            return self.view.mapToScene(local_pos)
+        else:
+            # マウスがビューポート外の場合はビューポート中央を使用
+            return self.view.mapToScene(viewport_rect.center())
+
     # --- ノート追加 ---
     def _add_note(self):
-        sp = self.view.mapToScene(self.view.viewport().rect().center())
+        sp = self._get_cursor_scene_position()
         d = {
             "type": "note",
             "x": sp.x(),
@@ -3000,9 +3045,9 @@ class MainWindow(QMainWindow):
 
     # --- サムネイルビュー追加 ---
     def _add_thumbnail(self):
-        """シーンの中央付近に、新規 ThumbnailViewItem を追加する。"""
-        # 画面中心位置を取得
-        sp = self.view.mapToScene(self.view.viewport().rect().center())
+        """マウスカーソル位置に、新規 ThumbnailViewItem を追加する。"""
+        # マウスカーソル位置を取得
+        sp = self._get_cursor_scene_position()
 
         # デフォルトの辞書を構築
         d = {
@@ -3032,12 +3077,12 @@ class MainWindow(QMainWindow):
     # --- マーカー追加 ---
     def _add_marker(self):
         """
-        シーンの中央付近に、新規 MarkerItem を追加する。
+        マウスカーソル位置に、新規 MarkerItem を追加する。
         - 既存のマーカーIDを調べ、最大ID + 100 を新規IDとする
         - デフォルトで幅・高さ 32×32、キャプション「MARKER-<ID>」、ジャンプ先なし、開始地点 False、align="左上"
         """
-        # 画面中心位置を取得
-        sp = self.view.mapToScene(self.view.viewport().rect().center())
+        # マウスカーソル位置を取得
+        sp = self._get_cursor_scene_position()
 
         # 既存マーカーの ID をすべて収集
         existing_ids = []
@@ -3081,7 +3126,7 @@ class MainWindow(QMainWindow):
 
     # --- ターミナル追加 ---
     def _add_terminal(self):
-        """シーンの中央付近に、新規 TerminalItem を追加する"""
+        """マウスカーソル位置に、新規 TerminalItem を追加する"""
         if TerminalItem is None:
             QMessageBox.warning(
                 self, 
@@ -3090,8 +3135,8 @@ class MainWindow(QMainWindow):
             )
             return
             
-        # 画面中心位置を取得
-        sp = self.view.mapToScene(self.view.viewport().rect().center())
+        # マウスカーソル位置を取得
+        sp = self._get_cursor_scene_position()
         
         # デフォルトの設定辞書を構築
         d = {
@@ -3121,7 +3166,7 @@ class MainWindow(QMainWindow):
         item.setFlag(item.GraphicsItemFlag.ItemIsMovable, True)
 
     def _add_interactive_terminal(self):
-        """シーンの中央付近に、新規 InteractiveTerminalItem を追加する"""
+        """マウスカーソル位置に、新規 InteractiveTerminalItem を追加する"""
         if InteractiveTerminalItem is None:
             QMessageBox.warning(
                 self, 
@@ -3130,8 +3175,8 @@ class MainWindow(QMainWindow):
             )
             return
             
-        # 画面中心位置を取得
-        sp = self.view.mapToScene(self.view.viewport().rect().center())
+        # マウスカーソル位置を取得
+        sp = self._get_cursor_scene_position()
         
         # デフォルトの設定辞書を構築
         d = {
@@ -3163,7 +3208,7 @@ class MainWindow(QMainWindow):
     # Removed _add_full_terminal and _add_enhanced_terminal methods
 
     def _add_xterm_terminal(self):
-        """シーンの中央付近に、新規 XtermTerminalItem を追加する"""
+        """マウスカーソル位置に、新規 XtermTerminalItem を追加する"""
         if XtermTerminalItem is None:
             QMessageBox.warning(
                 self, 
@@ -3172,8 +3217,8 @@ class MainWindow(QMainWindow):
             )
             return
             
-        # 画面中心位置を取得
-        sp = self.view.mapToScene(self.view.viewport().rect().center())
+        # マウスカーソル位置を取得
+        sp = self._get_cursor_scene_position()
         
         # デフォルトの設定辞書を構築
         d = {
@@ -3200,9 +3245,9 @@ class MainWindow(QMainWindow):
 
     # --- コマンドウィジェット追加 ---
     def _add_command_widget(self):
-        """シーンの中央付近に、新規 CommandWidget を追加する"""
-        # 画面中心位置を取得
-        sp = self.view.mapToScene(self.view.viewport().rect().center())
+        """マウスカーソル位置に、新規 CommandWidget を追加する"""
+        # マウスカーソル位置を取得
+        sp = self._get_cursor_scene_position()
         
         # デフォルトの設定辞書を構築
         d = {
@@ -4380,6 +4425,52 @@ Original template file: {template_path.name}
                     })
         
         return errors
+    
+    def eventFilter(self, obj, event):
+        """アプリケーション全体のイベントフィルター - EDITモード管理"""
+        # マウスプレスイベントのみ処理
+        if event.type() == QEvent.Type.MouseButtonPress:
+            if event.button() == Qt.MouseButton.LeftButton:
+                # 現在EDITモードのアイテムがある場合
+                if self._current_edit_item is not None:
+                    # イベント位置をシーン座標に変換
+                    try:
+                        global_pos = obj.mapToGlobal(event.pos()) if hasattr(event, 'pos') else None
+                        if global_pos and hasattr(self, 'view'):
+                            view_pos = self.view.mapFromGlobal(global_pos)
+                            scene_pos = self.view.mapToScene(view_pos)
+                            
+                            # EDITモードアイテムの領域をチェック
+                            item_rect = self._current_edit_item.boundingRect()
+                            item_pos = self._current_edit_item.pos()
+                            item_scene_rect = QRectF(
+                                item_pos.x() + item_rect.x(),
+                                item_pos.y() + item_rect.y(),
+                                item_rect.width(),
+                                item_rect.height()
+                            )
+                            
+                            # クリック位置がアイテム領域外の場合
+                            if not item_scene_rect.contains(scene_pos):
+                                self._current_edit_item._exit_to_walk_mode()
+                                self._current_edit_item = None
+                                
+                    except Exception as e:
+                        warn(f"[MainWindow] eventFilter error: {e}")
+        
+        # 元のイベント処理を継続
+        return super().eventFilter(obj, event)
+    
+    def register_edit_item(self, item):
+        """NoteItemがEDITモードに入った時の登録"""
+        warn(f"[MainWindow] Registering edit item: {item}")
+        self._current_edit_item = item
+    
+    def unregister_edit_item(self, item):
+        """NoteItemがEDITモードから抜けた時の登録解除"""
+        warn(f"[MainWindow] Unregistering edit item: {item}")
+        if self._current_edit_item == item:
+            self._current_edit_item = None
 
 # ==============================================================
 #  App helper - 補助関数
