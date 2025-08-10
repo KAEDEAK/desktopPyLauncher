@@ -2136,6 +2136,19 @@ class ImageItem(CanvasItem):
         if os.name == 'nt':
             path = os.path.normpath(path)
         suffix = Path(path).suffix.lower()
+        
+        # PNGファイルの場合はAPNGでないことを確認
+        if suffix == ".png":
+            try:
+                with open(path, 'rb') as f:
+                    data = f.read()
+                    from .DPyL_utils import detect_apng
+                    # APNGの場合はAPNGItemが処理するのでImageItemでは除外
+                    if detect_apng(data):
+                        return False
+            except Exception:
+                pass  # エラーの場合はImageItemで処理
+        
         return suffix in cls.IMAGE_EXTS
 
     @classmethod
@@ -2387,6 +2400,343 @@ class ImageItem(CanvasItem):
         except Exception:
             warn("Exception at on_activate")
             pass
+
+# --------------------------------------------------
+#  APNGItem (Animated PNG support)
+# --------------------------------------------------
+class APNGItem(CanvasItem):
+    TYPE_NAME = "apng"
+    IMAGE_EXTS = (".png",)
+
+    @classmethod
+    def supports_path(cls, path: str) -> bool:
+        if os.name == 'nt':
+            path = os.path.normpath(path)
+        
+        if not path.lower().endswith(".png"):
+            return False
+            
+        try:
+            with open(path, 'rb') as f:
+                data = f.read()
+                from .DPyL_utils import detect_apng
+                return detect_apng(data)
+        except Exception:
+            return False
+
+    @classmethod
+    def create_from_path(cls, path, sp, win):
+        if os.name == 'nt':
+            path = os.path.normpath(path)
+        d = {
+            "type": cls.TYPE_NAME,
+            "caption": Path(path).stem,
+            "path": path,
+            "image_embedded": False,
+            "x": sp.x(),
+            "y": sp.y(),
+            "width": 200,
+            "height": 200,
+            "brightness": 50,
+        }
+        item = cls(d, win.text_color)
+        return item, d
+
+    def __init__(self, d, cb_resize=None, text_color=None):
+        super().__init__(d, cb_resize, text_color)
+        
+        self._pix_item = QGraphicsPixmapItem(parent=self)
+        self.path = d.get("path", "")
+        self.brightness = d.get("brightness", 50)
+        self.caption = d.get("caption", "")
+        
+        # APNG animation properties
+        self.frames = []
+        self.current_frame = 0
+        self.timer = QTimer()  # No parent - CanvasItem is not a QObject
+        self.timer.setSingleShot(True)  # シングルショットタイマーに設定
+        self.timer.timeout.connect(self._next_frame)
+        self._is_playing = False
+        
+        self._load_apng_content()
+
+    def _load_apng_content(self):
+        """Load APNG content using simple approach"""
+        try:
+            # Check if pyAPNG is available
+            try:
+                from apng import APNG
+            except ImportError:
+                warn("[APNGItem] pyAPNG library not available - pip install apng>=0.3.4")
+                self._load_static_image()
+                return
+            
+            # Load from embedded data first
+            if self.d.get("image_embedded") and self.d.get("image_embedded_data"):
+                raw = base64.b64decode(self.d["image_embedded_data"])
+                if self._extract_apng_frames_from_bytes(raw, APNG):
+                    return
+            
+            # Load from file
+            if self.path and Path(self.path).exists():
+                if self._extract_apng_frames_from_file(self.path, APNG):
+                    return
+                    
+        except Exception as e:
+            warn(f"[APNGItem] Error loading APNG: {e}")
+        
+        # Fallback to static image
+        self._load_static_image()
+
+    def _extract_apng_frames_from_file(self, path: str, APNG) -> bool:
+        """Extract frames from APNG file"""
+        try:
+            apng_obj = APNG.open(path)
+            return self._process_apng_frames(apng_obj)
+        except Exception as e:
+            warn(f"[APNGItem] Failed to load APNG file: {e}")
+            return False
+
+    def _extract_apng_frames_from_bytes(self, data: bytes, APNG) -> bool:
+        """Extract frames from APNG bytes"""
+        try:
+            apng_obj = APNG.from_bytes(data)
+            return self._process_apng_frames(apng_obj)
+        except Exception as e:
+            warn(f"[APNGItem] Failed to load APNG from bytes: {e}")
+            return False
+
+    def _process_apng_frames(self, apng_obj) -> bool:
+        """Process APNG object to extract frames"""
+        try:
+            self.frames = []
+            warn(f"[APNGItem] Processing APNG with {len(apng_obj.frames)} frames")
+            
+            for i, (png, control) in enumerate(apng_obj.frames):
+                data = png.to_bytes()
+                pixmap = QPixmap()
+                if pixmap.loadFromData(data, "PNG"):
+                    # APNGのdelay処理を修正
+                    delay_ms = 100  # デフォルト値
+                    if hasattr(control, 'delay'):
+                        # pyAPNGのdelayはミリ秒単位
+                        if control.delay and control.delay > 0:
+                            delay_ms = int(control.delay)
+                    delay_ms = max(10, delay_ms)  # 最小10ms
+                    self.frames.append((pixmap, delay_ms))
+                    warn(f"[APNGItem] Frame {i}: size={pixmap.size()}, delay={delay_ms}ms")
+                else:
+                    warn(f"[APNGItem] Failed to load frame {i}")
+            
+            if self.frames:
+                warn(f"[APNGItem] Successfully loaded {len(self.frames)} frames")
+                self._display_current_frame()
+                if len(self.frames) > 1:
+                    warn("[APNGItem] Multiple frames detected, starting animation")
+                    self._start_animation()
+                else:
+                    warn("[APNGItem] Single frame only, no animation needed")
+                return True
+            
+            warn("[APNGItem] No frames loaded")
+            return False
+            
+        except Exception as e:
+            warn(f"[APNGItem] Error processing APNG frames: {e}")
+            return False
+
+    def _load_static_image(self):
+        """Fallback: load as static image"""
+        try:
+            if self.d.get("image_embedded") and self.d.get("image_embedded_data"):
+                raw = base64.b64decode(self.d["image_embedded_data"])
+                pixmap = QPixmap()
+                pixmap.loadFromData(raw)
+            elif self.path and Path(self.path).exists():
+                pixmap = QPixmap(self.path)
+            else:
+                return
+                
+            if not pixmap.isNull():
+                scaled_pixmap = self._apply_scaling_and_brightness(pixmap)
+                self._pix_item.setPixmap(scaled_pixmap)
+        except Exception as e:
+            warn(f"[APNGItem] Failed to load static image: {e}")
+
+    def _display_current_frame(self):
+        """Display current frame"""
+        if not self.frames:
+            warn("[APNGItem] No frames to display")
+            return
+        
+        if self.current_frame >= len(self.frames):
+            warn(f"[APNGItem] Invalid frame index: {self.current_frame}")
+            return
+        
+        pixmap, _ = self.frames[self.current_frame]
+        scaled_pixmap = self._apply_scaling_and_brightness(pixmap)
+        self._pix_item.setPixmap(scaled_pixmap)
+        warn(f"[APNGItem] Displayed frame {self.current_frame} (size: {scaled_pixmap.size()})")
+
+    def _apply_scaling_and_brightness(self, pixmap: QPixmap) -> QPixmap:
+        """Apply scaling and brightness adjustment"""
+        if pixmap.isNull():
+            return pixmap
+            
+        tgt_w = int(self.d.get("width", 200))
+        tgt_h = int(self.d.get("height", 200))
+        
+        # KeepAspectRatioByExpandingで拡大して、その後クロップ
+        scaled = pixmap.scaled(
+            tgt_w, tgt_h, 
+            Qt.AspectRatioMode.KeepAspectRatioByExpanding, 
+            Qt.TransformationMode.SmoothTransformation
+        )
+        
+        # 中央をクロップ
+        if scaled.width() > tgt_w or scaled.height() > tgt_h:
+            x = (scaled.width() - tgt_w) // 2
+            y = (scaled.height() - tgt_h) // 2
+            scaled = scaled.copy(x, y, tgt_w, tgt_h)
+        
+        return self._apply_brightness_to_pixmap(scaled)
+
+    def _apply_brightness_to_pixmap(self, pix: QPixmap) -> QPixmap:
+        """Apply brightness adjustment"""
+        if self.brightness == 50 or pix.isNull():
+            return pix
+            
+        level = self.brightness - 50
+        alpha = int(abs(level) / 50 * 255)
+        
+        overlay = QPixmap(pix.size())
+        overlay.fill(Qt.GlobalColor.transparent)
+        painter = QPainter(overlay)
+        col = QColor(255, 255, 255, alpha) if level > 0 else QColor(0, 0, 0, alpha)
+        painter.fillRect(overlay.rect(), col)
+        painter.end()
+        
+        result = QPixmap(pix.size())
+        result.fill(Qt.GlobalColor.transparent)
+        painter = QPainter(result)
+        painter.drawPixmap(0, 0, pix)
+        painter.setCompositionMode(
+            QPainter.CompositionMode.CompositionMode_SourceOver if level > 0
+            else QPainter.CompositionMode.CompositionMode_Multiply
+        )
+        painter.drawPixmap(0, 0, overlay)
+        painter.end()
+        
+        return result
+
+    def _start_animation(self):
+        """Start animation"""
+        if not self.frames or len(self.frames) <= 1:
+            warn(f"[APNGItem] Cannot start animation: {len(self.frames)} frames")
+            return
+        
+        warn(f"[APNGItem] Starting animation with {len(self.frames)} frames")
+        self._is_playing = True
+        self.current_frame = 0
+        self._display_current_frame()  # 最初のフレームを表示
+        self._schedule_next_frame()
+
+    def _stop_animation(self):
+        """Stop animation"""
+        warn("[APNGItem] Stopping animation")
+        self._is_playing = False
+        self.timer.stop()
+
+    def _schedule_next_frame(self):
+        """Schedule next frame"""
+        if not self._is_playing or not self.frames:
+            return
+        
+        # 現在のフレームの遅延時間を取得
+        _, delay_ms = self.frames[self.current_frame]
+        delay_ms = max(10, delay_ms)  # 最小10ms
+        
+        # タイマーを停止してから再設定
+        self.timer.stop()
+        self.timer.setInterval(delay_ms)
+        self.timer.start()
+        
+        warn(f"[APNGItem] Scheduled frame {self.current_frame} -> next in {delay_ms}ms")
+
+    def _next_frame(self):
+        """Move to next frame"""
+        if not self._is_playing or not self.frames:
+            return
+        
+        # 次のフレームに進む
+        self.current_frame = (self.current_frame + 1) % len(self.frames)
+        warn(f"[APNGItem] Moving to frame {self.current_frame}/{len(self.frames)}")
+        
+        self._display_current_frame()
+        self._schedule_next_frame()
+
+    def toggle_apng_playback(self):
+        """Toggle APNG playback"""
+        if not self.frames or len(self.frames) <= 1:
+            return
+        if self._is_playing:
+            self._stop_animation()
+        else:
+            self._start_animation()
+
+    def is_apng_playing(self) -> bool:
+        """Check if APNG is playing"""
+        return self._is_playing
+
+    def mousePressEvent(self, event):
+        """Handle mouse click for play/pause toggle"""
+        if event.button() == Qt.MouseButton.LeftButton:
+            if self.frames and len(self.frames) > 0:
+                self.toggle_apng_playback()
+                warn(f"[APNGItem] Toggled playback, now playing: {self.is_apng_playing()}")
+        super().mousePressEvent(event)
+
+    def on_edit(self):
+        """Launch edit dialog"""
+        old_path = self.path
+        old_embedded = self.d.get("image_embedded", False)
+        old_data = self.d.get("image_embedded_data")
+
+        dlg = ImageEditDialog(self)
+        if dlg.exec() == QDialog.DialogCode.Accepted:
+            self.caption = self.d.get("caption", "")
+            self.brightness = int(self.d.get("brightness", 50))
+            self.init_caption()
+
+            new_path = self.d.get("path", "")
+            new_embedded = self.d.get("image_embedded", False)
+            new_data = self.d.get("image_embedded_data")
+
+            if (new_path != old_path or 
+                new_embedded != old_embedded or 
+                new_data != old_data):
+                
+                self.path = new_path
+                self._stop_animation()
+                self._load_apng_content()
+
+        win = self.scene().views()[0].window()
+        self.set_run_mode(not win.a_edit.isChecked())
+
+    def resize_to(self, w, h):
+        """Resize item"""
+        self.d["width"] = w
+        self.d["height"] = h
+        
+        if self.frames:
+            self._display_current_frame()
+        
+        self._update_grip_pos()
+        self.init_caption()
+
+    def resize_content(self, w: int, h: int):
+        """Resize content from CanvasItem"""
+        self.resize_to(w, h)
 
 # --------------------------------------------------
 #  GifItem (GifMixin + ImageItem)
@@ -2764,7 +3114,16 @@ class CanvasResizeGrip(QGraphicsRectItem):
 class ImageEditDialog(QDialog):
     def __init__(self, item: ImageItem):
         super().__init__()
-        self.setWindowTitle("Image Settings")
+        
+        # Set title with format indication
+        title = "Image Settings"
+        if hasattr(item, 'TYPE_NAME'):
+            if item.TYPE_NAME == "gif":
+                title += " (GIF)"
+            elif item.TYPE_NAME == "apng":
+                title += " (APNG)"
+        
+        self.setWindowTitle(title)
         self.item = item
         self._build_ui()
 

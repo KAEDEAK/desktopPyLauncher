@@ -173,6 +173,28 @@ def detect_image_format(data: bytes) -> str:
         # デフォルトはPNG
         return "data:image/png;base64,"
 
+def detect_apng(data: bytes) -> bool:
+    """PNGデータからAPNG（アニメーションPNG）かどうかを判定
+    acTL（Animation Control）チャンクの存在を確認"""
+    if not data.startswith(b'\x89PNG\r\n\x1a\n'):
+        return False
+    
+    offset = 8
+    while offset < len(data) - 8:
+        try:
+            chunk_length = int.from_bytes(data[offset:offset+4], byteorder='big')
+            chunk_type = data[offset+4:offset+8]
+            
+            if chunk_type == b'acTL':
+                return True
+            if chunk_type == b'IDAT':
+                return False
+            
+            offset += 8 + chunk_length + 4
+        except (ValueError, IndexError):
+            break
+    return False
+
 # -- favicon取得 -------------------------------------------
 def fetch_favicon_base64(domain_or_url: str, target_size: int = 64) -> str | None:
     def _to_base64(data: bytes) -> str:
@@ -417,7 +439,7 @@ __all__ = [
     "warn", "debug_print", "b64e", "b64d",
     "ms_to_hms_ms", "hms_to_ms", "ms_to_hms",
     "is_network_drive", "fetch_favicon_base64",
-    "detect_image_format",
+    "detect_image_format", "detect_apng",
     # アイコン関連
     "get_fixed_local_icon", "_default_icon", "_icon_pixmap","_load_pix_or_icon",
     # 定数群（利便用）

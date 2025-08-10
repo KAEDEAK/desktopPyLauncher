@@ -99,12 +99,14 @@ python desktopPyLauncher.py --help
   - 🎨 **高品質スケーリング**（段階的縮小アルゴリズム）
   - 📋 **クリップボード対応**（画像の貼り付け）
 
-#### 🎬 アニメーションGIF
-- **専用アイテム**：.gif ファイル用
+#### 🎬 アニメーション (GIF/APNG)
+- **GIF専用アイテム**：.gif ファイル用
+- **APNG専用アイテム**：Animated PNG (.png) ファイル用
 - **機能**：
   - ▶️ **クリックで再生/停止制御**
   - 📐 **リサイズ・明度調整**
   - 💾 **Base64埋め込み対応**
+  - 🎞️ **自動フォーマット判定**（APNG形式の自動検出）
 
 #### 🎥 動画アイテム
 - **対応形式**：.mp4, .mov, .avi, .mkv, .webm, .wmv
@@ -513,6 +515,12 @@ This project uses the following third-party libraries and software. We thank all
 - **Copyright**: © 2011-2016 Ryan Prichard
 - **Website**: https://github.com/rprichard/winpty
 - **Usage**: Windows pseudo-terminal support in terminal components (optional dependency)
+
+#### **pyAPNG**
+- **License**: MIT License
+- **Copyright**: © 2023 eight04 and contributors
+- **Website**: https://github.com/eight04/pyAPNG
+- **Usage**: APNG (Animated PNG) file processing in APNGItem component
 
 #### **xterm.js**
 - **License**: MIT License
