@@ -40,9 +40,8 @@ from PySide6.QtWidgets import (
     QScrollArea,
     QWidget,
     QApplication,
-    QGraphicsView
-    
-    
+    QGraphicsView,
+    QMessageBox
 )
 from PySide6.QtGui import QColor, QBrush, QPainterPath, QPen, QFont, QTextDocument, QKeyEvent, QFontMetrics
 from PySide6.QtCore import Qt, QPointF, QRectF, QTimer, QEvent, QFileSystemWatcher
@@ -554,8 +553,11 @@ class NoteItem(CanvasItem):
                     lines = f.readlines()
                     limit = self.line_limit if self.line_limit > 0 else len(lines)
                     if self.reverse_lines:
-                        selected = lines[:limit]
+                        # reverse_lines有効: 最終行から逆順にlimit分を表示
+                        selected = lines[-limit:]
+                        selected.reverse()  # 行を逆順にする
                     else:
+                        # reverse_lines無効: 下端からlimitの位置から最後まで表示
                         selected = lines[-limit:]
                     self.text = "".join(selected)
                 else:
@@ -1039,6 +1041,20 @@ class NoteEditDialog(QDialog):
         # 現在読み込まれているパスを保持
         self._orig_path = self._clean_path(self.d.get("path", ""))
         self._loaded_path = self._orig_path        
+        
+        # 初期値を保存（変更検知用）
+        self._initial_values = {
+            "format": self.d.get("format", "text"),
+            "text": self.d.get("text", "New Note"),
+            "fill_background": self.d.get("fill_background", True),
+            "bgcolor": self.d.get("bgcolor", NOTE_BG_COLOR),
+            "color": self.d.get("color", "#ffffff"),
+            "fontsize": int(self.d.get("fontsize", 14)),
+            "path": self._clean_path(self.d.get("path", "")),
+            "watch_file": self.d.get("watch_file", False),
+            "reverse_lines": self.d.get("reverse_lines", False),
+            "line_limit": int(self.d.get("line_limit", 100))
+        }
        
         self.setWindowTitle("Note 設定")
         self._build_ui()    # UI 部品の構築
@@ -1186,12 +1202,76 @@ class NoteEditDialog(QDialog):
     def _clean_path(self, path: str) -> str:
         """strip spaces and surrounding quotes"""
         return path.strip().strip('"').strip()
+    
+    def _has_changes(self) -> bool:
+        """現在の設定値と初期値を比較して変更があるかチェック"""
+        current_values = {
+            "format": "markdown" if self.chk_md.isChecked() else "text",
+            "text": self.txt_edit.toPlainText(),
+            "fill_background": self.chk_bg.isChecked(),
+            "bgcolor": self.ed_bg.text().strip() or NOTE_BG_COLOR,
+            "color": self.ed_color.text().strip() or "#ffffff",
+            "fontsize": self.spin_font.value(),
+            "path": self._clean_path(self.ed_path.text()),
+            "watch_file": self.chk_watch.isChecked(),
+            "reverse_lines": self.chk_reverse.isChecked(),
+            "line_limit": self.spin_limit.value()
+        }
+        
+        return current_values != self._initial_values
 
     def _on_watch_toggled(self):
         if self.chk_watch.isChecked():
             path = self._clean_path(self.ed_path.text())
             if not os.path.exists(path):
                 self.chk_watch.setChecked(False)
+            else:
+                # ファイル監視をONにした時、line_limit でクロップして読み込み
+                try:
+                    with open(path, "r", encoding="utf-8") as f:
+                        lines = f.readlines()
+                    
+                    limit = self.spin_limit.value()
+                    if limit > 0:
+                        if self.chk_reverse.isChecked():
+                            # reverse_lines有効: 最終行から逆順にlimit分を表示
+                            selected = lines[-limit:]
+                            selected.reverse()  # 行を逆順にする
+                        else:
+                            # reverse_lines無効: 下端からlimitの位置から最後まで表示
+                            selected = lines[-limit:]
+                        cropped_content = "".join(selected)
+                    else:
+                        cropped_content = "".join(lines)
+                    
+                    self.txt_edit.setPlainText(cropped_content)
+                    self._kick_preview_update()
+                    
+                    # ファイル監視ON時も初期値を更新
+                    self._initial_values["text"] = cropped_content
+                    self._initial_values["watch_file"] = True
+                    self._initial_values["reverse_lines"] = self.chk_reverse.isChecked()
+                    self._initial_values["line_limit"] = limit
+                    warn(f"[NoteEditDialog] Loaded file with line limit {limit}: {path}")
+                except Exception as e:
+                    warn(f"[NoteEditDialog] Failed to load file with limit: {e}")
+                    self.chk_watch.setChecked(False)
+        else:
+            # ファイル監視をOFFにした時、元のファイル内容をフル読み込みして復元
+            path = self._clean_path(self.ed_path.text())
+            if path and os.path.exists(path):
+                try:
+                    with open(path, "r", encoding="utf-8") as f:
+                        full_content = f.read()
+                    self.txt_edit.setPlainText(full_content)
+                    self._kick_preview_update()
+                    
+                    # ファイル監視OFF時も初期値を更新
+                    self._initial_values["text"] = full_content
+                    self._initial_values["watch_file"] = False
+                    warn(f"[NoteEditDialog] Restored full file content from: {path}")
+                except Exception as e:
+                    warn(f"[NoteEditDialog] Failed to restore file content: {e}")
 
     def _update_path_buttons(self):
         path = self._clean_path(self.ed_path.text())
@@ -1219,6 +1299,11 @@ class NoteEditDialog(QDialog):
             self._loaded_path = path
             self._kick_preview_update()
             self._update_path_buttons()
+            
+            # 読み込み後に初期値を更新（変更検知をリセット）
+            self._initial_values["text"] = txt
+            self._initial_values["path"] = path
+            warn(f"[NoteEditDialog] Initial values updated after loading: {path}")
         except Exception as e:
             warn(f"[NoteEditDialog] load failed: {e}")
 
@@ -1267,32 +1352,102 @@ class NoteEditDialog(QDialog):
     # OK 押下時の処理
     # --------------------------------------------------------------
     def accept(self):
-        # ユーザー設定を辞書に保存
+        current_path = self._clean_path(self.ed_path.text())
+        current_text = self.txt_edit.toPlainText()
+        
+        # ファイル監視がONの場合は確認ダイアログなしで設定のみ保存
+        if self.chk_watch.isChecked():
+            # ユーザー設定を辞書に保存（テキスト内容は保存しない）
+            self.d["format"] = "markdown" if self.chk_md.isChecked() else "text"
+            self.d["fill_background"] = self.chk_bg.isChecked()
+            self.d["bgcolor"] = self.ed_bg.text().strip() or NOTE_BG_COLOR
+            self.d["fontsize"] = self.spin_font.value()
+            self.d["color"] = self.ed_color.text().strip() or "#ffffff"
+            self.d["path"] = current_path
+            self.d["watch_file"] = True
+            self.d["reverse_lines"] = self.chk_reverse.isChecked()
+            self.d["line_limit"] = self.spin_limit.value()
+
+            # NoteItem 側に即時反映（ファイルから読み込み）
+            self.item.format = self.d["format"]
+            self.item.fill_bg = self.d["fill_background"]
+            self.item.path = self.d["path"]
+            self.item.reverse_lines = self.d["reverse_lines"]
+            self.item.line_limit = self.d["line_limit"]
+            self.item.set_file_watching(True)
+            self.item.load_from_file()
+            
+            super().accept()
+            return
+        
+        # ファイル監視がOFFの場合のみ以下の確認処理を実行
+        
+        # 読み込み失敗のケース：pathが指定されているが存在しない、かつテキストがデフォルト値
+        if (current_path and not os.path.exists(current_path) and 
+            current_text == "New Note"):
+            reply = QMessageBox.question(
+                self, "確認", 
+                f"指定されたパス '{current_path}' が存在しません。\n"
+                "このまま保存すると元のファイル内容が失われる可能性があります。\n"
+                "保存しますか？",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No
+            )
+            if reply == QMessageBox.StandardButton.No:
+                return
+        
+        # 変更があった場合のみ確認ダイアログを表示
+        elif self._has_changes():
+            # ファイルパスがある場合は追加の警告を表示
+            if current_path and os.path.exists(current_path):
+                msg = f"ノートの内容が変更されています。\nファイル '{current_path}' に保存しますか？"
+            else:
+                msg = "ノートの内容が変更されています。保存しますか？"
+                
+            reply = QMessageBox.question(
+                self, "保存確認", msg,
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No | QMessageBox.StandardButton.Cancel,
+                QMessageBox.StandardButton.Yes
+            )
+            if reply == QMessageBox.StandardButton.Cancel:
+                return  # ダイアログを開いたまま
+            elif reply == QMessageBox.StandardButton.No:
+                # 保存せずにダイアログを閉じる（ただしファイル監視設定は適用）
+                # ファイル監視関連の設定のみ適用
+                self.d["watch_file"] = False  # 監視OFFの場合
+                self.d["reverse_lines"] = self.chk_reverse.isChecked()
+                self.d["line_limit"] = self.spin_limit.value()
+                
+                # NoteItem 側のファイル監視設定のみ反映
+                self.item.reverse_lines = self.d["reverse_lines"]
+                self.item.line_limit = self.d["line_limit"]
+                self.item.set_file_watching(False)
+                
+                super().accept()
+                return
+
+        # ユーザー設定を辞書に保存（ファイル監視OFF時）
         self.d["format"] = "markdown" if self.chk_md.isChecked() else "text"
         self.d["text"] = self.txt_edit.toPlainText()
         self.d["fill_background"] = self.chk_bg.isChecked()
         self.d["bgcolor"] = self.ed_bg.text().strip() or NOTE_BG_COLOR
         self.d["fontsize"] = self.spin_font.value()
         self.d["color"] = self.ed_color.text().strip() or "#ffffff"
-        self.d["path"] = self._clean_path(self.ed_path.text())
-        self.d["watch_file"] = self.chk_watch.isChecked()
+        self.d["path"] = current_path
+        self.d["watch_file"] = False
         self.d["reverse_lines"] = self.chk_reverse.isChecked()
         self.d["line_limit"] = self.spin_limit.value()
 
-
-        # NoteItem 側に即時反映
+        # NoteItem 側に即時反映（ファイル監視OFF時）
         self.item.format = self.d["format"]
         self.item.fill_bg = self.d["fill_background"]
         self.item.path = self.d["path"]
         self.item.reverse_lines = self.d["reverse_lines"]
         self.item.line_limit = self.d["line_limit"]
-        self.item.set_file_watching(self.d["watch_file"])
-        if self.item.watch_file:
-            self.item.load_from_file()
-        else:
-            self.item.text = self.d["text"]
-            if self.item.path:
-                self.item.save_to_file()
+        self.item.set_file_watching(False)
+        self.item.text = self.d["text"]
+        if self.item.path:
+            self.item.save_to_file()
 
         super().accept()
 
